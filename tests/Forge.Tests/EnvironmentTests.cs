@@ -31,7 +31,7 @@ public class EnvFileTests : IDisposable
     {
         var entries = EnvFile.Parse("""
             # a comment
-            ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-plain
+            ANTHROPIC_API_KEY=sk-ant-api01-plain
 
             export EXPORTED_KEY=exported-value
             QUOTED_KEY="value with spaces"
@@ -43,7 +43,7 @@ public class EnvFileTests : IDisposable
             """);
 
         Assert.Equal([
-            ("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat01-plain"),
+            ("ANTHROPIC_API_KEY", "sk-ant-api01-plain"),
             ("EXPORTED_KEY", "exported-value"),
             ("QUOTED_KEY", "value with spaces"),
             ("SINGLE_QUOTED", "single"),
@@ -85,12 +85,12 @@ public class EnvFileTests : IDisposable
         var path = Path.Combine(_dir, "forge_env");
 
         Assert.True(EnvFile.CreateTemplate(path));
-        Assert.Contains("ANTHROPIC_AUTH_TOKEN=", File.ReadAllText(path));
+        Assert.Contains("ANTHROPIC_API_KEY=", File.ReadAllText(path));
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
 
-        File.WriteAllText(path, "ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-real\n");
+        File.WriteAllText(path, "ANTHROPIC_API_KEY=sk-ant-api01-real\n");
         Assert.False(EnvFile.CreateTemplate(path));
-        Assert.Contains("sk-ant-oat01-real", File.ReadAllText(path));
+        Assert.Contains("sk-ant-api01-real", File.ReadAllText(path));
     }
 }
 
@@ -108,13 +108,13 @@ public class ToolExecutorEnvironmentTests : IDisposable
     {
         Directory.CreateDirectory(_jail);
         Environment.SetEnvironmentVariable(Canary, "sk-ant-should-never-leak");
-        Environment.SetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat01-also-should-never-leak");
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-api01-also-should-never-leak");
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(Canary, null);
-        Environment.SetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN", null);
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
         Directory.Delete(_jail, recursive: true);
     }
 
@@ -128,7 +128,7 @@ public class ToolExecutorEnvironmentTests : IDisposable
 
         Assert.Equal(0, result.ExitCode);
         Assert.DoesNotContain(Canary, result.Stdout);
-        Assert.DoesNotContain("ANTHROPIC_AUTH_TOKEN", result.Stdout);
+        Assert.DoesNotContain("ANTHROPIC_API_KEY", result.Stdout);
         Assert.DoesNotContain("sk-ant-", result.Stdout);
     }
 

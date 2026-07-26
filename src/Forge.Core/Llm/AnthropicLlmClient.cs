@@ -13,30 +13,24 @@ namespace Forge.Core.Llm;
 /// </summary>
 public sealed class AnthropicLlmClient : ILlmClient
 {
-    public const string TokenVariable = "ANTHROPIC_AUTH_TOKEN";
+    public const string ApiKeyVariable = "ANTHROPIC_API_KEY";
 
     private readonly AnthropicClient _client;
 
     /// <summary>
-    /// Forge authenticates with an OAuth token (`sk-ant-oat…`), read from the
-    /// environment that forge_env populates at startup — never from the database
-    /// or a task packet. [DECIDED] we do not support API keys: one credential
-    /// path means one thing to configure and one failure mode to recognise.
-    ///
-    /// The token rides `Authorization: Bearer`. Note that `ANTHROPIC_API_KEY`, if
-    /// set anywhere in the environment, is picked up by the SDK and takes
-    /// precedence — which is why that name must stay out of forge_env.
+    /// Forge authenticates its calls to the Anthropic Messages API with a Claude API
+    /// key (`sk-ant-api…`), read from the environment that forge_env populates at
+    /// startup — never from the database or a task packet. The SDK sends it as the
+    /// `x-api-key` header. Pass a key explicitly only in tests; in normal use the SDK
+    /// resolves ANTHROPIC_API_KEY from the environment itself.
     /// </summary>
-    public AnthropicLlmClient(string? authToken = null)
+    public AnthropicLlmClient(string? apiKey = null)
     {
-        authToken ??= Environment.GetEnvironmentVariable(TokenVariable);
+        apiKey ??= Environment.GetEnvironmentVariable(ApiKeyVariable);
 
-        // With no token in the environment, let the SDK resolve an `ant auth login`
-        // profile itself — that is the same OAuth credential, just stored and
-        // refreshed for us instead of pasted in by hand.
-        _client = string.IsNullOrWhiteSpace(authToken)
+        _client = string.IsNullOrWhiteSpace(apiKey)
             ? new AnthropicClient()
-            : new AnthropicClient { AuthToken = authToken };
+            : new AnthropicClient { ApiKey = apiKey };
     }
 
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)

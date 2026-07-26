@@ -84,17 +84,16 @@ public static class EnvFile
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, """
-            # Forge credentials — the harness's own keys, not client project secrets.
+            # Forge credentials — the harness's own key, not client project secrets.
             # Client secrets go in the encrypted vault: `forge secrets set NAME`.
             #
             # This file is read at startup and is never exposed to agents: the tool
             # executor builds a scrubbed environment for every command it runs.
             #
-            # Forge authenticates with an OAuth token (sk-ant-oat...), sent as a
-            # bearer token. Do NOT add ANTHROPIC_API_KEY here: the SDK picks that
-            # name up from the environment and it takes precedence over the token.
+            # Forge authenticates to the Anthropic Messages API with your Claude API
+            # key (sk-ant-api...), sent as the x-api-key header.
 
-            ANTHROPIC_AUTH_TOKEN=
+            ANTHROPIC_API_KEY=
 
             """);
 

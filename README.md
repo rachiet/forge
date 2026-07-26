@@ -46,26 +46,24 @@ and run it like any other project.
 
 ## Setup
 
-### 1. Your Claude credential (required)
+### 1. Your Claude API key (required)
 
-Forge authenticates with an **Anthropic OAuth token** — a value that looks like
-`sk-ant-oat…`. Put it in a credentials file at **`~/forge_env`**:
+Forge authenticates its calls to **Anthropic's Messages API** with your **Claude API
+key** — a value that looks like `sk-ant-api…`. Create one in the
+[Anthropic Console](https://console.anthropic.com/) under *API Keys*, then put it in
+a credentials file at **`~/forge_env`**:
 
 ```sh
-# ~/forge_env  — Forge's own credentials, never shown to agents
-ANTHROPIC_AUTH_TOKEN=sk-ant-oat-your-token-here
+# ~/forge_env  — Forge's own credential, never shown to the agents it runs
+ANTHROPIC_API_KEY=sk-ant-api-your-key-here
 ```
 
 Then lock it down: `chmod 600 ~/forge_env`.
 
-> **Do NOT put `ANTHROPIC_API_KEY` in this file.** Forge intentionally uses an OAuth
-> token, not an API key — and if `ANTHROPIC_API_KEY` is set *anywhere* in your
-> environment, the SDK picks that name up and it silently overrides the token. One
-> credential, one thing to configure, one failure mode to recognise.
-
-You can point Forge at a different file with the `FORGE_ENV` environment variable.
-If you have already run `ant auth login`, Forge will fall back to that stored OAuth
-profile automatically and you can leave `~/forge_env` empty.
+This is the key Forge sends on every model call (as the `x-api-key` header). It
+stays Forge's own: the tool executor builds a scrubbed environment for any command
+an agent runs, so a generated project never sees it. Point Forge at a different file
+with the `FORGE_ENV` environment variable.
 
 ### 2. Where your projects live (optional)
 

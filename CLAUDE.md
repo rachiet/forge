@@ -69,13 +69,12 @@ Jail + DB locations are M0 concerns — build the path logic in M0.
 
 ### Credentials file [DECIDED] — the one deliberate exception
 `~/forge_env` (override: env `FORGE_ENV`) holds **Forge's own** credentials,
-loaded into the process environment at CLI startup. Forge authenticates with an
-OAuth token in `ANTHROPIC_AUTH_TOKEN` (`sk-ant-oat…`, sent as a bearer token);
-API keys are **not** supported — one credential path means one thing to configure
-and one failure mode to recognise. Never put `ANTHROPIC_API_KEY` in this file:
-the SDK reads that name from the environment and it silently wins over the token. This is a second hard-known path, knowingly: the data root holds
-client repos and databases and is meant to be movable and shareable, so keys must
-not ride along in that payload.
+loaded into the process environment at CLI startup. Forge authenticates its calls
+to the Anthropic Messages API with a Claude API key in `ANTHROPIC_API_KEY`
+(`sk-ant-api…`, sent as the `x-api-key` header). One credential path means one
+thing to configure and one failure mode to recognise. This is a second hard-known
+path, knowingly: the data root holds client repos and databases and is meant to be
+movable and shareable, so keys must not ride along in that payload.
 - Two kinds of secret, never mixed: harness keys → `forge_env`; client project
   secrets → the encrypted `vault/`, seen by agents only as `{{secret:NAME}}`.
 - The tool executor builds child-process environments from an **allowlist**
