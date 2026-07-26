@@ -181,6 +181,14 @@ public sealed class TaskRepository(IDbConnection conn)
             "SELECT COUNT(*) FROM tasks WHERE type = 'bug' AND status = @s",
             new { s = SnakeCaseEnum.ToSnakeCase(status) });
 
+    /// <summary>
+    /// Count every completed task (features, bug-fixes, chores). This is the QA gate's
+    /// watermark: it rises whenever any work finishes — the initial build, a bug-fix, or
+    /// a change request's tasks — so QA re-verifies after all of them, uniformly.
+    /// </summary>
+    public int CountDone() =>
+        conn.ExecuteScalar<int>("SELECT COUNT(*) FROM tasks WHERE status = 'done'");
+
     /// <summary>Are all non-bug tasks terminal and no bug still active? Then the board is quiescent.</summary>
     public bool BoardQuiescent() =>
         conn.ExecuteScalar<int>("""

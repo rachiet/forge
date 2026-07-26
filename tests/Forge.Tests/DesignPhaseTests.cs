@@ -109,6 +109,33 @@ public class DesignPhaseTests : IDisposable
     }
 
     [Fact]
+    public async Task A_project_with_completed_work_gets_the_change_request_impact_brief()
+    {
+        SeedRequirements("01-todos.md");
+        // A prior build already finished a task — so a fresh design run is a change request,
+        // and the Principal should do impact analysis rather than design from scratch.
+        _tasks.Insert(TaskRecord.Create(
+            TaskType.Feature, "Existing feature", "Already built and merged", 100_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Done });
+
+        var llm = new ScriptedLlmClient(
+            CreateTask("Add due dates", "Todos gain an optional due date", "01-todos.md@v1"),
+            ScriptedLlmClient.Tool("done", ("summary", "One delta task for due dates; low risk.")));
+
+        var outcome = await Design(llm).RunAsync();
+
+        // The Principal got the impact-analysis brief, not the greenfield one.
+        var brief = llm.Requests[0].Messages[0].Content;
+        Assert.Contains("impact analysis", brief, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("already exists", brief);
+
+        // Only the delta task was created; the existing done task is left alone.
+        Assert.Equal(1, outcome.TasksCreated);
+        Assert.Equal(TaskStatus.Created, _tasks.List().Single(t => t.Title == "Add due dates").Status);
+        Assert.Equal(TaskStatus.Done, _tasks.List().Single(t => t.Title == "Existing feature").Status);
+    }
+
+    [Fact]
     public async Task The_coverage_gate_catches_a_requirement_with_no_task()
     {
         SeedRequirements("01-todos.md", "02-accounts.md");

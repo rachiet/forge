@@ -110,6 +110,24 @@ movable and shareable, so keys must not ride along in that payload.
   or none filed) never moves the watermark, so QA is not called again → **project
   complete**. A non-converging project escalates to the client after `QaRoundCap` (5).
 
+### Change requests [DECIDED] (M6 — a change to an already-built project)
+- **Same spine, two deltas.** A CR reuses everything: the client talks to the PM
+  (`forge chat`) who updates the affected requirement(s), then `forge design run`,
+  `forge design approve`, `forge run --loop`, CI + review + merge, and QA. Only two
+  things differ.
+- **Design becomes impact analysis, not greenfield** (`DesignPhase.ChangeRequestBrief`).
+  A design run is a CR iff the project already has a `done` task. In that mode the
+  Principal reads the existing structure/contracts/MODULE.md, writes an impact note to
+  `docs/design/impact/`, and creates **only the delta** tasks (never recreating done
+  work) — or `escalate`s if the change is ill-advised (the pushback path). The cost of
+  the change is the sum of the delta tasks' budgets, which the client sees at sign-off.
+- **QA re-arms via the generalized watermark.** The QA gate's "new work to verify"
+  signal is now the count of **all done tasks** (`CountDone`), not done bugs — so a
+  CR's completed tasks re-trigger QA exactly as a bug-fix does, and the full acceptance
+  suite re-runs to catch regressions the change caused. `design approve` clears any
+  `qa_escalated` flag so a CR is a fresh QA cycle. Specs live in the **client** repo
+  (requirements/contracts updated before the change; MODULE.md by the engineer during it).
+
 ### Review + CI [DECIDED] (settled while building M4)
 - **CI is harness-run, zero tokens** (`Ci/CiRunner.cs`): the harness runs
   `dotnet build` then `dotnet test` in the task workspace itself — trusted code

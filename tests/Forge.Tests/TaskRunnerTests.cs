@@ -425,4 +425,24 @@ public class TaskRunnerTests : IDisposable
         // no create-bug / reject / re-QA loop.
         Assert.Equal("1", _tasks.GetMeta("qa_rounds"));
     }
+
+    [Fact]
+    public async Task A_change_requests_completed_work_re_triggers_qa()
+    {
+        DoneTask(); // the initial build
+
+        // First QA cycle: nothing to file, project accepted.
+        var runner = Runner(new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("done", ("summary", "all good")) });
+        await DrainAsync(runner);
+        Assert.Equal("1", _tasks.GetMeta("qa_rounds"));
+
+        // A change request's task lands as done. Nothing else is claimable, but the
+        // done-count now exceeds what QA verified, so QA runs again — same trigger as a fix.
+        DoneTask();
+        var outcome = await runner.RunNextByPriorityAsync();
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TaskStatus.Qa, outcome!.Status);
+        Assert.Equal("2", _tasks.GetMeta("qa_rounds"));
+    }
 }

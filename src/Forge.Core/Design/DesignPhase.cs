@@ -45,21 +45,30 @@ public sealed class DesignPhase(
 
     public async Task<DesignOutcome> RunAsync(CancellationToken ct = default)
     {
-        var before = _tasks.List().Count;
-        _log.Message("Design phase: Principal starting");
+        var existing = _tasks.List();
+        var before = existing.Count;
+
+        // A project with completed work already exists — this run is a change request,
+        // so the Principal does impact analysis against the existing code and plans only
+        // the delta, rather than designing the whole system from a blank slate.
+        var isChangeRequest = existing.Any(t => t.Status == TaskStatus.Done);
+        _log.Message(isChangeRequest
+            ? "Design phase: Principal starting a change-request impact analysis"
+            : "Design phase: Principal starting");
 
         var workspace = new WorkspaceManager(paths, project).PrepareTrunkClone(WorkspacePath);
         var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
         var result = await loop
-            .RunChatAsync([new LlmMessage("user", Brief())], executor, ct)
+            .RunChatAsync([new LlmMessage("user", isChangeRequest ? ChangeRequestBrief() : Brief())], executor, ct)
             .ConfigureAwait(false);
 
         // The design docs are the Principal's artifacts; they go straight to trunk,
         // the same way the PM's requirements do. The client reviews via sign-off.
-        var committed = new WorkspaceManager(paths, project)
-            .CommitAndPushTrunk(WorkspacePath, "design: structure, conventions, contracts, task plan");
+        var committed = new WorkspaceManager(paths, project).CommitAndPushTrunk(WorkspacePath,
+            isChangeRequest ? "design: change-request impact analysis and delta tasks"
+                            : "design: structure, conventions, contracts, task plan");
         if (committed) _log.Event(EventType.GitCommit, "committed design to trunk");
 
         var created = _tasks.List().Count - before;
@@ -97,6 +106,11 @@ public sealed class DesignPhase(
         foreach (var task in pending)
             tasks.Transition(task.Id, TaskStatus.Ready);
 
+        // Re-arm QA: a signed-off change request is a fresh cycle, so clear any earlier
+        // "did not converge" escalation. The done-count watermark handles the rest — the
+        // new tasks completing lifts it, which re-triggers QA once they are all done.
+        if (pending.Count > 0) tasks.SetMeta("qa_escalated", "0");
+
         (logger ?? ForgeLogger.Null)
             .Message($"Client signed off on the design — {pending.Count} task(s) released to the board");
         return pending.Count;
@@ -120,5 +134,34 @@ public sealed class DesignPhase(
         Every requirement section must map to at least one task. Call `done` with a
         plain-language summary of the design when the plan is complete; it goes to
         the PM for a coverage check and to the client for sign-off.
+        """;
+
+    /// <summary>
+    /// The change-request brief: the project already exists, so this is impact analysis,
+    /// not a fresh design. The Principal reads the existing code and plans only the delta —
+    /// or pushes back if the change is ill-advised.
+    /// </summary>
+    private static string ChangeRequestBrief() => """
+        # Change request — impact analysis
+
+        This project already exists: its structure, contracts, code, `CONVENTIONS.md`
+        and `MODULE.md` files are on disk. Read them. The client has requested a change,
+        and the PM has updated the affected requirement(s) in `docs/requirements/` —
+        compare the updated requirement to what the code currently does.
+
+        This is impact analysis, NOT a fresh design. Do exactly this:
+        - Work out what the change affects: which modules, which contracts, and which
+          existing features could regress if a shared contract changes. Write a short
+          impact note to `docs/design/impact/` naming the affected pieces and the risk.
+        - Plan ONLY the delta: one `create_task` per new or modified unit of work, each
+          naming the requirement it serves, with a budget and `add_dependency` edges.
+          Do NOT recreate tasks for work that is already done — reuse the existing code.
+        - If the change is ill-advised, contradicts an existing requirement, or is far
+          larger than it appears, do NOT create tasks — `escalate(reason)` with your
+          concern so it goes back to the client to decide.
+
+        Call `done` with a plain-language summary: what is affected, the tasks you created
+        and their total budget (the cost of the change), and any regression risk. The new
+        tasks are born `created` and reach engineers only after the client signs off.
         """;
 }

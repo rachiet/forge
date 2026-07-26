@@ -231,11 +231,11 @@ public sealed class TaskRunner(
     private int MetaInt(string key) => int.TryParse(_tasks.GetMeta(key), out var v) ? v : 0;
 
     /// <summary>
-    /// Run QA iff the board is complete and there is something new to verify — the first
-    /// build, or a fix that landed since the last round. The project is done (returns
-    /// null) once a QA round accepts nothing new: a round that files zero bugs, or whose
-    /// bugs are all rejected, never raises the fixed-bug count past the watermark, so QA
-    /// is not called again. A non-converging project escalates to the client after the cap.
+    /// Run QA iff the board is complete and there is new completed work to verify — the
+    /// first build, a bug-fix, or a change request's tasks (any done task counts). The
+    /// project is done (returns null) once a QA round produces nothing new: a round that
+    /// files zero bugs, or whose bugs are all rejected, never raises the done count past
+    /// the watermark. A non-converging project escalates to the client after the cap.
     /// </summary>
     private async Task<TaskRunOutcome?> MaybeRunQaAsync(CancellationToken ct)
     {
@@ -243,8 +243,8 @@ public sealed class TaskRunner(
         if (MetaInt("qa_escalated") == 1) return null;
 
         var rounds = MetaInt("qa_rounds");
-        var newFixesToVerify = _tasks.CountBugs(TaskStatus.Done) > MetaInt("qa_fix_watermark");
-        if (rounds > 0 && !newFixesToVerify) return null; // verified and nothing accepted since → complete
+        var newWorkToVerify = _tasks.CountDone() > MetaInt("qa_verified_count");
+        if (rounds > 0 && !newWorkToVerify) return null; // verified and nothing new finished since → complete
 
         if (rounds >= QaRoundCap)
         {
@@ -279,11 +279,12 @@ public sealed class TaskRunner(
             .ConfigureAwait(false);
         var filed = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
 
-        // Advance the round counter and the fixed-bug watermark. New bugs are still in
-        // triage (not done), so the watermark now equals the fixes already accounted for;
-        // it only moves again when an accepted bug is fixed, which is what re-triggers QA.
+        // Advance the round counter and the watermark to the count of finished work QA
+        // has now verified. Newly-filed bugs are still in triage (not done), so this only
+        // rises again when an accepted bug is fixed or a change request's tasks complete —
+        // which is exactly what re-triggers QA, and equally for both.
         _tasks.SetMeta("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
-        _tasks.SetMeta("qa_fix_watermark", _tasks.CountBugs(TaskStatus.Done).ToString());
+        _tasks.SetMeta("qa_verified_count", _tasks.CountDone().ToString());
 
         var summary = filed == 0
             ? "QA passed — every requirement met; the project is accepted."
