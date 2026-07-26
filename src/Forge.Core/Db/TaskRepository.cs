@@ -21,6 +21,7 @@ public sealed class TaskRepository(IDbConnection conn)
         public string Status { get; init; } = "";
         public int TokenBudget { get; init; }
         public int TokensSpent { get; init; }
+        public int OutOfBudgetCount { get; init; }
         public string? ProgressNote { get; init; }
         public string? BranchName { get; init; }
         public string? CreatedBy { get; init; }
@@ -41,6 +42,7 @@ public sealed class TaskRepository(IDbConnection conn)
             Status = SnakeCaseEnum.Parse<TaskStatus>(Status),
             TokenBudget = TokenBudget,
             TokensSpent = TokensSpent,
+            OutOfBudgetCount = OutOfBudgetCount,
             ProgressNote = ProgressNote,
             BranchName = BranchName,
             CreatedBy = CreatedBy,
@@ -55,6 +57,7 @@ public sealed class TaskRepository(IDbConnection conn)
                context_paths AS ContextPaths, requirements_ref AS RequirementsRef,
                assigned_role AS AssignedRole, status AS Status,
                token_budget AS TokenBudget, tokens_spent AS TokensSpent,
+               out_of_budget_count AS OutOfBudgetCount,
                progress_note AS ProgressNote, branch_name AS BranchName,
                created_by AS CreatedBy, created_at AS CreatedAt, updated_at AS UpdatedAt
         FROM tasks
@@ -134,11 +137,58 @@ public sealed class TaskRepository(IDbConnection conn)
             """, new { taskId, tokens });
     }
 
+    /// <summary>Zero the spend for a fresh, Principal-directed attempt (redirect / takeover).</summary>
+    public void ResetTokensSpent(long taskId) =>
+        conn.Execute("""
+            UPDATE tasks SET tokens_spent = 0, updated_at = datetime('now') WHERE id = @taskId
+            """, new { taskId });
+
+    /// <summary>
+    /// The Principal's queue: the lowest-id blocked or out-of-budget task, highest
+    /// priority because a stuck task usually gates the DAG. Tasks already escalated
+    /// to a human (a pending message to pm/client) are skipped — they are waiting on
+    /// a decision, so the autonomous loop must not keep re-triaging them.
+    /// </summary>
+    public TaskRecord? NextPrincipalOwned()
+    {
+        var id = conn.QueryFirstOrDefault<long?>("""
+            SELECT t.id FROM tasks t
+            WHERE t.status IN ('out_of_budget','blocked')
+              AND NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.task_id = t.id AND m.to_agent IN ('pm','client') AND m.status = 'pending')
+            ORDER BY t.id LIMIT 1
+            """);
+        return id is { } i ? Get(i) : null;
+    }
+
     public void SetProgressNote(long taskId, string note) =>
         conn.Execute("""
             UPDATE tasks SET progress_note = @note, updated_at = datetime('now')
             WHERE id = @taskId
             """, new { taskId, note });
+
+    /// <summary>Count one budget/iteration exhaustion; returns the new total (the strike count).</summary>
+    public int IncrementOutOfBudgetCount(long taskId)
+    {
+        conn.Execute("""
+            UPDATE tasks SET out_of_budget_count = out_of_budget_count + 1, updated_at = datetime('now')
+            WHERE id = @taskId
+            """, new { taskId });
+        return conn.ExecuteScalar<int>(
+            "SELECT out_of_budget_count FROM tasks WHERE id = @taskId", new { taskId });
+    }
+
+    /// <summary>Raise (or lower) a task's token budget — the Principal's lever when triaging an out-of-budget task.</summary>
+    public void SetBudget(long taskId, int tokenBudget)
+    {
+        if (tokenBudget <= 0)
+            throw new ArgumentOutOfRangeException(nameof(tokenBudget), tokenBudget, "Token budget must be positive.");
+        conn.Execute("""
+            UPDATE tasks SET token_budget = @tokenBudget, updated_at = datetime('now')
+            WHERE id = @taskId
+            """, new { taskId, tokenBudget });
+    }
 
     /// <summary>
     /// An edge of the task DAG (spec §6 task_deps): taskId cannot start until

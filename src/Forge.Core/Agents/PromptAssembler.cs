@@ -84,6 +84,12 @@ public sealed class PromptAssembler(PromptLibrary prompts)
               your context at exec time. Never ask for a secret's value.
             - You have a token budget. At 70% you get a warning; at 100% the harness
               stops calling the model mid-turn, whether or not you are finished.
+            - You also have a turn budget: a fixed number of tool-using turns. You get
+              a warning as it runs low and a hard warning on your final turn; when it
+              runs out the harness stops the run. Being cut off cold at the cap is a
+              failure — before then you must end in a clean state: the tool that ends
+              your turn (done/escalate/reply), or at minimum a progress note so a fresh
+              instance can resume. Never spend your last turns re-reading or exploring.
             """);
 
         if (recipe.Tools.Contains("run"))

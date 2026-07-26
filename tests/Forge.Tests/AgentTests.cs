@@ -139,7 +139,7 @@ public class AgentToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task Done_and_escalate_end_the_loop_and_escalation_reaches_the_pm()
+    public async Task Done_and_escalate_end_the_loop_and_an_engineer_escalation_climbs_to_the_principal()
     {
         var done = await Run("done", ("summary", "Implemented and verified."));
         Assert.Equal(EndReason.Done, done.End);
@@ -147,7 +147,10 @@ public class AgentToolsetTests : IDisposable
         var escalated = await Run("escalate", ("reason", "The contract is ambiguous."));
         Assert.Equal(EndReason.Escalated, escalated.End);
 
-        var message = Assert.Single(new MessageRepository(_conn).Pending("pm"));
+        // The ladder is engineer → principal (not straight to the PM); the Principal is
+        // the one who can re-scope, and only bumps it to the PM if the client must decide.
+        Assert.Empty(new MessageRepository(_conn).Pending("pm"));
+        var message = Assert.Single(new MessageRepository(_conn).Pending("principal"));
         Assert.IsType<EscalationMessage>(message);
         Assert.Contains("ambiguous", message.Payload);
     }
@@ -339,8 +342,29 @@ public class AgentLoopTests : IDisposable
 
         Assert.Equal(EndReason.Iterations, result.End);
         Assert.Equal(4, llm.Calls);
-        // The agent never wrote a note; the harness wrote one anyway so resume works.
-        Assert.Contains("without writing a progress note", _tasks.Get(task.Id).ProgressNote!);
+        // The agent never wrote a note; the harness captures its final output as the
+        // resume note (ProgressStatus) so a successor sees what it was doing.
+        var note = _tasks.Get(task.Id).ProgressNote!;
+        Assert.Contains("ProgressStatus", note);
+        Assert.Contains("ended iterations", note);
+    }
+
+    [Fact]
+    public async Task The_final_turn_is_handed_a_forced_stop_message_demanding_done_or_a_note()
+    {
+        var task = StartTask();
+        var recipe = AgentRecipe.Engineer with { IterationCap = 2 };
+        var llm = new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("list_dir") };
+
+        await Loop(llm, recipe).RunAsync(task, _executor);
+
+        // The message injected before the last turn (turn 2) is imperative and mandatory —
+        // it is added by the loop just-in-time, not carried in the static role prompt.
+        var lastTurnUserMessage = llm.Requests[^1].Messages[^1].Content;
+        Assert.Contains("LAST turn", lastTurnUserMessage);
+        Assert.Contains("MUST", lastTurnUserMessage);
+        // It rides the conversation (a just-in-time user turn), never the system prompt.
+        Assert.DoesNotContain("LAST turn", llm.Requests[^1].System);
     }
 
     [Fact]
@@ -367,8 +391,10 @@ public class AgentLoopTests : IDisposable
 
         Assert.Equal(EndReason.Budget, result.End);
         Assert.Equal(2, llm.Calls);
-        Assert.Equal(TaskStatus.Blocked, _tasks.Get(task.Id).Status);
-        Assert.Contains("budget exhausted", Assert.Single(new MessageRepository(_conn).Pending("pm")).Payload);
+        // The loop just stops; parking the task (OutOfBudget, strike, notify) is the
+        // runner's job, verified in TaskRunnerTests — the supervisor only refuses.
+        var note = _tasks.Get(task.Id).ProgressNote!;
+        Assert.Contains("ProgressStatus", note);
     }
 
     [Fact]
@@ -393,6 +419,39 @@ public class AgentLoopTests : IDisposable
     {
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new HttpRequestException(message);
+    }
+
+    [Fact]
+    public async Task A_provider_timeout_surfacing_as_cancellation_is_a_crash_not_a_process_kill()
+    {
+        var task = StartTask();
+        // A network timeout reaches us as TaskCanceledException even though we never
+        // cancelled. Before the fix it escaped the crash handler and killed the run.
+        var timingOut = new CancelThrowingLlmClient();
+
+        var result = await Loop(timingOut).RunAsync(task, _executor); // must not throw
+
+        Assert.Equal(EndReason.Crash, result.End);
+        Assert.Contains("LLM call failed", _tasks.Get(task.Id).ProgressNote!);
+    }
+
+    [Fact]
+    public async Task Genuine_cancellation_propagates_and_stops_the_run()
+    {
+        var task = StartTask();
+        var llm = new CancelThrowingLlmClient();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel(); // our own token is tripped — this is a real stop, not a timeout
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Loop(llm).RunAsync(task, _executor, cts.Token));
+    }
+
+    /// <summary>Always raises TaskCanceledException — stands in for an HTTP-stack timeout.</summary>
+    private sealed class CancelThrowingLlmClient : ILlmClient
+    {
+        public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
+            throw new TaskCanceledException("simulated provider timeout");
     }
 
     [Fact]

@@ -74,11 +74,13 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         var ran = 0;
         do
         {
-            var outcome = await runner.RunNextAsync(AgentRole.Engineer, cancellationToken);
+            // Priority: a Principal-owned stuck task (blocked/out-of-budget) is cleared
+            // before the engineer advances, because it usually gates the rest of the DAG.
+            var outcome = await runner.RunNextByPriorityAsync(cancellationToken);
             if (outcome is null)
             {
                 AnsiConsole.MarkupLine(ran == 0
-                    ? "[grey]No ready work for the engineer.[/]"
+                    ? "[grey]No claimable work.[/]"
                     : "[grey]Board drained.[/]");
                 break;
             }

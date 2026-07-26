@@ -39,6 +39,12 @@ public sealed class TaskRunner(
     /// <summary>Bound the engineer↔review loop: a task that can't pass is escalated, not retried forever.</summary>
     private const int RevisionCap = 5;
 
+    /// <summary>How many times a provider crash auto-resumes before the task is handed to the Principal.</summary>
+    private const int CrashRetryCap = 2;
+
+    /// <summary>Strikes at OutOfBudget before the Principal stops redirecting and implements the task directly.</summary>
+    private const int DirectImplementStrike = 2;
+
     private readonly TaskRepository _tasks = new(conn);
     private readonly MessageRepository _messages = new(conn);
     private readonly AgentInstanceRepository _instances = new(conn);
@@ -78,21 +84,164 @@ public sealed class TaskRunner(
         return task is null ? null : await RunAsync(task, ct).ConfigureAwait(false);
     }
 
-    public async Task<TaskRunOutcome> RunAsync(TaskRecord task, CancellationToken ct = default)
+    /// <summary>
+    /// One step of the autonomous loop, by priority: a Principal-owned task
+    /// (blocked/out-of-budget) is cleared first — it usually gates the DAG — and only
+    /// then does the engineer advance. Returns null when neither has claimable work,
+    /// which is what drains the board.
+    /// </summary>
+    public async Task<TaskRunOutcome?> RunNextByPriorityAsync(CancellationToken ct = default)
     {
-        var recipe = AgentRecipe.For(task.AssignedRole
-            ?? throw new InvalidOperationException($"Task {task.Id} has no assigned role."));
+        if (_tasks.NextPrincipalOwned() is { } stuck)
+            return await TriageOrImplementAsync(stuck, ct).ConfigureAwait(false);
+        var next = NextTask(AgentRole.Engineer);
+        return next is null ? null : await RunAsync(next, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The Principal's two-strike ladder for a stuck task. Strike 1 (or a plain
+    /// blocked task): triage — diagnose and redirect/decompose/escalate. Strike 2 on
+    /// an out-of-budget task: implement it directly. Past that: give up to a human.
+    /// </summary>
+    private async Task<TaskRunOutcome> TriageOrImplementAsync(TaskRecord task, CancellationToken ct)
+    {
+        var log = _log.For(task.Id);
+        if (task.Status == TaskStatus.OutOfBudget)
+        {
+            if (task.OutOfBudgetCount > DirectImplementStrike)
+                return GiveUp(task, log);
+            if (task.OutOfBudgetCount >= DirectImplementStrike)
+                return await ImplementDirectlyAsync(task, ct).ConfigureAwait(false);
+        }
+        return await TriageAsync(task, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A fresh Principal reads the stuck task's WIP and note, then resolves it with a
+    /// tool: redirect (back to the engineer with direction), create_task/add_dependency
+    /// (break it up), or escalate (a requirements question for the PM). If it resolves
+    /// nothing — runs out of its own turns — the task is escalated to a human so the
+    /// autonomous loop cannot spin on it.
+    /// </summary>
+    private async Task<TaskRunOutcome> TriageAsync(TaskRecord task, CancellationToken ct)
+    {
+        var log = _log.For(task.Id);
+        var recipe = AgentRecipe.PrincipalTriage;
+        log.Message($"Principal triaging {SnakeCaseEnum.ToSnakeCase(task.Status)} task {task.Id}: {task.Title}");
+
+        // The triage is metered against this task, but an out-of-budget task is already
+        // at its ceiling — which would refuse the Principal's very first call. Give the
+        // Principal diagnosis headroom on top of whatever the engineer already spent.
+        _tasks.SetBudget(task.Id, _tasks.Get(task.Id).TokensSpent + recipe.DefaultBudget);
+
+        var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
+        if (task.BranchName is null) SetBranch(task.Id, branch);
+        _workspaces.Prepare(task, branch);
+        var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
+
+        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
+        var result = await loop
+            .RunTriageAsync(TriagePacket(task), _tasks.Get(task.Id), executor, ct)
+            .ConfigureAwait(false);
+
+        var status = _tasks.Get(task.Id).Status;
+        // redirect → Ready (resolved); escalate → still owned but a pending pm message
+        // parks it on a human. Anything else means triage itself failed to resolve it.
+        if (status is TaskStatus.OutOfBudget or TaskStatus.Blocked && result.End != EndReason.Escalated)
+            return GiveUp(task, log);
+
+        return new TaskRunOutcome(task.Id, result.End, status,
+            $"Triaged task {task.Id}: {result.ProgressNote ?? SnakeCaseEnum.ToSnakeCase(result.End)}.");
+    }
+
+    /// <summary>
+    /// The second strike: redirecting did not land it, so the Principal implements the
+    /// task itself. A fresh, generous budget and the implementer recipe (opus + run),
+    /// through the normal CI + review + merge path — the result is still verified.
+    /// </summary>
+    private async Task<TaskRunOutcome> ImplementDirectlyAsync(TaskRecord task, CancellationToken ct)
+    {
+        var log = _log.For(task.Id);
+        var recipe = AgentRecipe.PrincipalImplementer;
+        log.Message($"Principal implementing task {task.Id} directly (strike {task.OutOfBudgetCount}).");
+
+        if (task.TokenBudget < recipe.DefaultBudget) _tasks.SetBudget(task.Id, recipe.DefaultBudget);
+        _tasks.ResetTokensSpent(task.Id);
+        return await RunAsync(_tasks.Get(task.Id), recipe, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Even the Principal could not land it: block it and put the decision to a human (the PM).</summary>
+    private TaskRunOutcome GiveUp(TaskRecord task, ForgeLogger log)
+    {
+        var note = $"Task {task.Id} still unresolved after Principal triage/implementation — needs a human decision.";
+        var current = _tasks.Get(task.Id).Status;
+        if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
+            Transition(task.Id, TaskStatus.Blocked, log);
+        _tasks.SetProgressNote(task.Id, note);
+        log.Event(EventType.ErrorInternal, note);
+        Notify(task.Id, MessageType.Escalation, "pm", note);
+        return new TaskRunOutcome(task.Id, EndReason.Escalated, TaskStatus.Blocked, note);
+    }
+
+    /// <summary>
+    /// The just-in-time triage briefing — injected as the Principal's opening turn, not
+    /// baked into the role prompt. Names the concrete block and the allowed resolutions,
+    /// mirroring how the last-turn message is injected into the engineer loop.
+    /// </summary>
+    private static string TriagePacket(TaskRecord task)
+    {
+        var situation = task.Status == TaskStatus.OutOfBudget
+            ? $"ran out of its token/turn budget (strike {task.OutOfBudgetCount} of {DirectImplementStrike})"
+            : "is blocked — an engineer escalated, or the harness could not integrate the work";
+        return $"""
+            # Triage: task {task.Id} is stuck, and it is yours to unblock
+            You authored the task plan, so a stalled task is yours to fix — and it is the
+            highest priority, because a stuck task usually gates others in the DAG.
+
+            This task {situation}.
+
+            Task: {task.Title}
+            Objective: {task.Objective}
+            Status: {SnakeCaseEnum.ToSnakeCase(task.Status)}
+            The engineer's last note (read it, then read the workspace and its diff to see how far it got):
+            {task.ProgressNote ?? "(none left)"}
+
+            Diagnose the cause with read_file/list_dir/grep, then end your turn with ONE of:
+            - Too big or under-specified → `create_task` + `add_dependency` to split it, then
+              `redirect` this task with what now remains of it.
+            - Wrong approach, or genuinely needed more room → `redirect(guidance, [budget])` with
+              concrete, specific direction (raise the absolute budget if it ran out of tokens).
+            - A requirements/scope question only the client can answer → `escalate(reason)`.
+
+            Do not write code. Resolve it with redirect, create_task(+redirect), or escalate.
+            """;
+    }
+
+    public Task<TaskRunOutcome> RunAsync(TaskRecord task, CancellationToken ct = default) =>
+        RunAsync(task, AgentRecipe.For(task.AssignedRole
+            ?? throw new InvalidOperationException($"Task {task.Id} has no assigned role.")), ct);
+
+    /// <summary>
+    /// Run one instance of <paramref name="recipe"/> against the task and integrate or
+    /// park it. The recipe is a parameter so the Principal can implement a task directly
+    /// (its own recipe) through the same build → review → merge path as an engineer.
+    /// </summary>
+    public async Task<TaskRunOutcome> RunAsync(TaskRecord task, AgentRecipe recipe, CancellationToken ct = default)
+    {
         var log = _log.For(task.Id);
 
         // A task that keeps failing CI or review is a tarpit; stop feeding it. Only
-        // instances that ended `done` count — those are submissions that reached the
-        // gates and were sent back. A budget kill, crash or iteration cap is a
-        // park-and-resume, not a failed revision, and each of those already has its
-        // own bound (the token budget itself, the iteration cap per instance).
-        var attempts = _instances.ForTask(task.Id)
-            .Count(i => i.Role == AgentRole.Engineer && i.EndReason == EndReason.Done);
-        if (attempts >= RevisionCap)
-            return BlockExhausted(task, log, attempts);
+        // engineer instances that ended `done` count — those are submissions that
+        // reached the gates and were sent back. A budget kill, crash or iteration cap
+        // is a park-and-resume, not a failed revision. The Principal implementing
+        // directly is the escalation past this cap, so it is exempt.
+        if (recipe.Role == AgentRole.Engineer)
+        {
+            var attempts = _instances.ForTask(task.Id)
+                .Count(i => i.Role == AgentRole.Engineer && i.EndReason == EndReason.Done);
+            if (attempts >= RevisionCap)
+                return BlockExhausted(task, log, attempts);
+        }
 
         log.Message($"Starting task {task.Id}: {task.Title}");
         task = Claim(task, log);
@@ -118,7 +267,11 @@ public sealed class TaskRunner(
     /// </summary>
     private TaskRecord Claim(TaskRecord task, ForgeLogger log)
     {
-        if (task.Status == TaskStatus.Ready) Transition(task.Id, TaskStatus.Claimed, log);
+        // Ready is the normal claim; OutOfBudget/Blocked is the Principal taking a stuck
+        // task over. A task already in_progress is a resume — leave it, don't re-transition.
+        var status = _tasks.Get(task.Id).Status;
+        if (status is TaskStatus.Ready or TaskStatus.OutOfBudget or TaskStatus.Blocked)
+            Transition(task.Id, TaskStatus.Claimed, log);
         if (_tasks.Get(task.Id).Status == TaskStatus.Claimed)
             Transition(task.Id, TaskStatus.InProgress, log);
         return _tasks.Get(task.Id);
@@ -154,7 +307,7 @@ public sealed class TaskRunner(
             _tasks.SetProgressNote(task.Id, $"{note} Previous note: {result.ProgressNote}");
             Transition(task.Id, TaskStatus.Blocked, log);
             log.Event(EventType.ErrorInternal, note);
-            Notify(task.Id, MessageType.Escalation, "pm", note);
+            Notify(task.Id, MessageType.Escalation, "principal", note);
             return new TaskRunOutcome(task.Id, result.End, TaskStatus.Blocked, note);
         }
 
@@ -217,7 +370,7 @@ public sealed class TaskRunner(
                 Transition(task.Id, TaskStatus.Blocked, log);
             _tasks.SetProgressNote(task.Id, note);
             log.Event(EventType.ErrorInternal, note);
-            Notify(task.Id, MessageType.Escalation, "pm", note);
+            Notify(task.Id, MessageType.Escalation, "principal", note);
             return new TaskRunOutcome(task.Id, result.End, TaskStatus.Blocked, note);
         }
     }
@@ -254,7 +407,7 @@ public sealed class TaskRunner(
         if (wrote) log.Event(EventType.GitCommit, $"convention added from review: {Shorten(convention, 80)}");
     }
 
-    /// <summary>Bounded revision loop tripped: block the task and hand it to the PM.</summary>
+    /// <summary>Bounded revision loop tripped: hand the task to the Principal to triage.</summary>
     private TaskRunOutcome BlockExhausted(TaskRecord task, ForgeLogger log, int attempts)
     {
         var note = $"Task blocked after {attempts} engineer attempts without passing CI + review.";
@@ -262,7 +415,7 @@ public sealed class TaskRunner(
         if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
             Transition(task.Id, TaskStatus.Blocked, log);
         log.Event(EventType.ErrorInternal, note);
-        Notify(task.Id, MessageType.Escalation, "pm", note);
+        Notify(task.Id, MessageType.Escalation, "principal", note);
         return new TaskRunOutcome(task.Id, EndReason.Iterations, TaskStatus.Blocked, note);
     }
 
@@ -270,28 +423,86 @@ public sealed class TaskRunner(
         text.Length <= max ? text : text[..max] + "…";
 
     /// <summary>
-    /// Budget, iteration cap, escalation or crash. The workspace is deliberately
-    /// left on disk: it plus the progress note are what the next instance resumes
-    /// from. Nothing is thrown away until it is merged.
+    /// A non-`done` instance ended. The workspace is left on disk — it plus the
+    /// progress note are what the next instance resumes from — and the failure class
+    /// decides where the task goes:
+    ///   - crash (transient): stay claimable (in_progress) and auto-resume, bounded;
+    ///   - budget/iteration (out of resources): OutOfBudget → the Principal's queue;
+    ///   - escalate (needs a decision): Blocked → the Principal's queue.
     /// </summary>
     private TaskRunOutcome Park(TaskRecord task, AgentRunResult result, ForgeLogger log)
     {
         _workspaces.CommitAll(task.Id, $"wip(task {task.Id}): {result.End} after {result.Iterations} turns");
 
+        return result.End switch
+        {
+            EndReason.Crash when CrashCount(task.Id) <= CrashRetryCap => ResumeAfterCrash(task, result, log),
+            EndReason.Budget or EndReason.Iterations or EndReason.Crash => ParkOutOfBudget(task, result, log),
+            _ => ParkBlocked(task, result, log),
+        };
+    }
+
+    private int CrashCount(long taskId) =>
+        _instances.ForTask(taskId).Count(i => i.EndReason == EndReason.Crash);
+
+    /// <summary>
+    /// A provider crash is transient: a fresh instance gets a fresh network attempt and
+    /// fresh turns, and the WIP is intact. Leave the task `in_progress` (claimable) so the
+    /// next run auto-resumes it — the very path a killed process already uses. No transition.
+    /// </summary>
+    private TaskRunOutcome ResumeAfterCrash(TaskRecord task, AgentRunResult result, ForgeLogger log)
+    {
+        var summary = $"Instance {result.InstanceId} crashed after {result.Iterations} turns " +
+                      $"(crash {CrashCount(task.Id)}/{CrashRetryCap}); left in progress to auto-resume.";
+        log.Event(EventType.ErrorProvider, summary);
+        return new TaskRunOutcome(task.Id, result.End, _tasks.Get(task.Id).Status, summary);
+    }
+
+    /// <summary>
+    /// Out of resources after the forced last-turn message. Count a strike and move the
+    /// task to the Principal's OutOfBudget queue — the Principal sets a new budget and
+    /// direction, or (at the second strike) implements it directly.
+    /// </summary>
+    private TaskRunOutcome ParkOutOfBudget(TaskRecord task, AgentRunResult result, ForgeLogger log)
+    {
+        var strike = _tasks.IncrementOutOfBudgetCount(task.Id);
+        var current = _tasks.Get(task.Id).Status;
+        if (current != TaskStatus.OutOfBudget && TaskTransitions.IsLegal(current, TaskStatus.OutOfBudget))
+            Transition(task.Id, TaskStatus.OutOfBudget, log);
+
+        var summary = $"Instance {result.InstanceId} ran out of resources " +
+                      $"({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns — " +
+                      $"strike {strike}. Handed to the Principal (out_of_budget).";
+        log.Event(EventType.ErrorInternal, summary);
+        Notify(task.Id, MessageType.Escalation, "principal", $"{summary} {result.Detail}".Trim());
+        return new TaskRunOutcome(task.Id, result.End, TaskStatus.OutOfBudget, summary);
+    }
+
+    /// <summary>A deliberate escalate (or exhausted crash retries): the Principal triages.</summary>
+    private TaskRunOutcome ParkBlocked(TaskRecord task, AgentRunResult result, ForgeLogger log)
+    {
         var current = _tasks.Get(task.Id).Status;
         if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
             Transition(task.Id, TaskStatus.Blocked, log);
 
-        var summary = $"Instance {result.InstanceId} ended: {SnakeCaseEnum.ToSnakeCase(result.End)} " +
-                      $"after {result.Iterations} turns. Workspace kept for resume.";
-
-        // The supervisor already escalated a budget kill; don't double-report it.
-        if (result.End is not (EndReason.Budget or EndReason.Escalated))
-            Notify(task.Id, MessageType.Escalation, "pm", $"{summary} {result.Detail}".Trim());
-
+        var summary = $"Instance {result.InstanceId} ended {SnakeCaseEnum.ToSnakeCase(result.End)} " +
+                      $"after {result.Iterations} turns. Handed to the Principal (blocked).";
+        // A genuine escalate() already messaged the principal via the escalation ladder;
+        // only self-notify when the harness itself parked it (e.g. exhausted crash retries).
+        if (result.End is not EndReason.Escalated)
+            Notify(task.Id, MessageType.Escalation, "principal", $"{summary} {result.Detail}".Trim());
         return new TaskRunOutcome(task.Id, result.End, _tasks.Get(task.Id).Status, summary);
     }
 
+    // Blocked/out-of-budget recovery is now driven, not a dead end: RunNextByPriorityAsync
+    // claims Principal-owned tasks first, TriageOrImplementAsync runs the Principal on
+    // them (redirect / decompose / escalate, or implement directly at the second strike),
+    // and NextPrincipalOwned skips tasks already waiting on a human. Escalations climb
+    // engineer → principal → pm → client via the escalate ladder (AgentToolset.Escalate).
+    // TODO: the last human-facing gap — a "pm"/"client"-addressed escalation (only when the
+    // Principal kicks a requirements question upward) is still not surfaced in PmChat, whose
+    // History() replays client-facing messages only. Surface those in the PM chat (widen the
+    // filter or add an inbox view) so the client sees the questions the Principal escalates.
     private void Notify(long taskId, MessageType type, string to, string payload) =>
         _messages.Insert(Message.Create(type, "system", to, payload, taskId));
 }

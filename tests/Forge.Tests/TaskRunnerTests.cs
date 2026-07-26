@@ -166,7 +166,7 @@ public class TaskRunnerTests : IDisposable
         Assert.Contains("no commits", outcome.Summary);
         Assert.Contains("produced no commits", _tasks.Get(task.Id).ProgressNote!);
 
-        var escalation = new MessageRepository(_conn).Pending("pm").Last();
+        var escalation = new MessageRepository(_conn).Pending("principal").Last();
         Assert.IsType<EscalationMessage>(escalation);
     }
 
@@ -239,5 +239,120 @@ public class TaskRunnerTests : IDisposable
         _tasks.Transition(task.Id, TaskStatus.InProgress);
         _workspaces.Prepare(task, WorkspaceManager.BranchName(task));
         return _tasks.Get(task.Id);
+    }
+
+    // ---- OutOfBudget + Principal-triage ladder (the autonomous recovery path) ----
+
+    /// <summary>Put a task straight into the Principal's OutOfBudget queue with N strikes.</summary>
+    private TaskRecord OutOfBudgetTask(int strikes = 1, int budget = 100_000)
+    {
+        var task = ReadyTask(budget);
+        _tasks.Transition(task.Id, TaskStatus.Claimed);
+        _tasks.Transition(task.Id, TaskStatus.InProgress);
+        _tasks.Transition(task.Id, TaskStatus.OutOfBudget);
+        for (var i = 0; i < strikes; i++) _tasks.IncrementOutOfBudgetCount(task.Id);
+        return _tasks.Get(task.Id);
+    }
+
+    [Fact]
+    public async Task Budget_exhaustion_parks_the_task_out_of_budget_and_hands_it_to_the_principal()
+    {
+        // One scripted call costs 150 tokens; a 150-budget refuses the second call.
+        var task = ReadyTask(budget: 150);
+        var llm = new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("list_dir") };
+
+        var outcome = await Runner(llm).RunAsync(_tasks.Get(task.Id));
+
+        Assert.Equal(TaskStatus.OutOfBudget, outcome.Status);
+        var record = _tasks.Get(task.Id);
+        Assert.Equal(1, record.OutOfBudgetCount);        // one strike counted
+        Assert.True(_workspaces.Exists(task.Id));        // workspace kept for the Principal
+        Assert.Contains(new MessageRepository(_conn).Pending("principal"),
+            m => m.Payload.Contains("out_of_budget"));   // handed up the ladder, not to the PM
+        Assert.Empty(new MessageRepository(_conn).Pending("pm"));
+    }
+
+    [Fact]
+    public async Task A_provider_crash_leaves_the_task_claimable_to_auto_resume_then_gives_up_after_the_cap()
+    {
+        var task = ReadyTask();
+        var runner = Runner(new ThrowingLlmClient());
+
+        // First two crashes are transient: the task stays in_progress so the next run resumes it.
+        for (var i = 1; i <= 2; i++)
+        {
+            var outcome = await runner.RunAsync(_tasks.Get(task.Id));
+            Assert.Equal(EndReason.Crash, outcome.End);
+            Assert.Equal(TaskStatus.InProgress, _tasks.Get(task.Id).Status);
+            Assert.True(_workspaces.Exists(task.Id));
+        }
+
+        // The third crash exceeds the retry cap: hand it to the Principal.
+        var final = await runner.RunAsync(_tasks.Get(task.Id));
+        Assert.Equal(TaskStatus.OutOfBudget, _tasks.Get(task.Id).Status);
+        Assert.Equal(TaskStatus.OutOfBudget, final.Status);
+    }
+
+    [Fact]
+    public async Task A_stuck_task_is_cleared_before_a_ready_engineer_task_and_triage_redirects_it()
+    {
+        var stuck = OutOfBudgetTask(strikes: 1);   // Principal-owned
+        var ready = ReadyTask();                    // an ordinary engineer task, also claimable
+
+        // Triage: the Principal reads the task and redirects it back to the engineer.
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("redirect", ("guidance", "Split the parser out first, then retry.")));
+        var outcome = await Runner(llm).RunNextByPriorityAsync();
+
+        Assert.NotNull(outcome);
+        Assert.Equal(stuck.Id, outcome.TaskId);                       // the stuck task won priority
+        Assert.Equal(TaskStatus.Ready, _tasks.Get(stuck.Id).Status);  // redirected back onto the board
+        Assert.Contains("PRINCIPAL GUIDANCE", _tasks.Get(stuck.Id).ProgressNote!);
+        Assert.Equal(TaskStatus.Ready, _tasks.Get(ready.Id).Status);  // the engineer task was not touched
+    }
+
+    [Fact]
+    public async Task Redirect_resets_the_attempt_and_can_raise_the_budget()
+    {
+        var stuck = OutOfBudgetTask(strikes: 1, budget: 5_000);
+        _tasks.AddTokensSpent(stuck.Id, 5_000);   // spent out
+
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("redirect", ("guidance", "Try a smaller step."), ("budget", "88888")));
+        await Runner(llm).RunNextByPriorityAsync();
+
+        var record = _tasks.Get(stuck.Id);
+        Assert.Equal(TaskStatus.Ready, record.Status);
+        Assert.Equal(0, record.TokensSpent);        // fresh attempt
+        Assert.Equal(88_888, record.TokenBudget);   // Principal raised the ceiling
+    }
+
+    [Fact]
+    public async Task Second_strike_makes_the_principal_implement_the_task_directly_and_it_merges()
+    {
+        var stuck = OutOfBudgetTask(strikes: 2);   // two strikes → direct implementation
+
+        // The Principal-implementer recipe is engineer-shaped: it writes, builds, and finishes,
+        // then a fresh Principal reviews and it merges — verified against ground truth as usual.
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("write_file", ("path", "greeting.txt"), ("content", "hello")),
+            ScriptedLlmClient.Tool("done", ("summary", "Implemented directly.")),
+            ScriptedLlmClient.Tool("approve", ("note", "Correct.")));
+
+        var outcome = await Runner(llm).RunNextByPriorityAsync();
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TaskStatus.Done, _tasks.Get(stuck.Id).Status);
+        Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
+        // The instance that did the work was the Principal, not an engineer.
+        Assert.Contains(new AgentInstanceRepository(_conn).ForTask(stuck.Id),
+            i => i.Role == AgentRole.Principal && i.Id.StartsWith("prin-impl"));
+    }
+
+    /// <summary>A provider adapter that always fails — stands in for a 429 / outage.</summary>
+    private sealed class ThrowingLlmClient : ILlmClient
+    {
+        public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
+            throw new InvalidOperationException("provider unavailable (429)");
     }
 }

@@ -19,6 +19,8 @@ public sealed record TaskRecord
     public TaskStatus Status { get; init; } = TaskStatus.Created;
     public required int TokenBudget { get; init; }
     public int TokensSpent { get; init; }
+    /// <summary>Times this task exhausted its budget/iterations. At 2 the Principal takes it over.</summary>
+    public int OutOfBudgetCount { get; init; }
     public string? ProgressNote { get; init; }
     public string? BranchName { get; init; }
     public string? CreatedBy { get; init; }
@@ -81,11 +83,16 @@ public static class TaskTransitions
             [TaskStatus.Created] = [TaskStatus.Ready, TaskStatus.Cancelled],
             [TaskStatus.Ready] = [TaskStatus.Claimed, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.Claimed] = [TaskStatus.InProgress, TaskStatus.Ready, TaskStatus.Blocked, TaskStatus.Cancelled],
-            [TaskStatus.InProgress] = [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.Cancelled],
+            [TaskStatus.InProgress] = [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.OutOfBudget, TaskStatus.Cancelled],
             [TaskStatus.InReview] = [TaskStatus.Merging, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.Merging] = [TaskStatus.Qa, TaskStatus.InProgress, TaskStatus.Blocked],
             [TaskStatus.Qa] = [TaskStatus.Done, TaskStatus.InProgress, TaskStatus.Blocked],
-            [TaskStatus.Blocked] = [TaskStatus.Ready, TaskStatus.Cancelled],
+            // Blocked and OutOfBudget are Principal-owned. The Principal triages them
+            // back to the engineer (→ Ready), takes them over to implement directly
+            // (→ Claimed/InProgress), or gives up (→ Blocked/Cancelled).
+            [TaskStatus.Blocked] = [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Cancelled],
+            [TaskStatus.OutOfBudget] =
+                [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.Done] = [],
             [TaskStatus.Cancelled] = [],
         };
@@ -103,7 +110,12 @@ public static class TaskTransitions
     {
         TaskStatus.InReview => AgentRole.Principal,
         TaskStatus.Qa => AgentRole.Qa,
-        TaskStatus.Blocked => AgentRole.Pm,
+        // The Principal authored the task DAG, structure and contracts, so a stalled
+        // or blocked task is theirs to triage — not the PM's, who can neither set a
+        // budget nor make a technical call. Escalations climb engineer → principal →
+        // pm → client; the PM is only the client-facing rung.
+        TaskStatus.Blocked => AgentRole.Principal,
+        TaskStatus.OutOfBudget => AgentRole.Principal,
         TaskStatus.Created => AgentRole.Pm,
         _ => null,
     };

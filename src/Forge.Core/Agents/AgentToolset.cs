@@ -5,6 +5,7 @@ using Forge.Core.Db;
 using Forge.Core.Logging;
 using Forge.Core.Model;
 using Forge.Core.Tools;
+using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Core.Agents;
 
@@ -66,6 +67,9 @@ public sealed class AgentToolset(
                             + "type is feature (default), bug, or chore. requirements_ref names the requirement "
                             + "file, e.g. `01-todos.md@v1` (version optional).",
             ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done.",
+            ["redirect"] = "redirect(guidance, [budget]) — hand this stuck task back to the engineer with "
+                         + "concrete direction (and optionally a new absolute token budget). Resets the "
+                         + "attempt so the engineer starts fresh with your guidance. Ends your triage.",
             ["approve"] = "approve([note]) — the diff is good; approve it for merge and end your review.",
             ["request_changes"] = "request_changes(reason, [convention]) — send the work back with a reason. "
                                 + "Set convention to add a permanent rule to CONVENTIONS.md for a recurring mistake.",
@@ -103,6 +107,7 @@ public sealed class AgentToolset(
                 "add_milestone" => AddMilestone(call),
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
+                "redirect" => Redirect(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
                 "reply" => Reply(call),
@@ -338,6 +343,37 @@ public sealed class AgentToolset(
     }
 
     /// <summary>A DAG edge: the task waits on its dependency. The serial worker respects it (spec §7).</summary>
+    /// <summary>
+    /// The Principal's triage verdict: hand a blocked/out-of-budget task back to the
+    /// engineer with direction. Resets the spend so the redirected attempt starts
+    /// fresh (a new directed try, not a continuation), optionally with a new budget,
+    /// and re-readies the task. Ends the triage instance.
+    /// </summary>
+    private ToolOutcome Redirect(ToolCall call)
+    {
+        if (task is null) return new ToolOutcome("ERROR: redirect needs a task; this run has none.");
+        var guidance = call.Arg("guidance");
+
+        var current = _tasks.Get(task.Id).Status;
+        if (current is not (TaskStatus.OutOfBudget or TaskStatus.Blocked))
+            return new ToolOutcome(
+                $"ERROR: redirect only applies to a blocked/out-of-budget task; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
+
+        var budget = call.OptionalInt("budget");
+        if (budget is { } b) _tasks.SetBudget(task.Id, b);
+        _tasks.ResetTokensSpent(task.Id);
+
+        var note = $"PRINCIPAL GUIDANCE (triage): {guidance}";
+        _tasks.SetProgressNote(task.Id, note);
+        LastProgressNote = note;
+        _tasks.Transition(task.Id, TaskStatus.Ready);
+
+        return new ToolOutcome(
+            $"Task {task.Id} redirected to the engineer with new guidance" +
+            (budget is { } nb ? $" and budget {nb}" : "") + "; ready again.",
+            EndReason.Done);
+    }
+
     private ToolOutcome AddDependency(ToolCall call)
     {
         var taskId = call.OptionalInt("task") ?? throw new ToolCallException("add_dependency needs 'task'.");
@@ -407,8 +443,15 @@ public sealed class AgentToolset(
     {
         var reason = call.Arg("reason");
         var from = SnakeCaseEnum.ToSnakeCase(recipe.Role);
-        // The PM is the escalation target for everyone else; the PM escalates to the client.
-        var to = recipe.Role == AgentRole.Pm ? "client" : "pm";
+        // Escalation climbs one rung: engineer/qa/researcher → principal (the author
+        // of the DAG and contracts, who can re-scope or re-budget), principal → pm
+        // (only a requirements/scope question that needs the client), pm → client.
+        var to = recipe.Role switch
+        {
+            AgentRole.Pm => "client",
+            AgentRole.Principal => "pm",
+            _ => "principal",
+        };
         _messages.Insert(Message.Create(MessageType.Escalation, from, to, reason, task?.Id));
         if (task is not null) _tasks.SetProgressNote(task.Id, $"Escalated: {reason}");
         LastProgressNote = $"Escalated: {reason}";

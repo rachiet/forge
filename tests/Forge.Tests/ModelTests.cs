@@ -42,7 +42,9 @@ public class TaskTransitionsTests
     [Theory]
     [InlineData(TaskStatus.InReview, AgentRole.Principal)]
     [InlineData(TaskStatus.Qa, AgentRole.Qa)]
-    [InlineData(TaskStatus.Blocked, AgentRole.Pm)]
+    // Blocked and OutOfBudget are the Principal's to triage — they authored the DAG.
+    [InlineData(TaskStatus.Blocked, AgentRole.Principal)]
+    [InlineData(TaskStatus.OutOfBudget, AgentRole.Principal)]
     public void Handoff_routing_is_derived_from_status(TaskStatus status, AgentRole role) =>
         Assert.Equal(role, TaskTransitions.RoleFor(status));
 }

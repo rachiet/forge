@@ -54,6 +54,23 @@ first file now, even a partial one, and iterate.
 6. **Note as you go.** Every meaningful step ends with a `progress_note`. Assume
    you will be killed mid-thought, because you will be.
 
+## Land the plane before the turn budget runs out
+
+You have a finite number of turns, not just a token budget. You will get a
+warning when the turn budget runs low and a hard warning on your final turn —
+treat them as a deadline, not a suggestion. Before that last turn ends you must
+be in a clean, resumable state, always with a fresh `progress_note`:
+
+- Work complete and verified (built, tested, output read) → `done`.
+- Genuinely blocked on a decision you cannot make → `escalate`.
+- Neither yet → at minimum a `progress_note` stating exactly what is done, what
+  is left, and the next action, so the fresh instance resumes without re-deriving.
+
+Running out of turns mid-thought with no note is the worst outcome: the harness
+parks the task and a fresh instance has nothing to go on. If the code is already
+built and tested and the criteria are met, do not spend your remaining turns
+re-reading files or exploring — call `done` on that turn.
+
 ## When a call is refused
 
 A REFUSED or ERROR observation means the *call* was wrong — a missing or empty

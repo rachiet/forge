@@ -7,7 +7,7 @@ public enum TaskType { Feature, Bug, Design, ImpactAnalysis, Research, Chore }
 public enum TaskStatus
 {
     Created, Ready, Claimed, InProgress, InReview, Merging,
-    Qa, Done, Blocked, Cancelled
+    Qa, Done, Blocked, OutOfBudget, Cancelled
 }
 
 public enum AgentRole { Pm, Principal, Engineer, Qa, Researcher }

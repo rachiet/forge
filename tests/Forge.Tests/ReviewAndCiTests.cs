@@ -142,7 +142,8 @@ public class ReviewAndCiTests : IDisposable
 
         Assert.Equal(TaskStatus.Blocked, outcome.Status);
         Assert.Contains("Integration failed", _tasks.Get(task.Id).ProgressNote);
-        Assert.Contains(new MessageRepository(_conn).Pending("pm"),
+        // Technical failures climb to the Principal (who can fix them), not the PM.
+        Assert.Contains(new MessageRepository(_conn).Pending("principal"),
             m => m.Payload.Contains("Integration failed"));
         // The branch survived: unblocking and re-running can retry the gates.
         Assert.True(Directory.Exists(_paths.TaskWorkspace(Project, task.Id)));
@@ -173,7 +174,7 @@ public class ReviewAndCiTests : IDisposable
         Assert.Equal(TaskStatus.Blocked, outcome.Status);
         Assert.Equal(5, new AgentInstanceRepository(_conn).ForTask(task.Id)
             .Count(i => i.Role == AgentRole.Engineer));
-        Assert.Contains(new MessageRepository(_conn).Pending("pm"),
+        Assert.Contains(new MessageRepository(_conn).Pending("principal"),
             m => m.Payload.Contains("blocked after 5 engineer attempts"));
     }
 }

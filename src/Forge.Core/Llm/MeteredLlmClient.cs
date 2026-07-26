@@ -1,15 +1,16 @@
 using System.Data;
 using Forge.Core.Db;
 using Forge.Core.Model;
-using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Core.Llm;
 
 /// <summary>
 /// The supervisor as a decorator, not a convention (spec §11). Wraps any
 /// provider adapter and:
-///  - refuses the call outright once the task (or project) budget is spent —
-///    task → blocked, escalation queued to the PM, exception thrown;
+///  - refuses the call outright once the task (or project) budget is spent, by
+///    throwing — the task's terminal state (OutOfBudget → the Principal's queue,
+///    with a strike counted) is decided in one place, TaskRunner.Park, not here;
+///  - escalates a project-wide budget cap to the PM (a client money decision);
 ///  - writes a token_ledger row and bumps tasks.tokens_spent after every call;
 ///  - injects a system_nudge message when a call crosses 70% of the task budget.
 /// </summary>
@@ -53,9 +54,9 @@ public sealed class MeteredLlmClient(
         var task = _tasks.Get(taskId);
         if (task.TokensSpent < task.TokenBudget) return;
 
-        if (TaskTransitions.IsLegal(task.Status, TaskStatus.Blocked))
-            _tasks.Transition(taskId, TaskStatus.Blocked);
-        QueueBudgetEscalation(attribution, $"Task {taskId}", task.TokensSpent, task.TokenBudget);
+        // Enforcement is not making the call. Parking the task — OutOfBudget, a strike,
+        // the workspace kept, the Principal notified — is TaskRunner.Park's job, so it
+        // isn't split across two owners that could disagree.
         throw new BudgetExhaustedException($"Task {taskId}", task.TokensSpent, task.TokenBudget);
     }
 

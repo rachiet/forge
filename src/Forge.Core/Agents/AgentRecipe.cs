@@ -128,6 +128,49 @@ public sealed record AgentRecipe
         IterationCap = 30,
     }).Validate();
 
+    /// <summary>
+    /// The Principal triaging a stuck task (blocked/out-of-budget). It reads the WIP
+    /// and the engineer's note to diagnose, then decides: break the task down
+    /// (create_task + add_dependency), redirect it to the engineer with direction, or
+    /// escalate a requirements question to the PM. It does not write code — no
+    /// write_file, no run, no done — so a triage cannot be mistaken for an implementation.
+    /// The situational how-to is injected as a JIT packet, not baked into the role prompt.
+    /// </summary>
+    public static AgentRecipe PrincipalTriage => (new AgentRecipe
+    {
+        Role = AgentRole.Principal,
+        Model = "claude-opus-4-8",
+        RolePrompt = "principal",
+        InstancePrefix = "triage",
+        AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
+        Tools = ["read_file", "list_dir", "grep", "create_task", "add_dependency", "redirect", "escalate"],
+        Scope = PathScope.Workspace,
+        ToolAllowlist = [],
+        DefaultBudget = 80_000,
+        IterationCap = 20,
+    }).Validate();
+
+    /// <summary>
+    /// The Principal implementing a task directly (the second out-of-budget strike):
+    /// redirecting twice did not land it, so the strongest model does the work itself
+    /// with real headroom — the engineer's implementation how-to, opus's reasoning, and
+    /// a larger budget and turn cap. It flows through the same CI + review + merge path
+    /// as an engineer, so the result is still verified against ground truth.
+    /// </summary>
+    public static AgentRecipe PrincipalImplementer => (new AgentRecipe
+    {
+        Role = AgentRole.Principal,
+        Model = "claude-opus-4-8",
+        RolePrompt = "engineer",
+        InstancePrefix = "prin-impl",
+        AlwaysInContext = ["CONVENTIONS.md"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "progress_note", "done", "escalate"],
+        Scope = PathScope.Workspace,
+        ToolAllowlist = ["dotnet", "git"],
+        DefaultBudget = 120_000,
+        IterationCap = 80,
+    }).Validate();
+
     public static AgentRecipe For(AgentRole role) => role switch
     {
         AgentRole.Engineer => Engineer,

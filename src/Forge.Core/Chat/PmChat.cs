@@ -44,6 +44,9 @@ public sealed class PmChat(
     /// <summary>The conversation so far, oldest first — what `forge chat` prints on open.</summary>
     public IReadOnlyList<Message> History() =>
         _messages.Log()
+            // TODO: this client-only filter hides "pm"-addressed escalations — now only
+            // the requirements questions the Principal kicks upward (see TaskRunner.Notify).
+            // Surface those here or in a dedicated inbox so the client can answer them.
             .Where(m => m.FromAgent == "client" || m.ToAgent == "client")
             .TakeLast(HistoryTurns)
             .ToList();

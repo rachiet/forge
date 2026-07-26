@@ -52,9 +52,13 @@ public static class Schema
             ('pm','principal','engineer','qa','researcher')),
           status TEXT NOT NULL DEFAULT 'created' CHECK(status IN
             ('created','ready','claimed','in_progress','in_review','merging',
-             'qa','done','blocked','cancelled')),
+             'qa','done','blocked','out_of_budget','cancelled')),
           token_budget INTEGER NOT NULL CHECK(token_budget > 0),
           tokens_spent INTEGER NOT NULL DEFAULT 0 CHECK(tokens_spent >= 0),
+          -- How many times this task ran out of resources (budget/iteration) after
+          -- the forced last-turn message. At the second strike the harness stops
+          -- handing it back to an engineer and the Principal implements it directly.
+          out_of_budget_count INTEGER NOT NULL DEFAULT 0 CHECK(out_of_budget_count >= 0),
           progress_note TEXT,
           branch_name TEXT,
           created_by TEXT,

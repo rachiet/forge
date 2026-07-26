@@ -88,7 +88,7 @@ public class MeteredLlmClientTests : IDisposable
     }
 
     [Fact]
-    public async Task Exhausted_budget_refuses_the_call_blocks_the_task_and_tells_the_pm()
+    public async Task Exhausted_task_budget_refuses_the_call_and_leaves_parking_to_the_runner()
     {
         var taskId = StartTask(budget: 1000);
         _tasks.AddTokensSpent(taskId, 1000);
@@ -98,10 +98,12 @@ public class MeteredLlmClientTests : IDisposable
         await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(taskId)));
 
         Assert.Equal(0, inner.Calls); // enforcement = not making the call
-        Assert.Equal(TaskStatus.Blocked, _tasks.Get(taskId).Status);
-        var escalation = Assert.Single(new MessageRepository(_conn).Pending("pm"));
-        Assert.IsType<EscalationMessage>(escalation);
-        Assert.Equal(taskId, escalation.TaskId);
+        // The supervisor is a single-purpose meter: it does NOT transition the task or
+        // escalate for a task budget — TaskRunner.Park owns that (OutOfBudget → Principal),
+        // so the two can't disagree. The task is untouched here.
+        Assert.NotEqual(TaskStatus.Blocked, _tasks.Get(taskId).Status);
+        Assert.Empty(new MessageRepository(_conn).Pending("pm"));
+        Assert.Empty(new MessageRepository(_conn).Pending("principal"));
     }
 
     [Fact]
