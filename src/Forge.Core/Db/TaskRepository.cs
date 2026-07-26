@@ -153,7 +153,7 @@ public sealed class TaskRepository(IDbConnection conn)
     {
         var id = conn.QueryFirstOrDefault<long?>("""
             SELECT t.id FROM tasks t
-            WHERE t.status IN ('out_of_budget','blocked')
+            WHERE t.status IN ('out_of_budget','blocked','triage')
               AND NOT EXISTS (
                 SELECT 1 FROM messages m
                 WHERE m.task_id = t.id AND m.to_agent IN ('pm','client') AND m.status = 'pending')
@@ -161,6 +161,44 @@ public sealed class TaskRepository(IDbConnection conn)
             """);
         return id is { } i ? Get(i) : null;
     }
+
+    /// <summary>
+    /// The bug ledger QA is seeded with so it does not re-file what has already been
+    /// filed: every rejected bug (a durable "not a bug" verdict) and every bug still
+    /// in flight. Fixed (done) bugs are excluded — a recurrence of one is a genuine
+    /// regression that QA should be free to file again.
+    /// </summary>
+    public IReadOnlyList<TaskRecord> BugLedger() =>
+        conn.Query<Row>($"""
+            {SelectColumns} WHERE type = 'bug'
+              AND status NOT IN ('done','cancelled')
+            ORDER BY id
+            """).Select(r => r.ToRecord()).ToList();
+
+    /// <summary>Count bugs in a given status — the QA gate's raw material.</summary>
+    public int CountBugs(TaskStatus status) =>
+        conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM tasks WHERE type = 'bug' AND status = @s",
+            new { s = SnakeCaseEnum.ToSnakeCase(status) });
+
+    /// <summary>Are all non-bug tasks terminal and no bug still active? Then the board is quiescent.</summary>
+    public bool BoardQuiescent() =>
+        conn.ExecuteScalar<int>("""
+            SELECT COUNT(*) FROM tasks
+            WHERE status NOT IN ('done','rejected','cancelled')
+            """) == 0
+        && conn.ExecuteScalar<int>("""
+            SELECT COUNT(*) FROM tasks WHERE type != 'bug' AND status = 'done'
+            """) > 0;
+
+    public string? GetMeta(string key) =>
+        conn.QueryFirstOrDefault<string>("SELECT value FROM project_meta WHERE key = @key", new { key });
+
+    public void SetMeta(string key, string value) =>
+        conn.Execute("""
+            INSERT INTO project_meta (key, value) VALUES (@key, @value)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, new { key, value });
 
     public void SetProgressNote(long taskId, string note) =>
         conn.Execute("""

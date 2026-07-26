@@ -190,12 +190,9 @@ public class AgentRecipeTests
     [Fact]
     public void Roles_that_arrive_in_a_later_milestone_fail_loudly_rather_than_half_working()
     {
-        // Principal arrived in M3; QA (M5) and Researcher (later) have not.
-        foreach (var role in new[] { AgentRole.Qa, AgentRole.Researcher })
-        {
-            var ex = Assert.Throws<NotSupportedException>(() => AgentRecipe.For(role));
-            Assert.Contains("§12", ex.Message);
-        }
+        // QA arrived in M5; Researcher has not yet.
+        var ex = Assert.Throws<NotSupportedException>(() => AgentRecipe.For(AgentRole.Researcher));
+        Assert.Contains("§12", ex.Message);
     }
 
     [Fact]

@@ -70,6 +70,12 @@ public sealed class AgentToolset(
             ["redirect"] = "redirect(guidance, [budget]) — hand this stuck task back to the engineer with "
                          + "concrete direction (and optionally a new absolute token budget). Resets the "
                          + "attempt so the engineer starts fresh with your guidance. Ends your triage.",
+            ["file_bug"] = "file_bug(title, repro, expected, actual, [requirements_ref]) — record a failure found "
+                         + "in QA as a bug for the Principal to triage. Give exact repro steps, the expected "
+                         + "result, and the actual result. Do not file a bug already in the ledger.",
+            ["accept_bug"] = "accept_bug([note]) — this filed bug is real; release it to the board for an engineer. Ends your triage.",
+            ["reject_bug"] = "reject_bug(reason) — this filed bug is not a real defect; reject it with a reason. "
+                           + "It is kept on record and will not be re-filed. Ends your triage.",
             ["approve"] = "approve([note]) — the diff is good; approve it for merge and end your review.",
             ["request_changes"] = "request_changes(reason, [convention]) — send the work back with a reason. "
                                 + "Set convention to add a permanent rule to CONVENTIONS.md for a recurring mistake.",
@@ -108,6 +114,9 @@ public sealed class AgentToolset(
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
                 "redirect" => Redirect(call),
+                "file_bug" => FileBug(call),
+                "accept_bug" => AcceptBug(call),
+                "reject_bug" => RejectBug(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
                 "reply" => Reply(call),
@@ -372,6 +381,76 @@ public sealed class AgentToolset(
             $"Task {task.Id} redirected to the engineer with new guidance" +
             (budget is { } nb ? $" and budget {nb}" : "") + "; ready again.",
             EndReason.Done);
+    }
+
+    /// <summary>
+    /// QA records a failure as a bug for the Principal to triage. The bug is born in
+    /// `triage` (not on the engineer's board yet) and carries structured repro /
+    /// expected / actual so a triager and, later, a fixer both know exactly what broke.
+    /// </summary>
+    private ToolOutcome FileBug(ToolCall call)
+    {
+        var requirement = call.Optional("requirements_ref") is { } reqRef
+            ? NormalizeRequirementRef(reqRef)
+            : (RequirementsRef?)null;
+
+        var objective = $"""
+            A defect found in QA. Reproduce it, then make the expected result true and pin it with a test.
+
+            ## Repro
+            {call.Arg("repro")}
+
+            ## Expected
+            {call.Arg("expected")}
+
+            ## Actual
+            {call.Arg("actual")}
+            """;
+
+        var bug = _tasks.Insert(TaskRecord.Create(
+            TaskType.Bug,
+            call.Arg("title"),
+            objective,
+            call.OptionalInt("budget") ?? 60_000,
+            acceptanceCriteria: "Reproducing the steps no longer yields the actual behaviour; the expected result holds.",
+            requirementsRef: requirement,
+            assignedRole: AgentRole.Engineer,
+            createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role)) with { Status = TaskStatus.Triage });
+
+        return new ToolOutcome($"Bug {bug.Id} filed: {bug.Title} (triage — the Principal decides).");
+    }
+
+    /// <summary>The Principal's verdict: this filed bug is real. Release it to the board for an engineer.</summary>
+    private ToolOutcome AcceptBug(ToolCall call)
+    {
+        if (task is null) return new ToolOutcome("ERROR: accept_bug needs a bug to act on; this run has none.");
+        var current = _tasks.Get(task.Id).Status;
+        if (current != TaskStatus.Triage)
+            return new ToolOutcome(
+                $"ERROR: accept_bug only applies to a bug in triage; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
+
+        _tasks.Transition(task.Id, TaskStatus.Ready);
+        new DiscussionRepository(connection).Open(task.Id, SnakeCaseEnum.ToSnakeCase(recipe.Role),
+            $"[bug accepted] {call.Optional("note") ?? "Accepted for fixing."}");
+        LastProgressNote = "Bug accepted; ready for an engineer to fix.";
+        return new ToolOutcome($"Bug {task.Id} accepted; released to the board.", EndReason.Done);
+    }
+
+    /// <summary>The Principal's verdict: not a real defect. Kept on record with the reason; never re-filed.</summary>
+    private ToolOutcome RejectBug(ToolCall call)
+    {
+        if (task is null) return new ToolOutcome("ERROR: reject_bug needs a bug to act on; this run has none.");
+        var current = _tasks.Get(task.Id).Status;
+        if (current != TaskStatus.Triage)
+            return new ToolOutcome(
+                $"ERROR: reject_bug only applies to a bug in triage; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
+
+        var reason = call.Arg("reason");
+        _tasks.Transition(task.Id, TaskStatus.Rejected);
+        _tasks.SetProgressNote(task.Id, $"REJECTED (not a bug): {reason}");
+        new DiscussionRepository(connection).Open(task.Id, SnakeCaseEnum.ToSnakeCase(recipe.Role), $"[bug rejected] {reason}");
+        LastProgressNote = $"Bug rejected: {reason}";
+        return new ToolOutcome($"Bug {task.Id} rejected and kept on record; QA will not re-file it.", EndReason.Done);
     }
 
     private ToolOutcome AddDependency(ToolCall call)

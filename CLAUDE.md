@@ -83,6 +83,33 @@ movable and shareable, so keys must not ride along in that payload.
   Forge's environment would leak every key. A key added to `forge_env` tomorrow
   is therefore invisible to agents by default, with nothing to remember.
 
+### QA [DECIDED] (M5a — project-level acceptance gate)
+- **QA is project-level, not per-task.** A scaffold or a half-built feature has no
+  observable behaviour to black-box; acceptance is a feature/requirement concern. So
+  the per-task `Qa` hop is gone (a task goes `merging → done`), and QA runs only when
+  the **whole board is complete** — `RunNextByPriorityAsync` calls `MaybeRunQaAsync`
+  once no task/triage work remains. Same trigger for the first build and for a later
+  change request.
+- **QA tests the observable side-channel, never the source** (`AgentRecipe.Qa`,
+  `prompts/roles/qa.md`): it exercises the HTTP/CLI contract the Principal designed
+  and files a bug per unmet requirement. It ignores the engineer's white-box unit
+  tests and does not judge aesthetics — visual "feel" stays the client's call. (A
+  persistent, committed acceptance-test suite is a deferred refinement; M5a verifies
+  in an ephemeral trunk clone.)
+- **Bugs are first-class tasks with a triage lifecycle.** `file_bug(title, repro,
+  expected, actual, [requirements_ref])` creates a `bug` task born **`triage`**
+  (Principal-owned). The Principal `accept_bug` (→ `ready`, an engineer fixes it
+  through the normal CI+review+merge) or `reject_bug(reason)` (→ **`rejected`**, a
+  durable "not a bug" verdict — kept, never deleted). Two new statuses:
+  `Triage`, `Rejected`.
+- **No QA↔fix loop, guaranteed by counts.** QA is seeded with the **bug ledger**
+  (rejected + open) so it does not re-file — but the hard guarantee is the
+  termination rule, not the model's diligence: a `qa_fix_watermark` in `project_meta`
+  tracks how many bug-fixes QA has verified, and QA re-runs only when
+  `CountBugs(Done)` exceeds it. A cycle that accepts nothing new (all bugs rejected,
+  or none filed) never moves the watermark, so QA is not called again → **project
+  complete**. A non-converging project escalates to the client after `QaRoundCap` (5).
+
 ### Review + CI [DECIDED] (settled while building M4)
 - **CI is harness-run, zero tokens** (`Ci/CiRunner.cs`): the harness runs
   `dotnet build` then `dotnet test` in the task workspace itself — trusted code

@@ -95,8 +95,10 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
     private static void Report(TaskRunOutcome outcome)
     {
         var colour = outcome.Status == Forge.Core.Model.TaskStatus.Done ? "green" : "yellow";
+        // A project-level QA round carries no task id (0); label it as QA, not "Task 0".
+        var subject = outcome.TaskId == 0 ? "QA" : $"Task {outcome.TaskId}";
         AnsiConsole.MarkupLineInterpolated(
-            $"[{colour}]Task {outcome.TaskId} → {SnakeCaseEnum.ToSnakeCase(outcome.Status)}[/] ({outcome.End})");
+            $"[{colour}]{subject} → {SnakeCaseEnum.ToSnakeCase(outcome.Status)}[/] ({outcome.End})");
         AnsiConsole.MarkupLineInterpolated($"[grey]{outcome.Summary}[/]");
     }
 }

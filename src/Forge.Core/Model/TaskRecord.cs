@@ -93,6 +93,10 @@ public static class TaskTransitions
             [TaskStatus.Blocked] = [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Cancelled],
             [TaskStatus.OutOfBudget] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
+            // A QA-filed bug is born Triage. The Principal accepts it (→ Ready, an
+            // engineer fixes it like any task) or rejects it (→ Rejected, terminal).
+            [TaskStatus.Triage] = [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Cancelled],
+            [TaskStatus.Rejected] = [],
             [TaskStatus.Done] = [],
             [TaskStatus.Cancelled] = [],
         };
@@ -116,6 +120,8 @@ public static class TaskTransitions
         // pm → client; the PM is only the client-facing rung.
         TaskStatus.Blocked => AgentRole.Principal,
         TaskStatus.OutOfBudget => AgentRole.Principal,
+        // A filed bug is the Principal's to accept or reject before any engineer touches it.
+        TaskStatus.Triage => AgentRole.Principal,
         TaskStatus.Created => AgentRole.Pm,
         _ => null,
     };

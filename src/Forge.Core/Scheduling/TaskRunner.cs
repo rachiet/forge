@@ -94,18 +94,24 @@ public sealed class TaskRunner(
     {
         if (_tasks.NextPrincipalOwned() is { } stuck)
             return await TriageOrImplementAsync(stuck, ct).ConfigureAwait(false);
-        var next = NextTask(AgentRole.Engineer);
-        return next is null ? null : await RunAsync(next, ct).ConfigureAwait(false);
+        if (NextTask(AgentRole.Engineer) is { } next)
+            return await RunAsync(next, ct).ConfigureAwait(false);
+        // No task work left. If the board is complete but not yet QA-verified (first
+        // build, or a change request), run QA; otherwise the project is done → null.
+        return await MaybeRunQaAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
     /// The Principal's two-strike ladder for a stuck task. Strike 1 (or a plain
     /// blocked task): triage — diagnose and redirect/decompose/escalate. Strike 2 on
     /// an out-of-budget task: implement it directly. Past that: give up to a human.
+    /// A filed bug in `triage` is a different job: accept or reject it.
     /// </summary>
     private async Task<TaskRunOutcome> TriageOrImplementAsync(TaskRecord task, CancellationToken ct)
     {
         var log = _log.For(task.Id);
+        if (task.Status == TaskStatus.Triage)
+            return await TriageBugAsync(task, ct).ConfigureAwait(false);
         if (task.Status == TaskStatus.OutOfBudget)
         {
             if (task.OutOfBudgetCount > DirectImplementStrike)
@@ -214,6 +220,159 @@ public sealed class TaskRunner(
             - A requirements/scope question only the client can answer → `escalate(reason)`.
 
             Do not write code. Resolve it with redirect, create_task(+redirect), or escalate.
+            """;
+    }
+
+    // ---- QA (M5a): a project-level acceptance gate that runs only when the board is done ----
+
+    /// <summary>How many QA↔fix rounds before a non-converging project is escalated to the client.</summary>
+    private const int QaRoundCap = 5;
+
+    private int MetaInt(string key) => int.TryParse(_tasks.GetMeta(key), out var v) ? v : 0;
+
+    /// <summary>
+    /// Run QA iff the board is complete and there is something new to verify — the first
+    /// build, or a fix that landed since the last round. The project is done (returns
+    /// null) once a QA round accepts nothing new: a round that files zero bugs, or whose
+    /// bugs are all rejected, never raises the fixed-bug count past the watermark, so QA
+    /// is not called again. A non-converging project escalates to the client after the cap.
+    /// </summary>
+    private async Task<TaskRunOutcome?> MaybeRunQaAsync(CancellationToken ct)
+    {
+        if (!_tasks.BoardQuiescent()) return null;
+        if (MetaInt("qa_escalated") == 1) return null;
+
+        var rounds = MetaInt("qa_rounds");
+        var newFixesToVerify = _tasks.CountBugs(TaskStatus.Done) > MetaInt("qa_fix_watermark");
+        if (rounds > 0 && !newFixesToVerify) return null; // verified and nothing accepted since → complete
+
+        if (rounds >= QaRoundCap)
+        {
+            var note = $"QA and fixes did not converge after {QaRoundCap} rounds — escalating to the client.";
+            _log.Event(EventType.ErrorInternal, note);
+            _messages.Insert(Message.Create(MessageType.Escalation, "system", "pm", note)); // project-scoped, no task
+            _tasks.SetMeta("qa_escalated", "1");
+            return new TaskRunOutcome(0, EndReason.Escalated, TaskStatus.Qa, note);
+        }
+
+        return await RunQaAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Black-box QA on the finished project: a QA instance reads the requirements and the
+    /// contract, exercises the project through its observable side-channel, and files a bug
+    /// for each requirement not met — seeded with the ledger so it does not re-file. Project-
+    /// scoped (no task); runs on a fresh trunk clone like the design/PM phases.
+    /// </summary>
+    private async Task<TaskRunOutcome> RunQaAsync(CancellationToken ct)
+    {
+        var recipe = AgentRecipe.Qa;
+        _log.Message("QA phase: verifying the finished project against the client's requirements");
+
+        var workspace = _workspaces.PrepareTrunkClone(paths.RoleWorkspace(project, "qa"));
+        var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
+        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
+
+        var bugsBefore = _tasks.List().Count(t => t.Type == TaskType.Bug);
+        var result = await loop
+            .RunChatAsync([new LlmMessage("user", QaBrief())], executor, ct)
+            .ConfigureAwait(false);
+        var filed = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
+
+        // Advance the round counter and the fixed-bug watermark. New bugs are still in
+        // triage (not done), so the watermark now equals the fixes already accounted for;
+        // it only moves again when an accepted bug is fixed, which is what re-triggers QA.
+        _tasks.SetMeta("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
+        _tasks.SetMeta("qa_fix_watermark", _tasks.CountBugs(TaskStatus.Done).ToString());
+
+        var summary = filed == 0
+            ? "QA passed — every requirement met; the project is accepted."
+            : $"QA filed {filed} bug(s) for the Principal to triage.";
+        _log.Message($"QA round complete — {summary}");
+        return new TaskRunOutcome(0, result.End, TaskStatus.Qa, summary);
+    }
+
+    private string QaBrief()
+    {
+        var ledger = _tasks.BugLedger();
+        var ledgerText = ledger.Count == 0
+            ? "(no bugs on record yet)"
+            : string.Join("\n", ledger.Select(b =>
+                $"- Bug {b.Id} [{SnakeCaseEnum.ToSnakeCase(b.Status)}]: {b.Title}"));
+        return $"""
+            # QA: verify the finished project against the client's requirements
+
+            The project is built and merged. Read `docs/requirements/` (the client's intent)
+            and `docs/design/` (the observable contract), then exercise the project through
+            its observable side-channel — its HTTP endpoints or CLI, never its source — and
+            check each requirement. Build and run it with `run` as needed.
+
+            File a bug with `file_bug` for every requirement that is NOT met — exact repro
+            steps, the expected result, and the actual result. If everything is met, file
+            nothing; that is what accepts the project.
+
+            Bugs already on record — do NOT re-file any of these (rejected ones are settled,
+            open ones are already tracked; only a regression of a *fixed* bug is fileable again):
+            {ledgerText}
+
+            When you have checked every requirement once, call `done` with a summary.
+            """;
+    }
+
+    /// <summary>
+    /// A filed bug the Principal accepts (→ Ready, an engineer fixes it) or rejects
+    /// (→ Rejected, kept with the reason and never re-filed). The Principal reads the
+    /// bug plus the requirements on a trunk clone to decide; if it can't, the bug goes
+    /// to a human so the loop can't spin on it.
+    /// </summary>
+    private async Task<TaskRunOutcome> TriageBugAsync(TaskRecord bug, CancellationToken ct)
+    {
+        var log = _log.For(bug.Id);
+        var recipe = AgentRecipe.PrincipalTriage;
+        log.Message($"Principal triaging bug {bug.Id}: {bug.Title}");
+
+        var workspace = _workspaces.PrepareTrunkClone(paths.RoleWorkspace(project, "bug-triage"));
+        var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
+        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
+
+        var result = await loop
+            .RunTriageAsync(BugTriagePacket(bug), _tasks.Get(bug.Id), executor, ct)
+            .ConfigureAwait(false);
+
+        var status = _tasks.Get(bug.Id).Status;
+        if (status == TaskStatus.Triage) // undecided (ran out) — hand it to a human, don't spin
+        {
+            var note = $"Bug {bug.Id} could not be triaged automatically — needs a human decision.";
+            log.Event(EventType.ErrorInternal, note);
+            Notify(bug.Id, MessageType.Escalation, "pm", note);
+            return new TaskRunOutcome(bug.Id, EndReason.Escalated, TaskStatus.Triage, note);
+        }
+        return new TaskRunOutcome(bug.Id, result.End, status, $"Bug {bug.Id}: {SnakeCaseEnum.ToSnakeCase(status)}.");
+    }
+
+    private string BugTriagePacket(TaskRecord bug)
+    {
+        var ledger = _tasks.BugLedger().Where(b => b.Id != bug.Id).ToList();
+        var ledgerText = ledger.Count == 0
+            ? "(no other bugs on record)"
+            : string.Join("\n", ledger.Select(b =>
+                $"- Bug {b.Id} [{SnakeCaseEnum.ToSnakeCase(b.Status)}]: {b.Title}"));
+        return $"""
+            # Triage bug {bug.Id}: is it real, and not already handled?
+            QA filed this against the client's requirements. Decide, then end your turn:
+            accept it if it's a genuine defect, reject it if it isn't.
+
+            {bug.Objective}
+
+            Requirement: {bug.RequirementsRef?.ToString() ?? "(unspecified)"}
+
+            Read the requirement and, if needed, the code to judge it. Then ONE of:
+            - Real defect → `accept_bug` (an engineer will fix it).
+            - Not a defect (expected behaviour, out of scope, a duplicate of a rejected/open
+              bug below) → `reject_bug(reason)`. It is kept on record and never re-filed.
+
+            Other bugs on record (a duplicate of any of these should be rejected):
+            {ledgerText}
             """;
     }
 

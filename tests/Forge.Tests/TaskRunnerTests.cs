@@ -355,4 +355,74 @@ public class TaskRunnerTests : IDisposable
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("provider unavailable (429)");
     }
+
+    // ---- QA (M5a): the project-level acceptance gate ----
+
+    /// <summary>A task inserted straight to Done — a completed build for QA to verify.</summary>
+    private TaskRecord DoneTask() =>
+        _tasks.Insert(TaskRecord.Create(
+            TaskType.Feature, "Seeded feature", "Already built and merged", 100_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Done });
+
+    /// <summary>Drive the autonomous loop until it drains (returns null).</summary>
+    private async Task DrainAsync(TaskRunner runner, int maxSteps = 15)
+    {
+        for (var i = 0; i < maxSteps; i++)
+            if (await runner.RunNextByPriorityAsync() is null) return;
+        throw new Xunit.Sdk.XunitException("loop did not drain — possible QA/fix loop");
+    }
+
+    [Fact]
+    public async Task Qa_files_a_bug_that_is_accepted_fixed_then_re_runs_and_accepts_the_project()
+    {
+        DoneTask(); // the build is complete → QA should run
+
+        var llm = new ScriptedLlmClient(
+            // QA round 1: find one failure, then finish the pass.
+            ScriptedLlmClient.Tool("file_bug", ("title", "Greeting missing"),
+                ("repro", "GET /"), ("expected", "hello"), ("actual", "empty"), ("requirements_ref", "01-notes.md@v1")),
+            ScriptedLlmClient.Tool("done", ("summary", "Found 1 issue.")),
+            // Principal triage: accept the bug.
+            ScriptedLlmClient.Tool("accept_bug", ("note", "Real defect.")),
+            // Engineer fixes it.
+            ScriptedLlmClient.Tool("write_file", ("path", "greeting.txt"), ("content", "hello")),
+            ScriptedLlmClient.Tool("done", ("summary", "Added greeting.")),
+            // Review approves the fix.
+            ScriptedLlmClient.Tool("approve", ("note", "Correct.")),
+            // QA round 2: everything now passes → file nothing.
+            ScriptedLlmClient.Tool("done", ("summary", "All requirements met.")))
+        { Fallback = ScriptedLlmClient.Tool("done", ("summary", "nothing to do")) };
+
+        await DrainAsync(Runner(llm));
+
+        var bug = Assert.Single(_tasks.List().Where(t => t.Type == TaskType.Bug));
+        Assert.Equal(TaskStatus.Done, bug.Status);                 // filed → accepted → fixed → merged
+        Assert.Contains("## Repro", bug.Objective);                 // structured repro/expected/actual
+        Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));     // the fix reached trunk
+        Assert.Equal("2", _tasks.GetMeta("qa_rounds"));             // ran, then re-ran and accepted
+    }
+
+    [Fact]
+    public async Task A_rejected_bug_is_kept_and_does_not_re_trigger_qa_so_the_project_completes()
+    {
+        DoneTask();
+
+        var llm = new ScriptedLlmClient(
+            // QA files one bug…
+            ScriptedLlmClient.Tool("file_bug", ("title", "Cosmetic nit"),
+                ("repro", "look at it"), ("expected", "prettier"), ("actual", "plain")),
+            ScriptedLlmClient.Tool("done", ("summary", "One nit.")),
+            // …which the Principal rejects.
+            ScriptedLlmClient.Tool("reject_bug", ("reason", "Aesthetic — not QA's call.")))
+        { Fallback = ScriptedLlmClient.Tool("done", ("summary", "nothing to do")) };
+
+        await DrainAsync(Runner(llm));
+
+        var bug = Assert.Single(_tasks.List().Where(t => t.Type == TaskType.Bug));
+        Assert.Equal(TaskStatus.Rejected, bug.Status);          // kept on record, not deleted
+        Assert.Contains("REJECTED", bug.ProgressNote!);
+        // A pure-rejection cycle accepts nothing new, so QA ran exactly once and stopped —
+        // no create-bug / reject / re-QA loop.
+        Assert.Equal("1", _tasks.GetMeta("qa_rounds"));
+    }
 }

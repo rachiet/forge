@@ -52,7 +52,7 @@ public static class Schema
             ('pm','principal','engineer','qa','researcher')),
           status TEXT NOT NULL DEFAULT 'created' CHECK(status IN
             ('created','ready','claimed','in_progress','in_review','merging',
-             'qa','done','blocked','out_of_budget','cancelled')),
+             'qa','done','blocked','out_of_budget','triage','rejected','cancelled')),
           token_budget INTEGER NOT NULL CHECK(token_budget > 0),
           tokens_spent INTEGER NOT NULL DEFAULT 0 CHECK(tokens_spent >= 0),
           -- How many times this task ran out of resources (budget/iteration) after
@@ -70,6 +70,14 @@ public static class Schema
           task_id INTEGER NOT NULL REFERENCES tasks(id),
           depends_on INTEGER NOT NULL REFERENCES tasks(id),
           PRIMARY KEY (task_id, depends_on)
+        );
+
+        -- Small key/value store for project-level orchestration state — currently the
+        -- QA gate's watermark (how many bug-fixes QA has already verified), which is
+        -- what stops the QA↔fix loop once a cycle accepts nothing new.
+        CREATE TABLE IF NOT EXISTS project_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS discussions (

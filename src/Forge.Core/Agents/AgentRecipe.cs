@@ -143,11 +143,33 @@ public sealed record AgentRecipe
         RolePrompt = "principal",
         InstancePrefix = "triage",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
-        Tools = ["read_file", "list_dir", "grep", "create_task", "add_dependency", "redirect", "escalate"],
+        Tools = ["read_file", "list_dir", "grep", "create_task", "add_dependency", "redirect",
+                 "accept_bug", "reject_bug", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
         DefaultBudget = 80_000,
         IterationCap = 20,
+    }).Validate();
+
+    /// <summary>
+    /// Black-box QA (spec §12, M5). Runs only once the whole board is complete: reads
+    /// the requirements and the Principal's contracts, exercises the project through
+    /// its observable side-channel (HTTP/CLI) — not the engineer's own unit tests —
+    /// and files a bug for each failure. It is seeded with the bug ledger so it does
+    /// not re-file what has already been filed or rejected.
+    /// </summary>
+    public static AgentRecipe Qa => (new AgentRecipe
+    {
+        Role = AgentRole.Qa,
+        Model = "claude-opus-4-8",
+        RolePrompt = "qa",
+        InstancePrefix = "qa",
+        AlwaysInContext = ["PROJECT.md", "docs/requirements/INDEX.md"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "file_bug", "done", "escalate"],
+        Scope = PathScope.Workspace,
+        ToolAllowlist = ["dotnet", "git"],
+        DefaultBudget = 120_000,
+        IterationCap = 40,
     }).Validate();
 
     /// <summary>
@@ -176,6 +198,7 @@ public sealed record AgentRecipe
         AgentRole.Engineer => Engineer,
         AgentRole.Pm => Pm,
         AgentRole.Principal => Principal,
+        AgentRole.Qa => Qa,
         _ => throw new NotSupportedException(
             $"No recipe for {role} yet — roles are introduced one milestone at a time (spec §12)."),
     };

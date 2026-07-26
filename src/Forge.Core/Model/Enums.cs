@@ -7,7 +7,12 @@ public enum TaskType { Feature, Bug, Design, ImpactAnalysis, Research, Chore }
 public enum TaskStatus
 {
     Created, Ready, Claimed, InProgress, InReview, Merging,
-    Qa, Done, Blocked, OutOfBudget, Cancelled
+    Qa, Done, Blocked, OutOfBudget,
+    // Bug lifecycle: a QA-filed bug lands in Triage (the Principal decides), then
+    // becomes Ready (accepted → an engineer fixes it) or Rejected (kept, with the
+    // reason, as a durable "not a bug" verdict QA must not re-file).
+    Triage, Rejected,
+    Cancelled
 }
 
 public enum AgentRole { Pm, Principal, Engineer, Qa, Researcher }
