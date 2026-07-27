@@ -356,6 +356,37 @@ public class TaskRunnerTests : IDisposable
             throw new InvalidOperationException("provider unavailable (429)");
     }
 
+    /// <summary>Throws on the first N calls (a transient blip), then replays a script.</summary>
+    private sealed class FlakyThenScriptedLlmClient(int throwsFirst, params string[] turns) : ILlmClient
+    {
+        private int _thrown;
+        private readonly Queue<string> _turns = new(turns);
+        public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
+        {
+            if (_thrown < throwsFirst) { _thrown++; throw new InvalidOperationException("transient 503"); }
+            var content = _turns.Count > 0 ? _turns.Dequeue() : "done";
+            return Task.FromResult(new LlmResponse { Content = content, StopReason = "end_turn", Usage = new LlmUsage(2, 10) });
+        }
+    }
+
+    [Fact]
+    public async Task A_transient_crash_during_bug_triage_is_retried_not_escalated_to_a_human()
+    {
+        var bug = _tasks.Insert(TaskRecord.Create(
+            TaskType.Bug, "Flaky triage", "## Expected\ne\n## Observed\no", 50_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Triage });
+
+        // The provider blips once, then the triage runs and rejects the bug.
+        var llm = new FlakyThenScriptedLlmClient(throwsFirst: 1,
+            ScriptedLlmClient.Tool("reject_bug", ("reason", "Not a real defect.")));
+
+        var outcome = await Runner(llm).RunNextByPriorityAsync();
+
+        Assert.NotNull(outcome);
+        // Retry cleared the blip and the Principal decided — not parked for a human.
+        Assert.Equal(TaskStatus.Rejected, _tasks.Get(bug.Id).Status);
+    }
+
     // ---- QA (M5a): the project-level acceptance gate ----
 
     /// <summary>A task inserted straight to Done — a completed build for QA to verify.</summary>
@@ -378,9 +409,10 @@ public class TaskRunnerTests : IDisposable
         DoneTask(); // the build is complete → QA should run
 
         var llm = new ScriptedLlmClient(
-            // QA round 1: find one failure, then finish the pass.
+            // QA round 1: run the check (its output is captured as evidence), file the bug, finish.
+            ScriptedLlmClient.Tool("run", ("command", "git status")),
             ScriptedLlmClient.Tool("file_bug", ("title", "Greeting missing"),
-                ("repro", "GET /"), ("expected", "hello"), ("actual", "empty"), ("requirements_ref", "01-notes.md@v1")),
+                ("expected", "the greeting should read hello"), ("requirements_ref", "01-notes.md@v1")),
             ScriptedLlmClient.Tool("done", ("summary", "Found 1 issue.")),
             // Principal triage: accept the bug.
             ScriptedLlmClient.Tool("accept_bug", ("note", "Real defect.")),
@@ -397,7 +429,8 @@ public class TaskRunnerTests : IDisposable
 
         var bug = Assert.Single(_tasks.List().Where(t => t.Type == TaskType.Bug));
         Assert.Equal(TaskStatus.Done, bug.Status);                 // filed → accepted → fixed → merged
-        Assert.Contains("## Repro", bug.Objective);                 // structured repro/expected/actual
+        Assert.Contains("## Observed", bug.Objective);              // harness-captured evidence, not prose
+        Assert.Contains("git status", bug.Objective);               // the exact command QA ran is the repro
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));     // the fix reached trunk
         Assert.Equal("2", _tasks.GetMeta("qa_rounds"));             // ran, then re-ran and accepted
     }
@@ -408,9 +441,9 @@ public class TaskRunnerTests : IDisposable
         DoneTask();
 
         var llm = new ScriptedLlmClient(
-            // QA files one bug…
-            ScriptedLlmClient.Tool("file_bug", ("title", "Cosmetic nit"),
-                ("repro", "look at it"), ("expected", "prettier"), ("actual", "plain")),
+            // QA runs a check (captured as evidence), then files one bug…
+            ScriptedLlmClient.Tool("run", ("command", "git status")),
+            ScriptedLlmClient.Tool("file_bug", ("title", "Cosmetic nit"), ("expected", "it should look nicer")),
             ScriptedLlmClient.Tool("done", ("summary", "One nit.")),
             // …which the Principal rejects.
             ScriptedLlmClient.Tool("reject_bug", ("reason", "Aesthetic — not QA's call.")))
@@ -444,5 +477,29 @@ public class TaskRunnerTests : IDisposable
         Assert.NotNull(outcome);
         Assert.Equal(TaskStatus.Qa, outcome!.Status);
         Assert.Equal("2", _tasks.GetMeta("qa_rounds"));
+    }
+
+    [Fact]
+    public async Task A_reviewer_rejects_an_invalid_bug_instead_of_looping_a_fix()
+    {
+        // An accepted bug (ready → an engineer works it) that turns out not to be real.
+        var bug = _tasks.Insert(TaskRecord.Create(
+            TaskType.Bug, "Phantom defect", "## Repro\nx\n## Expected\ny\n## Actual\nz", 50_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Ready });
+
+        var llm = new ScriptedLlmClient(
+            // The engineer produces a diff (it can't really fix a non-bug).
+            ScriptedLlmClient.Tool("write_file", ("path", "note.txt"), ("content", "investigated")),
+            ScriptedLlmClient.Tool("done", ("summary", "Could not reproduce; added a note.")),
+            // The reviewer determines the reported defect isn't real → rejects the bug,
+            // rather than looping request_changes on a fix for a non-bug.
+            ScriptedLlmClient.Tool("reject_bug", ("reason", "Not reproducible; code already meets the contract.")));
+
+        var outcome = await Runner(llm).RunAsync(_tasks.Get(bug.Id));
+
+        Assert.Equal(TaskStatus.Rejected, outcome.Status);          // closed, not looped
+        Assert.Equal(TaskStatus.Rejected, _tasks.Get(bug.Id).Status);
+        Assert.Contains("REJECTED", _tasks.Get(bug.Id).ProgressNote!);
+        Assert.False(_workspaces.Exists(bug.Id));                    // nothing merged; branch discarded
     }
 }

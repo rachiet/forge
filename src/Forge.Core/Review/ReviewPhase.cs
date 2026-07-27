@@ -10,7 +10,8 @@ using Forge.Core.Workspaces;
 
 namespace Forge.Core.Review;
 
-public sealed record ReviewVerdict(bool Approved, string Feedback, string? Convention, EndReason End);
+public sealed record ReviewVerdict(
+    bool Approved, string Feedback, string? Convention, EndReason End, string? RejectedBugReason = null);
 
 /// <summary>
 /// The Principal review (spec §7, M4): a diff that already passed CI is read by
@@ -43,8 +44,17 @@ public sealed class ReviewPhase(
 
         var diff = workspaces.DiffAgainstTrunk(task.Id, branch);
         var result = await loop
-            .RunChatAsync([new LlmMessage("user", Brief(task, diff))], executor, ct)
+            .RunReviewAsync([new LlmMessage("user", Brief(task, diff))], task, executor, ct)
             .ConfigureAwait(false);
+
+        // The reviewer judged the underlying bug not a real defect and rejected it
+        // (already transitioned to Rejected by the tool). Surface that so the runner
+        // closes it instead of looping request_changes on a fix for a non-bug.
+        if (result.RejectedBugReason is { } rejectReason)
+        {
+            log.Event(EventType.ReviewChangesRequested, $"bug rejected in review: {rejectReason}");
+            return new ReviewVerdict(false, rejectReason, null, result.End, rejectReason);
+        }
 
         // No verdict tool was called (budget, cap, crash) — treat as inconclusive,
         // which the runner handles as "not approved" without pretending it was rejected.
@@ -83,6 +93,15 @@ public sealed class ReviewPhase(
         conformance, and design conformance. Read the touched files with read_file
         and grep for patterns you're worried about. End with approve or
         request_changes.
+        {(task.Type == TaskType.Bug ? """
+
+        This is a BUG fix. Before judging the diff, judge the bug itself: reproduce
+        the reported failure (read the repro in the objective; check the behaviour it
+        claims). If the reported defect is NOT real — the code already behaves per the
+        contract, or the repro cannot fail — do NOT loop request_changes demanding a
+        fix for a non-bug. Call `reject_bug(reason)` to close it. Reserve
+        request_changes for a real defect whose fix is inadequate.
+        """ : "")}
 
         ## Diff (task branch against trunk)
 

@@ -84,13 +84,20 @@ public static class TaskTransitions
             [TaskStatus.Ready] = [TaskStatus.Claimed, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.Claimed] = [TaskStatus.InProgress, TaskStatus.Ready, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.InProgress] = [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.OutOfBudget, TaskStatus.Cancelled],
-            [TaskStatus.InReview] = [TaskStatus.Merging, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
+            // Rejected is reachable from InReview too: a reviewer of a bug-fix can reject
+            // the underlying bug when it turns out not to be a real defect.
+            [TaskStatus.InReview] =
+                [TaskStatus.Merging, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Rejected, TaskStatus.Cancelled],
             [TaskStatus.Merging] = [TaskStatus.Qa, TaskStatus.InProgress, TaskStatus.Blocked],
             [TaskStatus.Qa] = [TaskStatus.Done, TaskStatus.InProgress, TaskStatus.Blocked],
             // Blocked and OutOfBudget are Principal-owned. The Principal triages them
             // back to the engineer (→ Ready), takes them over to implement directly
             // (→ Claimed/InProgress), or gives up (→ Blocked/Cancelled).
-            [TaskStatus.Blocked] = [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Cancelled],
+            // Triage/Rejected are reachable from Blocked so the PM can act on a bug the
+            // human reviewed: re-triage it (back to the Principal) or reject it outright.
+            [TaskStatus.Blocked] =
+                [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Triage,
+                 TaskStatus.Rejected, TaskStatus.Cancelled],
             [TaskStatus.OutOfBudget] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
             // A QA-filed bug is born Triage. The Principal accepts it (→ Ready, an

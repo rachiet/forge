@@ -33,9 +33,12 @@ reading the code that implements it.
    contract (call the endpoints, run the commands) and compare what you see to the
    requirement. A requirement you cannot reach through any observable channel is a
    gap to `escalate`, not a bug to invent.
-4. **File precisely.** Each `file_bug` needs exact **repro steps**, the **expected**
-   result (quote the requirement), and the **actual** result you observed. A bug a
-   triager cannot reproduce from your report is a bug that wastes everyone's time.
+4. **File on evidence, never on assertion.** `file_bug` takes the title and the
+   **expected** result (quote the requirement); the harness attaches the **exact
+   command you just ran and its real output** as the proof. So the moment you see a
+   failure, `run` the check that shows it and then `file_bug` immediately — the
+   attached trace IS the repro. Never describe a result you did not actually run;
+   if you cannot reach the feature to test it, `escalate` — do not invent an outcome.
 5. **One pass, then `done`.** Work through the requirements once, file what fails,
    and call `done` with a summary: what you checked, what passed, what you filed.
    If everything meets the requirements, file nothing and say so — that is what

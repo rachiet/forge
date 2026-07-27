@@ -52,6 +52,9 @@ public sealed class AgentToolset(
     /// <summary>A rule the reviewer wants added to CONVENTIONS.md for a recurring mistake.</summary>
     public string? ReviewConvention { get; private set; }
 
+    /// <summary>Set when a bug was rejected (at triage or in review) — the reason it is not a real defect.</summary>
+    public string? RejectedBugReason { get; private set; }
+
     /// <summary>One line per tool, rendered into the prompt so docs cannot drift from code.</summary>
     public static readonly IReadOnlyDictionary<string, string> Catalogue =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -70,12 +73,17 @@ public sealed class AgentToolset(
             ["redirect"] = "redirect(guidance, [budget]) — hand this stuck task back to the engineer with "
                          + "concrete direction (and optionally a new absolute token budget). Resets the "
                          + "attempt so the engineer starts fresh with your guidance. Ends your triage.",
-            ["file_bug"] = "file_bug(title, repro, expected, actual, [requirements_ref]) — record a failure found "
-                         + "in QA as a bug for the Principal to triage. Give exact repro steps, the expected "
-                         + "result, and the actual result. Do not file a bug already in the ledger.",
+            ["file_bug"] = "file_bug(title, expected, [requirements_ref]) — record a failure as a bug for the "
+                         + "Principal to triage. You give the title and the expected behaviour (from the contract); "
+                         + "the harness attaches the command you just ran and its real output as the evidence. "
+                         + "So run the check that shows the failure IMMEDIATELY before calling this. No run = refused.",
             ["accept_bug"] = "accept_bug([note]) — this filed bug is real; release it to the board for an engineer. Ends your triage.",
-            ["reject_bug"] = "reject_bug(reason) — this filed bug is not a real defect; reject it with a reason. "
-                           + "It is kept on record and will not be re-filed. Ends your triage.",
+            ["reject_bug"] = "reject_bug([task], reason) — this bug is not a real defect; reject it with a reason. "
+                           + "Kept on record, never re-filed. At triage/review it acts on the current bug; the PM "
+                           + "passes a task id to close one the client reviewed. Use instead of looping a fix for a non-bug.",
+            ["retriage_bug"] = "retriage_bug(task, note) — send a bug back to the Principal for another triage with "
+                             + "the client's guidance attached. The PM uses this when the client says a flagged bug "
+                             + "needs more investigation rather than rejection.",
             ["approve"] = "approve([note]) — the diff is good; approve it for merge and end your review.",
             ["request_changes"] = "request_changes(reason, [convention]) — send the work back with a reason. "
                                 + "Set convention to add a permanent rule to CONVENTIONS.md for a recurring mistake.",
@@ -117,6 +125,7 @@ public sealed class AgentToolset(
                 "file_bug" => FileBug(call),
                 "accept_bug" => AcceptBug(call),
                 "reject_bug" => RejectBug(call),
+                "retriage_bug" => RetriageBug(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
                 "reply" => Reply(call),
@@ -250,8 +259,16 @@ public sealed class AgentToolset(
         if (result.TimedOut) sb.Append(" (TIMED OUT — process killed)");
         if (result.Stdout.Length > 0) sb.Append("\n--- stdout ---\n").Append(result.Stdout.TrimEnd());
         if (result.Stderr.Length > 0) sb.Append("\n--- stderr ---\n").Append(result.Stderr.TrimEnd());
+
+        // Remember the exact command and its real output. This is the evidence file_bug
+        // attaches verbatim, so a filed bug carries a trace the harness captured — not a
+        // description the model typed (which is how a fabricated "actual" slips in).
+        _lastRunTrace = sb.ToString();
         return new ToolOutcome(Truncate(sb.ToString()));
     }
+
+    /// <summary>The command + real output of the most recent run() — evidence for file_bug.</summary>
+    private string? _lastRunTrace;
 
     /// <summary>The milestone plan is a real table, not prose in a markdown file the harness can't query.</summary>
     private ToolOutcome AddMilestone(ToolCall call)
@@ -390,6 +407,14 @@ public sealed class AgentToolset(
     /// </summary>
     private ToolOutcome FileBug(ToolCall call)
     {
+        // Evidence is not optional and not the model's to narrate: a bug must be backed
+        // by a command QA actually ran, whose real output the harness captured. No run,
+        // no bug — this is what makes a fabricated "actual" impossible.
+        if (_lastRunTrace is null)
+            return new ToolOutcome(
+                "ERROR: file_bug needs evidence. Run the check that demonstrates the failure first — its exact "
+                + "command and output are attached automatically as the repro. Do not describe a result you did not run.");
+
         var requirement = call.Optional("requirements_ref") is { } reqRef
             ? NormalizeRequirementRef(reqRef)
             : (RequirementsRef?)null;
@@ -397,14 +422,13 @@ public sealed class AgentToolset(
         var objective = $"""
             A defect found in QA. Reproduce it, then make the expected result true and pin it with a test.
 
-            ## Repro
-            {call.Arg("repro")}
-
             ## Expected
             {call.Arg("expected")}
 
-            ## Actual
-            {call.Arg("actual")}
+            ## Observed — captured verbatim from the check QA ran
+            ```
+            {_lastRunTrace!.Trim()}
+            ```
             """;
 
         var bug = _tasks.Insert(TaskRecord.Create(
@@ -436,21 +460,61 @@ public sealed class AgentToolset(
         return new ToolOutcome($"Bug {task.Id} accepted; released to the board.", EndReason.Done);
     }
 
-    /// <summary>The Principal's verdict: not a real defect. Kept on record with the reason; never re-filed.</summary>
+    /// <summary>
+    /// Verdict that a filed bug is not a real defect — kept on record with the reason,
+    /// never re-filed. Reachable both at triage (before any work) and during review of a
+    /// bug-fix: if the reviewer finds the reported defect isn't real, it rejects the bug
+    /// instead of looping request_changes on a fix for a non-bug.
+    /// </summary>
     private ToolOutcome RejectBug(ToolCall call)
     {
-        if (task is null) return new ToolOutcome("ERROR: reject_bug needs a bug to act on; this run has none.");
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.Triage)
+        // Target the current task (triage/review) or an explicit id (the PM, from chat).
+        if ((call.OptionalInt("task") ?? task?.Id) is not { } bugId || _tasks.Find(bugId) is not { } bug)
+            return new ToolOutcome("ERROR: reject_bug needs a bug — pass a task id, or run it on a bug task.");
+        if (bug.Type != TaskType.Bug)
+            return new ToolOutcome($"ERROR: reject_bug only applies to bug tasks; task {bugId} is a {SnakeCaseEnum.ToSnakeCase(bug.Type)}.");
+        if (bug.Status is not (TaskStatus.Triage or TaskStatus.InReview or TaskStatus.Blocked))
             return new ToolOutcome(
-                $"ERROR: reject_bug only applies to a bug in triage; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
+                $"ERROR: reject_bug applies to a bug in triage, review, or blocked; task {bugId} is {SnakeCaseEnum.ToSnakeCase(bug.Status)}.");
 
         var reason = call.Arg("reason");
-        _tasks.Transition(task.Id, TaskStatus.Rejected);
-        _tasks.SetProgressNote(task.Id, $"REJECTED (not a bug): {reason}");
-        new DiscussionRepository(connection).Open(task.Id, SnakeCaseEnum.ToSnakeCase(recipe.Role), $"[bug rejected] {reason}");
+        _tasks.Transition(bugId, TaskStatus.Rejected);
+        _tasks.SetProgressNote(bugId, $"REJECTED (not a bug): {reason}");
+        new DiscussionRepository(connection).Open(bugId, SnakeCaseEnum.ToSnakeCase(recipe.Role), $"[bug rejected] {reason}");
+        ResolveEscalations(bugId);
         LastProgressNote = $"Bug rejected: {reason}";
-        return new ToolOutcome($"Bug {task.Id} rejected and kept on record; QA will not re-file it.", EndReason.Done);
+        RejectedBugReason = reason;
+        // Conversational for the PM (it replies to the client next); terminal for a triage/review instance.
+        return new ToolOutcome($"Bug {bugId} rejected and kept on record; QA will not re-file it.",
+            recipe.Role == AgentRole.Pm ? null : EndReason.Done);
+    }
+
+    /// <summary>
+    /// The PM's other resolution for a human-reviewed bug: send it back to the Principal
+    /// for another triage with the client's guidance attached, instead of rejecting it.
+    /// </summary>
+    private ToolOutcome RetriageBug(ToolCall call)
+    {
+        if (call.OptionalInt("task") is not { } bugId || _tasks.Find(bugId) is not { } bug)
+            return new ToolOutcome("ERROR: retriage_bug needs a task id of a bug.");
+        if (bug.Type != TaskType.Bug)
+            return new ToolOutcome($"ERROR: retriage_bug only applies to bug tasks; task {bugId} is a {SnakeCaseEnum.ToSnakeCase(bug.Type)}.");
+
+        var note = call.Arg("note");
+        _tasks.SetProgressNote(bugId, $"RE-TRIAGE (from the client, via the PM): {note}");
+        if (bug.Status != TaskStatus.Triage && TaskTransitions.IsLegal(bug.Status, TaskStatus.Triage))
+            _tasks.Transition(bugId, TaskStatus.Triage);
+        ResolveEscalations(bugId);
+        new DiscussionRepository(connection).Open(bugId, "pm", $"[re-triage: client guidance] {note}");
+        return new ToolOutcome($"Bug {bugId} sent back to the Principal for triage with the client's guidance.");
+    }
+
+    /// <summary>Mark any pending human-facing escalation for a task resolved, so it stops surfacing.</summary>
+    private void ResolveEscalations(long taskId)
+    {
+        foreach (var m in _messages.Pending("pm").Concat(_messages.Pending("client")))
+            if (m.TaskId == taskId && m is EscalationMessage)
+                _messages.SetStatus(m.Id, MessageStatus.Done);
     }
 
     private ToolOutcome AddDependency(ToolCall call)

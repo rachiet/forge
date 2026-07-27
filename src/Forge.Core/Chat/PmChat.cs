@@ -44,12 +44,18 @@ public sealed class PmChat(
     /// <summary>The conversation so far, oldest first — what `forge chat` prints on open.</summary>
     public IReadOnlyList<Message> History() =>
         _messages.Log()
-            // TODO: this client-only filter hides "pm"-addressed escalations — now only
-            // the requirements questions the Principal kicks upward (see TaskRunner.Notify).
-            // Surface those here or in a dedicated inbox so the client can answer them.
             .Where(m => m.FromAgent == "client" || m.ToAgent == "client")
             .TakeLast(HistoryTurns)
             .ToList();
+
+    /// <summary>
+    /// Items the Principal (or the harness) escalated for a human decision — pending
+    /// escalations addressed to the PM. These are injected into the PM's turn so it
+    /// raises them with the client and resolves them (reject_bug / retriage_bug),
+    /// rather than a task silently stranding on the board.
+    /// </summary>
+    public IReadOnlyList<Message> OpenEscalations() =>
+        _messages.Pending("pm").Where(m => m is EscalationMessage).ToList();
 
     public async Task<ChatTurn> SendAsync(string clientMessage, CancellationToken ct = default)
     {
@@ -63,9 +69,9 @@ public sealed class PmChat(
         var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
-        var result = await loop
-            .RunChatAsync(PromptAssembler.Conversation(History()), executor, ct)
-            .ConfigureAwait(false);
+        var conversation = PromptAssembler.Conversation(History()).ToList();
+        InjectOpenEscalations(conversation);
+        var result = await loop.RunChatAsync(conversation, executor, ct).ConfigureAwait(false);
 
         // Requirements live in git with the code (spec §5) — so a chat turn that
         // authored documents is a commit, not a file sitting in a scratch directory.
@@ -99,6 +105,25 @@ public sealed class PmChat(
             "I've escalated this — it needs a decision I can't make on my own.",
         _ => $"I couldn't complete that turn. {result.Detail}".Trim(),
     };
+
+    /// <summary>
+    /// Prepend any items awaiting a human decision to the current turn, with instructions
+    /// on how to resolve them. Attached to the turn (not the standing prompt) so the PM
+    /// sees exactly what's open right now and can act on it with the client.
+    /// </summary>
+    private void InjectOpenEscalations(List<Llm.LlmMessage> conversation)
+    {
+        var open = OpenEscalations();
+        if (open.Count == 0 || conversation.Count == 0) return;
+
+        var items = string.Join("\n", open.Select(m => $"  • task {m.TaskId}: {Summarise(m.Payload)}"));
+        var note =
+            "[Awaiting your decision — the Principal escalated these for the client. Raise each with the "
+            + "client, then resolve it: reject_bug(task, reason) if the client agrees it's not a real defect, "
+            + "or retriage_bug(task, note) to send it back to the Principal with the client's guidance.\n"
+            + items + "]";
+        conversation[^1] = conversation[^1] with { Content = $"{note}\n\n{conversation[^1].Content}" };
+    }
 
     private static string Summarise(string message)
     {

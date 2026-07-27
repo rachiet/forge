@@ -17,7 +17,8 @@ public sealed record AgentRunResult(
     string? Reply = null,
     bool? ReviewApproved = null,
     string? ReviewFeedback = null,
-    string? ReviewConvention = null);
+    string? ReviewConvention = null,
+    string? RejectedBugReason = null);
 
 /// <summary>
 /// The harness's inner loop (spec §4.1):
@@ -75,6 +76,15 @@ public sealed class AgentLoop(
             assembler.SystemPrompt(_recipe, task, executor.Jail),
             [new LlmMessage("user", packet)],
             executor, task, ct);
+
+    /// <summary>
+    /// Review a task's diff. Chat-shaped (the diff is the opening turn), but the task is
+    /// bound so the review's tools can act on it — specifically `reject_bug`, which closes
+    /// an invalid bug rather than looping request_changes on a fix for a non-bug.
+    /// </summary>
+    public Task<AgentRunResult> RunReviewAsync(
+        IReadOnlyList<LlmMessage> conversation, TaskRecord task, ToolExecutor executor, CancellationToken ct = default) =>
+        RunAsync(assembler.ChatSystemPrompt(_recipe, executor.Jail), conversation, executor, task, ct);
 
     /// <summary>Answer a client: the conversation so far is the opening state.</summary>
     public Task<AgentRunResult> RunChatAsync(
@@ -285,6 +295,6 @@ public sealed class AgentLoop(
         log.Event(EventType.InstanceEnd,
             $"{instanceId} ended: {SnakeCaseEnum.ToSnakeCase(end)} after {iterations} turns");
         return new AgentRunResult(instanceId, end, iterations, note, detail, toolset.LastReply,
-            toolset.ReviewApproved, toolset.ReviewFeedback, toolset.ReviewConvention);
+            toolset.ReviewApproved, toolset.ReviewFeedback, toolset.ReviewConvention, toolset.RejectedBugReason);
     }
 }

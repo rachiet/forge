@@ -7,6 +7,7 @@ using Forge.Core.Model;
 using Forge.Core.Secrets;
 using Forge.Core.Workspaces;
 using Microsoft.Data.Sqlite;
+using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Tests;
 
@@ -189,5 +190,63 @@ public class PmChatTests : IDisposable
     {
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new HttpRequestException("Status Code: TooManyRequests");
+    }
+
+    // ---- Human review of escalated bugs, through the PM (M6 change-request follow-up) ----
+
+    /// <summary>A bug the Principal escalated for a human decision: in triage, with a pending pm escalation.</summary>
+    private long ParkedBug(string title = "Flagged bug")
+    {
+        var bug = new TaskRepository(_conn).Insert(TaskRecord.Create(
+            TaskType.Bug, title, "## Expected\ne\n## Observed\no", 50_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Triage });
+        new MessageRepository(_conn).Insert(Message.Create(
+            MessageType.Escalation, "principal", "pm", $"Bug {bug.Id} needs a human decision: is this real?", bug.Id));
+        return bug.Id;
+    }
+
+    [Fact]
+    public async Task Open_escalations_are_surfaced_into_the_pms_turn()
+    {
+        var bugId = ParkedBug("Phantom");
+        var llm = new ScriptedLlmClient(Reply("There's a bug flagged for your decision."));
+
+        await Chat(llm).SendAsync("Anything need me?");
+
+        var turnPrompt = llm.Requests[0].Messages[^1].Content;
+        Assert.Contains($"task {bugId}", turnPrompt);   // the PM was told what's open
+        Assert.Contains("reject_bug", turnPrompt);       // …and how to resolve it
+    }
+
+    [Fact]
+    public async Task The_pm_rejects_a_bug_the_client_reviewed_and_clears_the_escalation()
+    {
+        var bugId = ParkedBug();
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("reject_bug", ("task", bugId.ToString()), ("reason", "Client says it's expected behaviour.")),
+            Reply("Rejected it, as you asked."));
+
+        await Chat(llm).SendAsync("That's expected behaviour — reject it.");
+
+        Assert.Equal(TaskStatus.Rejected, new TaskRepository(_conn).Get(bugId).Status);
+        // The escalation is resolved, so the bug no longer strands the board or re-surfaces.
+        Assert.DoesNotContain(new MessageRepository(_conn).Pending("pm"), m => m.TaskId == bugId);
+    }
+
+    [Fact]
+    public async Task The_pm_retriages_a_bug_with_the_clients_guidance()
+    {
+        var bugId = ParkedBug();
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("retriage_bug", ("task", bugId.ToString()),
+                ("note", "Client says check the endpoint, not the service.")),
+            Reply("Sent it back to the Principal with your note."));
+
+        await Chat(llm).SendAsync("It might be real — have them look at the endpoint.");
+
+        var bug = new TaskRepository(_conn).Get(bugId);
+        Assert.Equal(TaskStatus.Triage, bug.Status);                 // back on the Principal's queue
+        Assert.Contains("check the endpoint", bug.ProgressNote!);     // the client's guidance carried over
+        Assert.DoesNotContain(new MessageRepository(_conn).Pending("pm"), m => m.TaskId == bugId);
     }
 }

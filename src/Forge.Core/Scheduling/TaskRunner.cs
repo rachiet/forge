@@ -146,9 +146,8 @@ public sealed class TaskRunner(
         var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
 
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
-        var result = await loop
-            .RunTriageAsync(TriagePacket(task), _tasks.Get(task.Id), executor, ct)
-            .ConfigureAwait(false);
+        var result = await RunWithCrashRetryAsync(() =>
+            loop.RunTriageAsync(TriagePacket(task), _tasks.Get(task.Id), executor, ct)).ConfigureAwait(false);
 
         var status = _tasks.Get(task.Id).Status;
         // redirect → Ready (resolved); escalate → still owned but a pending pm message
@@ -231,6 +230,21 @@ public sealed class TaskRunner(
     private int MetaInt(string key) => int.TryParse(_tasks.GetMeta(key), out var v) ? v : 0;
 
     /// <summary>
+    /// Run a triage/QA phase, retrying a provider crash in place (up to the crash cap)
+    /// rather than escalating to a human on the first blip — the resilience task runs
+    /// already get from Park, which these phases otherwise lacked. Returns the last
+    /// result; if it never cleared, that result is still a Crash and the caller escalates.
+    /// </summary>
+    private async Task<AgentRunResult> RunWithCrashRetryAsync(Func<Task<AgentRunResult>> run)
+    {
+        AgentRunResult result;
+        var attempt = 0;
+        do { result = await run().ConfigureAwait(false); attempt++; }
+        while (result.End == EndReason.Crash && attempt <= CrashRetryCap);
+        return result;
+    }
+
+    /// <summary>
     /// Run QA iff the board is complete and there is new completed work to verify — the
     /// first build, a bug-fix, or a change request's tasks (any done task counts). The
     /// project is done (returns null) once a QA round produces nothing new: a round that
@@ -274,9 +288,21 @@ public sealed class TaskRunner(
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
 
         var bugsBefore = _tasks.List().Count(t => t.Type == TaskType.Bug);
-        var result = await loop
-            .RunChatAsync([new LlmMessage("user", QaBrief())], executor, ct)
-            .ConfigureAwait(false);
+        var result = await RunWithCrashRetryAsync(() =>
+            loop.RunChatAsync([new LlmMessage("user", QaBrief())], executor, ct)).ConfigureAwait(false);
+
+        // A provider outage that outlasts the retries: don't advance the watermark (that
+        // would falsely mark the project QA-verified) and stop the loop; surface it to the
+        // human via the PM. qa_escalated is cleared on the next design sign-off.
+        if (result.End == EndReason.Crash)
+        {
+            var crashNote = "QA could not complete — the provider failed after retries. Re-run once it's healthy.";
+            _messages.Insert(Message.Create(MessageType.Escalation, "system", "pm", crashNote));
+            _tasks.SetMeta("qa_escalated", "1");
+            _log.Event(EventType.ErrorProvider, crashNote);
+            return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, crashNote);
+        }
+
         var filed = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
 
         // Advance the round counter and the watermark to the count of finished work QA
@@ -336,9 +362,8 @@ public sealed class TaskRunner(
         var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
 
-        var result = await loop
-            .RunTriageAsync(BugTriagePacket(bug), _tasks.Get(bug.Id), executor, ct)
-            .ConfigureAwait(false);
+        var result = await RunWithCrashRetryAsync(() =>
+            loop.RunTriageAsync(BugTriagePacket(bug), _tasks.Get(bug.Id), executor, ct)).ConfigureAwait(false);
 
         var status = _tasks.Get(bug.Id).Status;
         if (status == TaskStatus.Triage) // undecided (ran out) — hand it to a human, don't spin
@@ -366,7 +391,7 @@ public sealed class TaskRunner(
             {bug.Objective}
 
             Requirement: {bug.RequirementsRef?.ToString() ?? "(unspecified)"}
-
+            {(bug.ProgressNote is { Length: > 0 } n ? $"\nEarlier note (may carry the client's guidance from a re-triage):\n{n}\n" : "")}
             Read the requirement and, if needed, the code to judge it. Then ONE of:
             - Real defect → `accept_bug` (an engineer will fix it).
             - Not a defect (expected behaviour, out of scope, a duplicate of a rejected/open
@@ -496,6 +521,16 @@ public sealed class TaskRunner(
             Transition(task.Id, TaskStatus.InReview, log);
             var review = new ReviewPhase(conn, llm, vault, prompts, _log);
             var verdict = await review.RunAsync(_tasks.Get(task.Id), branch, _workspaces, ct).ConfigureAwait(false);
+
+            // The reviewer judged the bug not a real defect (already transitioned to
+            // Rejected). Nothing to merge or revise — discard the branch and close it.
+            // This is what breaks the "fix a non-bug forever" loop.
+            if (verdict.RejectedBugReason is { } rejectReason)
+            {
+                _workspaces.Discard(task.Id);
+                log.Message($"Task {task.Id}: bug rejected in review — {rejectReason}");
+                return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.Rejected, $"Bug rejected: {rejectReason}");
+            }
 
             if (!verdict.Approved)
             {

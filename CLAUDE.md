@@ -128,6 +128,27 @@ movable and shareable, so keys must not ride along in that payload.
   `qa_escalated` flag so a CR is a fresh QA cycle. Specs live in the **client** repo
   (requirements/contracts updated before the change; MODULE.md by the engineer during it).
 
+### QA/triage hardening [DECIDED] (settled after the first live QA run)
+- **A bug carries machine-captured evidence, not model prose.** `file_bug(title,
+  expected, [requirements_ref])` no longer takes a free-form `actual`/`repro`; the
+  toolset records QA's most recent `run` and attaches that command + its real output
+  verbatim. `file_bug` **refuses if QA hasn't run anything** — no execution, no bug.
+  This killed a live false-positive where QA reported an error the server never emits.
+- **Triage/QA phases get crash-retry** (`RunWithCrashRetryAsync`): a provider blip in
+  `TriageBugAsync`/`TriageAsync`/`RunQaAsync` retries in place (crash cap) instead of
+  escalating to a human on the first failure — the resilience task runs already had via
+  Park. A QA round that still crashes does NOT advance the watermark (would falsely mark
+  the project verified); it sets `qa_escalated` and surfaces to the human.
+- **A reviewer can reject a bug** (`reject_bug` added to `PrincipalReview`, reachable
+  from `in_review`): if a bug-fix review shows the reported defect isn't real, it closes
+  the bug instead of looping `request_changes` forever — the failure mode that burned a
+  whole strike ladder on a non-bug.
+- **Human review flows through the PM chat.** Pending escalations to `pm` are injected
+  into the PM's turn (`PmChat.OpenEscalations`); the PM resolves each with `reject_bug`
+  (close it) or `retriage_bug(note)` (send it back to the Principal with the client's
+  guidance) — no more tasks stranded behind a message nobody reads, no DB surgery to
+  resume. The autonomous loop never blocks on a human: an escalated task is skipped.
+
 ### Review + CI [DECIDED] (settled while building M4)
 - **CI is harness-run, zero tokens** (`Ci/CiRunner.cs`): the harness runs
   `dotnet build` then `dotnet test` in the task workspace itself — trusted code

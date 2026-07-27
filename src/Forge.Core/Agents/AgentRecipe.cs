@@ -78,7 +78,10 @@ public sealed record AgentRecipe
         RolePrompt = "pm",
         InstancePrefix = "pm",
         AlwaysInContext = ["PROJECT.md", "STATUS.md", "docs/requirements/INDEX.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "add_milestone", "reply", "escalate"],
+        // reject_bug / retriage_bug let the PM close out a bug the client reviewed in chat —
+        // reject it, or send it back to the Principal with the client's guidance.
+        Tools = ["read_file", "list_dir", "grep", "write_file", "add_milestone",
+                 "reject_bug", "retriage_bug", "reply", "escalate"],
         Scope = new PathScope(["PROJECT.md", "STATUS.md", "docs/"]),
         ToolAllowlist = [],
         DefaultBudget = 120_000,
@@ -121,7 +124,9 @@ public sealed record AgentRecipe
         RolePrompt = "principal-review",
         InstancePrefix = "rev",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "approve", "request_changes", "escalate"],
+        // reject_bug is here so a bug-fix review can close an invalid bug (the reported
+        // defect isn't real) instead of looping request_changes; it no-ops on non-bug tasks.
+        Tools = ["read_file", "list_dir", "grep", "write_file", "approve", "request_changes", "reject_bug", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
         DefaultBudget = 80_000,
@@ -161,7 +166,9 @@ public sealed record AgentRecipe
     public static AgentRecipe Qa => (new AgentRecipe
     {
         Role = AgentRole.Qa,
-        Model = "claude-opus-4-8",
+        // Verifying behaviour against a fixed contract is not high-reasoning work — the
+        // cheaper coding tier is plenty, and QA runs a full pass every cycle.
+        Model = "claude-sonnet-5",
         RolePrompt = "qa",
         InstancePrefix = "qa",
         AlwaysInContext = ["PROJECT.md", "docs/requirements/INDEX.md"],

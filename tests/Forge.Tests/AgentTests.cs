@@ -103,6 +103,29 @@ public class AgentToolsetTests : IDisposable
     }
 
     [Fact]
+    public async Task File_bug_refuses_without_a_prior_run_then_attaches_the_captured_trace()
+    {
+        var exec = new ToolExecutor(_root, ["echo"], new SecretsVault(Path.Combine(_root, ".vault")));
+        var qa = new AgentToolset(exec, _conn, AgentRecipe.Qa, task: null); // QA is project-scoped
+        Task<ToolOutcome> Qa(string name, params (string, string)[] args) =>
+            qa.ExecuteAsync(Assert.Single(ToolCallParser.Parse(ScriptedLlmClient.Tool(name, args))));
+
+        // No run yet → the bug is refused and nothing is filed. Evidence is mandatory.
+        var refused = await Qa("file_bug", ("title", "T"), ("expected", "E"));
+        Assert.Contains("needs evidence", refused.Observation);
+        Assert.Empty(_tasks.List().Where(t => t.Type == TaskType.Bug));
+
+        // After a real run, file_bug embeds that run's actual output verbatim — the model
+        // never gets to type the "actual", so it cannot fabricate one.
+        await Qa("run", ("command", "echo boom"));
+        await Qa("file_bug", ("title", "T"), ("expected", "E"));
+        var bug = Assert.Single(_tasks.List().Where(t => t.Type == TaskType.Bug));
+        Assert.Contains("## Observed", bug.Objective);
+        Assert.Contains("boom", bug.Objective);
+        Assert.Equal(TaskStatus.Triage, bug.Status);
+    }
+
+    [Fact]
     public async Task Grep_and_list_dir_see_only_the_workspace()
     {
         await Run("write_file", ("path", "a.txt"), ("content", "alpha\nbeta"));
