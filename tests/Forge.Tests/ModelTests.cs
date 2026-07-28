@@ -77,7 +77,7 @@ public class TaskRecordFactoryTests
     [Fact]
     public void Create_sets_defaults()
     {
-        var task = TaskRecord.Create(TaskType.Feature, "Add login", "Users can log in", 50_000);
+        var task = TaskRecord.Create(TaskType.Task, "Add login", "Users can log in", 50_000);
         Assert.Equal(TaskStatus.Created, task.Status);
         Assert.Equal(0, task.TokensSpent);
         Assert.Empty(task.ContextPaths);
@@ -90,7 +90,7 @@ public class TaskRecordFactoryTests
     [InlineData("title", "objective", -5)]
     public void Invalid_packets_are_refused(string title, string objective, int budget) =>
         Assert.ThrowsAny<ArgumentException>(() =>
-            TaskRecord.Create(TaskType.Feature, title, objective, budget));
+            TaskRecord.Create(TaskType.Task, title, objective, budget));
 }
 
 public class MessageTests

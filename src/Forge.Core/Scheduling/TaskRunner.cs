@@ -3,6 +3,7 @@ using Dapper;
 using Forge.Core.Agents;
 using Forge.Core.Ci;
 using Forge.Core.Db;
+using Forge.Core.Design;
 using Forge.Core.Llm;
 using Forge.Core.Logging;
 using Forge.Core.Model;
@@ -96,8 +97,10 @@ public sealed class TaskRunner(
             return await TriageOrImplementAsync(stuck, ct).ConfigureAwait(false);
         if (NextTask(AgentRole.Engineer) is { } next)
             return await RunAsync(next, ct).ConfigureAwait(false);
-        // No task work left. If the board is complete but not yet QA-verified (first
-        // build, or a change request), run QA; otherwise the project is done → null.
+        // No task work left. First close any Feature whose children have all finished —
+        // that transition (active → done) is what makes the board quiescent — then, if
+        // the board is complete but not yet QA-verified, run QA; otherwise done → null.
+        CloseFinishedFeatures();
         return await MaybeRunQaAsync(ct).ConfigureAwait(false);
     }
 
@@ -110,8 +113,12 @@ public sealed class TaskRunner(
     private async Task<TaskRunOutcome> TriageOrImplementAsync(TaskRecord task, CancellationToken ct)
     {
         var log = _log.For(task.Id);
+        // Triage is entered by two kinds of task, routed by type: a PM-opened Feature is
+        // decomposed into child tasks; a QA-filed bug is accepted or rejected.
         if (task.Status == TaskStatus.Triage)
-            return await TriageBugAsync(task, ct).ConfigureAwait(false);
+            return task.Type == TaskType.Feature
+                ? await DecomposeFeatureAsync(task, ct).ConfigureAwait(false)
+                : await TriageBugAsync(task, ct).ConfigureAwait(false);
         if (task.Status == TaskStatus.OutOfBudget)
         {
             if (task.OutOfBudgetCount > DirectImplementStrike)
@@ -120,6 +127,70 @@ public sealed class TaskRunner(
                 return await ImplementDirectlyAsync(task, ct).ConfigureAwait(false);
         }
         return await TriageAsync(task, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A PM-opened Feature sits in `triage` until the loop hands it here. The Principal
+    /// decomposes it — reusing the design phase, which already picks the greenfield vs
+    /// change-request brief — and then the harness back-fills `parent_id` on the tasks
+    /// that were just created and releases them to `ready` (autonomous: no client
+    /// sign-off step), and moves the Feature to `active` so the loop never re-pulls it.
+    /// The Feature closes to `done` later, when every child has finished (the sweep).
+    /// </summary>
+    private async Task<TaskRunOutcome> DecomposeFeatureAsync(TaskRecord feature, CancellationToken ct)
+    {
+        var log = _log.For(feature.Id);
+        log.Message($"Principal decomposing feature {feature.Id}: {feature.Title}");
+
+        var before = _tasks.List().Select(t => t.Id).ToHashSet();
+        var design = new DesignPhase(paths, project, conn, llm, vault, prompts, _log);
+        var outcome = await design.RunAsync(ct).ConfigureAwait(false);
+
+        // No tasks means the Principal pushed back (an ill-advised CR ends in escalate,
+        // which leaves a pending pm message that NextPrincipalOwned skips) or the design
+        // run crashed. Either way, leave the Feature in triage rather than activating an
+        // empty Feature; an escalation parks it on a human, a crash retries next tick.
+        if (outcome.TasksCreated == 0)
+        {
+            var note = $"Feature {feature.Id} produced no tasks ({SnakeCaseEnum.ToSnakeCase(outcome.End)}): {outcome.Summary}";
+            log.Message(note);
+            return new TaskRunOutcome(feature.Id, outcome.End, feature.Status, note);
+        }
+
+        // Back-fill the linkage the harness owns: every task created in this run becomes
+        // a child of the Feature and is released to the board (created → ready).
+        foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
+        {
+            _tasks.SetParent(child.Id, feature.Id);
+            if (_tasks.Get(child.Id).Status == TaskStatus.Created)
+                Transition(child.Id, TaskStatus.Ready, log);
+        }
+
+        // A new Feature is a fresh QA cycle: clear any earlier "did not converge" flag,
+        // the same re-arm design approve used to do before the flow became autonomous.
+        _tasks.SetMeta("qa_escalated", "0");
+        Transition(feature.Id, TaskStatus.Active, log);
+
+        var summary = $"Feature {feature.Id} decomposed into {outcome.TasksCreated} task(s) and activated.";
+        log.Message(summary);
+        return new TaskRunOutcome(feature.Id, outcome.End, TaskStatus.Active, summary);
+    }
+
+    /// <summary>
+    /// Harness-owned Feature completion (spec Principle 6 — never an agent's claim): a
+    /// Feature in `active` whose children have all reached a terminal state is closed to
+    /// `done`. Read from the board via `parent_id`, so "the last child finished" is
+    /// derived, not tracked. Closing the Feature is what makes the board quiescent and
+    /// arms QA, so this runs just before the QA gate.
+    /// </summary>
+    private void CloseFinishedFeatures()
+    {
+        foreach (var featureId in _tasks.ActiveFeaturesReadyToClose())
+        {
+            var log = _log.For(featureId);
+            Transition(featureId, TaskStatus.Done, log);
+            log.Message($"Feature {featureId} complete — all child tasks finished; QA can run.");
+        }
     }
 
     /// <summary>

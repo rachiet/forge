@@ -14,7 +14,7 @@ public class RepositoryTests : IDisposable
 
     private TaskRecord InsertTask(int budget = 10_000) =>
         new TaskRepository(_conn).Insert(TaskRecord.Create(
-            TaskType.Feature, "Add login", "Users can log in", budget,
+            TaskType.Task, "Add login", "Users can log in", budget,
             acceptanceCriteria: "POST /login returns 200",
             contextPaths: ["src/auth/", "docs/design/03-contracts/auth.yaml"],
             requirementsRef: RequirementsRef.Parse("01-users-auth.md@v2"),
@@ -28,7 +28,7 @@ public class RepositoryTests : IDisposable
         var inserted = InsertTask();
         var loaded = repo.Get(inserted.Id);
 
-        Assert.Equal(TaskType.Feature, loaded.Type);
+        Assert.Equal(TaskType.Task, loaded.Type);
         Assert.Equal(TaskStatus.Created, loaded.Status);
         Assert.Equal(AgentRole.Engineer, loaded.AssignedRole);
         Assert.Equal(["src/auth/", "docs/design/03-contracts/auth.yaml"], loaded.ContextPaths);
@@ -80,6 +80,59 @@ public class RepositoryTests : IDisposable
 
         Assert.Equal(2, repo.Log().Count);
         Assert.Single(repo.Log(tasks.Id));
+    }
+
+    [Fact]
+    public void Active_feature_closes_only_when_it_has_children_and_all_are_terminal()
+    {
+        var repo = new TaskRepository(_conn);
+        var feature = repo.Insert(TaskRecord.Create(
+            TaskType.Feature, "Multi-city view", "Show several cities at once", 60_000,
+            assignedRole: AgentRole.Principal, createdBy: "pm") with { Status = TaskStatus.Triage });
+        repo.Transition(feature.Id, TaskStatus.Active);
+
+        // A childless active Feature must not close — no work has run yet.
+        Assert.Empty(repo.ActiveFeaturesReadyToClose());
+
+        var child1 = InsertTask();
+        var child2 = InsertTask();
+        repo.SetParent(child1.Id, feature.Id);
+        repo.SetParent(child2.Id, feature.Id);
+        Assert.Equal(feature.Id, repo.Get(child1.Id).ParentId);
+
+        // One child still in flight → Feature not ready to close.
+        Drive(repo, child1, TaskStatus.Done);
+        Assert.Empty(repo.ActiveFeaturesReadyToClose());
+
+        // Both children terminal (done + a non-done terminal both count) → ready to close.
+        repo.Transition(child2.Id, TaskStatus.Ready);
+        repo.Transition(child2.Id, TaskStatus.Cancelled);
+        Assert.Equal([feature.Id], repo.ActiveFeaturesReadyToClose());
+    }
+
+    [Fact]
+    public void Feature_is_born_in_triage_so_the_principal_picks_it_up()
+    {
+        var repo = new TaskRepository(_conn);
+        var feature = repo.Insert(TaskRecord.Create(
+            TaskType.Feature, "Change request", "One change", 60_000,
+            assignedRole: AgentRole.Principal, createdBy: "pm") with { Status = TaskStatus.Triage });
+
+        var owned = repo.NextPrincipalOwned();
+        Assert.NotNull(owned);
+        Assert.Equal(feature.Id, owned!.Id);
+        Assert.Equal(TaskStatus.Triage, owned.Status);
+    }
+
+    private static void Drive(TaskRepository repo, TaskRecord task, TaskStatus to)
+    {
+        repo.Transition(task.Id, TaskStatus.Ready);
+        repo.Transition(task.Id, TaskStatus.Claimed);
+        repo.Transition(task.Id, TaskStatus.InProgress);
+        repo.Transition(task.Id, TaskStatus.InReview);
+        repo.Transition(task.Id, TaskStatus.Merging);
+        repo.Transition(task.Id, TaskStatus.Qa);
+        repo.Transition(task.Id, to);
     }
 
     [Fact]

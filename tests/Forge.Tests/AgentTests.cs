@@ -77,7 +77,7 @@ public class AgentToolsetTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         _tasks = new TaskRepository(_conn);
-        _task = _tasks.Insert(TaskRecord.Create(TaskType.Feature, "T", "O", 10_000));
+        _task = _tasks.Insert(TaskRecord.Create(TaskType.Task, "T", "O", 10_000));
         var executor = new ToolExecutor(_root, ["echo"], new SecretsVault(Path.Combine(_root, ".vault")));
         _toolset = new AgentToolset(executor, _conn, AgentRecipe.Engineer, _task);
     }
@@ -239,7 +239,7 @@ public class PromptAssemblerTests
     private static readonly PromptAssembler Assembler = new(PromptLibrary.Resolve());
 
     private static TaskRecord Task(string? progressNote = null) => TaskRecord.Create(
-        TaskType.Feature, "Add login", "Users can log in", 60_000,
+        TaskType.Task, "Add login", "Users can log in", 60_000,
         acceptanceCriteria: "POST /login returns 200",
         contextPaths: ["src/auth/"],
         requirementsRef: RequirementsRef.Parse("01-users-auth.md@v2")) with
@@ -255,10 +255,10 @@ public class PromptAssemblerTests
         var prompt = Assembler.SystemPrompt(AgentRecipe.Engineer, Task(), jail);
 
         Assert.Contains("Role: Software Engineer", prompt);   // Layer A
-        Assert.Contains("Task type: Feature", prompt);        // Layer B
+        Assert.Contains("Task type: Task", prompt);        // Layer B
         Assert.Contains("<tool name=\"write_file\">", prompt); // generated protocol
         Assert.True(prompt.IndexOf("Role: Software Engineer", StringComparison.Ordinal)
-                  < prompt.IndexOf("Task type: Feature", StringComparison.Ordinal));
+                  < prompt.IndexOf("Task type: Task", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -317,7 +317,7 @@ public class AgentLoopTests : IDisposable
     private TaskRecord StartTask(int budget = 100_000)
     {
         var task = _tasks.Insert(TaskRecord.Create(
-            TaskType.Feature, "Add greeting", "Write hello.txt", budget, assignedRole: AgentRole.Engineer));
+            TaskType.Task, "Add greeting", "Write hello.txt", budget, assignedRole: AgentRole.Engineer));
         _tasks.Transition(task.Id, TaskStatus.Ready);
         _tasks.Transition(task.Id, TaskStatus.Claimed);
         _tasks.Transition(task.Id, TaskStatus.InProgress);

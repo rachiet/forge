@@ -9,6 +9,13 @@ public sealed record TaskRecord
 {
     public long Id { get; init; }
     public long? MilestoneId { get; init; }
+    /// <summary>
+    /// The Feature this task belongs to: a self-reference to the parent Feature's
+    /// task id. Null on a top-level task (a Feature itself, or any task created
+    /// outside a Feature). The Principal decomposes a Feature into child tasks that
+    /// carry its id here — that linkage is what "the Feature is complete" is read from.
+    /// </summary>
+    public long? ParentId { get; init; }
     public required TaskType Type { get; init; }
     public required string Title { get; init; }
     public required string Objective { get; init; }
@@ -37,7 +44,8 @@ public sealed record TaskRecord
         IReadOnlyList<string>? contextPaths = null,
         RequirementsRef? requirementsRef = null,
         AgentRole? assignedRole = null,
-        string? createdBy = null)
+        string? createdBy = null,
+        long? parentId = null)
     {
         if (string.IsNullOrWhiteSpace(title))
             throw new ArgumentException("Task title must be non-empty.", nameof(title));
@@ -54,6 +62,7 @@ public sealed record TaskRecord
             Objective = objective,
             TokenBudget = tokenBudget,
             MilestoneId = milestoneId,
+            ParentId = parentId,
             AcceptanceCriteria = acceptanceCriteria,
             ContextPaths = contextPaths ?? [],
             RequirementsRef = requirementsRef,
@@ -100,10 +109,16 @@ public static class TaskTransitions
                  TaskStatus.Rejected, TaskStatus.Cancelled],
             [TaskStatus.OutOfBudget] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
-            // A QA-filed bug is born Triage. The Principal accepts it (→ Ready, an
-            // engineer fixes it like any task) or rejects it (→ Rejected, terminal).
-            [TaskStatus.Triage] = [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Cancelled],
+            // Triage is entered by two kinds of task. A QA-filed bug: the Principal
+            // accepts it (→ Ready, an engineer fixes it) or rejects it (→ Rejected).
+            // A PM-opened Feature: the Principal decomposes it (→ Active) once its
+            // child tasks exist.
+            [TaskStatus.Triage] = [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Active, TaskStatus.Cancelled],
             [TaskStatus.Rejected] = [],
+            // A Feature sits Active while its children build. The harness closes it
+            // (→ Done) when every child is terminal; a decomposition failure can block
+            // or cancel it. Nothing claims an Active task, so the loop never re-pulls it.
+            [TaskStatus.Active] = [TaskStatus.Done, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.Done] = [],
             [TaskStatus.Cancelled] = [],
         };

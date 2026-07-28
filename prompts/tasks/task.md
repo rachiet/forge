@@ -1,6 +1,7 @@
-# Task type: Feature
+# Task type: Task
 
-You are adding new behaviour to the system.
+You are implementing one unit of a Feature the Principal decomposed — usually
+adding new behaviour to the system.
 
 ## Definition of done
 
@@ -13,7 +14,7 @@ All of these, every time:
 4. The build is clean: no new warnings, no commented-out code, no `TODO` left
    where you meant to come back.
 5. `MODULE.md` for every module you touched reflects what the code now does.
-6. The feature is verifiable from the command line by someone with no access to
+6. The work is verifiable from the command line by someone with no access to
    your reasoning. If the behaviour is internal and would otherwise be
    invisible, say so in your `done` summary — an unobservable feature is an
    unverifiable one, and the design owes it a side-channel.

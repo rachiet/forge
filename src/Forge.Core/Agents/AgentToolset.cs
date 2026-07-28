@@ -65,9 +65,13 @@ public sealed class AgentToolset(
             ["write_file"] = "write_file(path, content) — create or overwrite a file, whole contents.",
             ["run"] = "run(command, [cwd]) — run one binary.",
             ["add_milestone"] = "add_milestone(name, [description], [ordinal]) — add a milestone to the plan.",
+            ["create_feature"] = "create_feature(title, objective, [acceptance], [requirements_ref], [budget]) — "
+                            + "open a Feature for the Principal to decompose: the whole initial build, or one "
+                            + "change request. Returns its id. This is your handoff to engineering — the Principal "
+                            + "breaks the Feature into tasks; you do not create tasks yourself.",
             ["create_task"] = "create_task(title, objective, [type], [acceptance], [requirements_ref], "
                             + "[context_paths], [budget], [milestone]) — put a task on the board. Returns its id. "
-                            + "type is feature (default), bug, or chore. requirements_ref names the requirement "
+                            + "type is task (default), bug, or chore. requirements_ref names the requirement "
                             + "file, e.g. `01-todos.md@v1` (version optional).",
             ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done.",
             ["redirect"] = "redirect(guidance, [budget]) — hand this stuck task back to the engineer with "
@@ -119,6 +123,7 @@ public sealed class AgentToolset(
                 "write_file" => WriteFile(call),
                 "run" => await RunAsync(call, ct).ConfigureAwait(false),
                 "add_milestone" => AddMilestone(call),
+                "create_feature" => CreateFeature(call),
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
                 "redirect" => Redirect(call),
@@ -302,7 +307,7 @@ public sealed class AgentToolset(
             ?? [];
 
         var created = _tasks.Insert(TaskRecord.Create(
-            call.Optional("type") is { } type ? ParseRunnableTaskType(type) : TaskType.Feature,
+            call.Optional("type") is { } type ? ParseRunnableTaskType(type) : TaskType.Task,
             call.Arg("title"),
             call.Arg("objective"),
             call.OptionalInt("budget") ?? 60_000,
@@ -318,18 +323,49 @@ public sealed class AgentToolset(
     }
 
     /// <summary>
-    /// Only types with a prompts/tasks/ template can be claimed and run; any other
-    /// TaskType value would put a task on the board that crashes the runner at
-    /// spin-up (PromptLibrary throws on the missing Layer B file). Refuse it here,
-    /// where the Principal can read the error and pick a runnable type instead.
+    /// The PM's handoff to engineering (M6): open a Feature — the whole initial build,
+    /// or one change request — as a Principal-owned parent for the Principal to decompose.
+    /// Born `triage` (the Principal's queue), assigned to the Principal, top-level (no
+    /// parent). The flow is autonomous — no client sign-off gate — so the Principal picks
+    /// it up, decomposes it into child tasks (which are released to the board directly),
+    /// and the Feature goes `active`. Its id becomes the parent_id of every child task,
+    /// and "all children done" is what closes the Feature and arms QA. The PM opens
+    /// Features; it never creates tasks.
+    /// </summary>
+    private ToolOutcome CreateFeature(ToolCall call)
+    {
+        var requirement = call.Optional("requirements_ref") is { } reqRef
+            ? NormalizeRequirementRef(reqRef)
+            : (RequirementsRef?)null;
+
+        var created = _tasks.Insert(TaskRecord.Create(
+            TaskType.Feature,
+            call.Arg("title"),
+            call.Arg("objective"),
+            call.OptionalInt("budget") ?? 60_000,
+            acceptanceCriteria: call.Optional("acceptance"),
+            requirementsRef: requirement,
+            assignedRole: AgentRole.Principal,
+            createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role)) with { Status = TaskStatus.Triage });
+
+        return new ToolOutcome($"Feature {created.Id} opened: {created.Title} " +
+            "(handed to the Principal to decompose into tasks).");
+    }
+
+    /// <summary>
+    /// Engineer-runnable types only. A Feature is the PM's parent unit that the
+    /// Principal decomposes — it is never handed to an engineer — and any other value
+    /// has no prompts/tasks/ template, so it would crash the runner at spin-up
+    /// (PromptLibrary throws on the missing Layer B file). Refuse it here, where the
+    /// Principal can read the error and pick a runnable type instead.
     /// </summary>
     private static TaskType ParseRunnableTaskType(string type)
     {
         var parsed = SnakeCaseEnum.Parse<TaskType>(type);
-        return parsed is TaskType.Feature or TaskType.Bug or TaskType.Chore
+        return parsed is TaskType.Task or TaskType.Bug or TaskType.Chore
             ? parsed
             : throw new ToolCallException(
-                $"Task type '{type}' cannot be assigned to an engineer. Use feature, bug, or chore.");
+                $"Task type '{type}' cannot be assigned to an engineer. Use task, bug, or chore.");
     }
 
     /// <summary>

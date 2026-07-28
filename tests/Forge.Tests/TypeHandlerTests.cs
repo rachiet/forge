@@ -46,7 +46,6 @@ public class TypeHandlerTests
     }
 
     [Theory]
-    [InlineData(TaskType.ImpactAnalysis, "impact_analysis")]
     [InlineData(MessageType.ChangeRequest, "change_request")]
     [InlineData(MessageType.SystemNudge, "system_nudge")]
     [InlineData(MilestoneStatus.DemoReady, "demo_ready")]

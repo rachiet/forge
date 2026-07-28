@@ -33,8 +33,8 @@ public sealed class TaskAddCommand : Command<TaskAddCommand.Settings>
         public string? Acceptance { get; init; }
 
         [CommandOption("-t|--type <TYPE>")]
-        [Description("feature | bug | design | impact_analysis | research | chore. Default: feature.")]
-        public string Type { get; init; } = "feature";
+        [Description("task | bug | chore (feature is the Principal's own unit). Default: task.")]
+        public string Type { get; init; } = "task";
 
         [CommandOption("-b|--budget <TOKENS>")]
         [Description("Token budget for the task. Enforced by refusing calls, not by asking the model.")]

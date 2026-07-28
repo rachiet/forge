@@ -46,7 +46,7 @@ public class ReviewAndCiTests : IDisposable
     private TaskRecord ReadyTask() =>
         _tasks.Transition(
             _tasks.Insert(TaskRecord.Create(
-                TaskType.Feature, "Add greeting", "Create greeting.txt", 100_000,
+                TaskType.Task, "Add greeting", "Create greeting.txt", 100_000,
                 assignedRole: AgentRole.Engineer, createdBy: "principal")).Id,
             TaskStatus.Ready);
 

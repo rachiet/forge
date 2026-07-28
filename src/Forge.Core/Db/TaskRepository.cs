@@ -11,6 +11,7 @@ public sealed class TaskRepository(IDbConnection conn)
     {
         public long Id { get; init; }
         public long? MilestoneId { get; init; }
+        public long? ParentId { get; init; }
         public string Type { get; init; } = "";
         public string Title { get; init; } = "";
         public string Objective { get; init; } = "";
@@ -32,6 +33,7 @@ public sealed class TaskRepository(IDbConnection conn)
         {
             Id = Id,
             MilestoneId = MilestoneId,
+            ParentId = ParentId,
             Type = SnakeCaseEnum.Parse<TaskType>(Type),
             Title = Title,
             Objective = Objective,
@@ -52,7 +54,7 @@ public sealed class TaskRepository(IDbConnection conn)
     }
 
     private const string SelectColumns = """
-        SELECT id AS Id, milestone_id AS MilestoneId, type AS Type, title AS Title,
+        SELECT id AS Id, milestone_id AS MilestoneId, parent_id AS ParentId, type AS Type, title AS Title,
                objective AS Objective, acceptance_criteria AS AcceptanceCriteria,
                context_paths AS ContextPaths, requirements_ref AS RequirementsRef,
                assigned_role AS AssignedRole, status AS Status,
@@ -66,10 +68,10 @@ public sealed class TaskRepository(IDbConnection conn)
     public TaskRecord Insert(TaskRecord task)
     {
         var id = conn.ExecuteScalar<long>("""
-            INSERT INTO tasks (milestone_id, type, title, objective, acceptance_criteria,
+            INSERT INTO tasks (milestone_id, parent_id, type, title, objective, acceptance_criteria,
                                context_paths, requirements_ref, assigned_role, status,
                                token_budget, tokens_spent, progress_note, branch_name, created_by)
-            VALUES (@MilestoneId, @Type, @Title, @Objective, @AcceptanceCriteria,
+            VALUES (@MilestoneId, @ParentId, @Type, @Title, @Objective, @AcceptanceCriteria,
                     @ContextPaths, @RequirementsRef, @AssignedRole, @Status,
                     @TokenBudget, @TokensSpent, @ProgressNote, @BranchName, @CreatedBy)
             RETURNING id
@@ -77,6 +79,7 @@ public sealed class TaskRepository(IDbConnection conn)
             new
             {
                 task.MilestoneId,
+                task.ParentId,
                 Type = SnakeCaseEnum.ToSnakeCase(task.Type),
                 task.Title,
                 task.Objective,
@@ -182,12 +185,39 @@ public sealed class TaskRepository(IDbConnection conn)
             new { s = SnakeCaseEnum.ToSnakeCase(status) });
 
     /// <summary>
-    /// Count every completed task (features, bug-fixes, chores). This is the QA gate's
+    /// Count every completed task (tasks, bug-fixes, chores). This is the QA gate's
     /// watermark: it rises whenever any work finishes — the initial build, a bug-fix, or
     /// a change request's tasks — so QA re-verifies after all of them, uniformly.
     /// </summary>
     public int CountDone() =>
         conn.ExecuteScalar<int>("SELECT COUNT(*) FROM tasks WHERE status = 'done'");
+
+    /// <summary>
+    /// Attach a child task to its parent Feature — the harness back-fills this after the
+    /// Principal decomposes a Feature, so the linkage is computed by trusted code rather
+    /// than left to the model to set correctly on every create_task.
+    /// </summary>
+    public void SetParent(long childId, long parentId) =>
+        conn.Execute("""
+            UPDATE tasks SET parent_id = @parentId, updated_at = datetime('now') WHERE id = @childId
+            """, new { childId, parentId });
+
+    /// <summary>
+    /// Features in `active` whose children are all terminal (done/rejected/cancelled) —
+    /// these are complete and the harness closes them to `done`, which is what arms QA.
+    /// A Feature with no children yet is excluded: it must not close before any work runs.
+    /// "The last child finished" is derived from this query, never tracked as a flag.
+    /// </summary>
+    public IReadOnlyList<long> ActiveFeaturesReadyToClose() =>
+        conn.Query<long>("""
+            SELECT f.id FROM tasks f
+            WHERE f.type = 'feature' AND f.status = 'active'
+              AND EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = f.id)
+              AND NOT EXISTS (
+                SELECT 1 FROM tasks c
+                WHERE c.parent_id = f.id AND c.status NOT IN ('done','rejected','cancelled'))
+            ORDER BY f.id
+            """).ToList();
 
     /// <summary>Are all non-bug tasks terminal and no bug still active? Then the board is quiescent.</summary>
     public bool BoardQuiescent() =>

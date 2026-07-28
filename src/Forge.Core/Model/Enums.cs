@@ -2,7 +2,10 @@ namespace Forge.Core.Model;
 
 // These enums mirror the CHECK constraints in Db/Schema.cs — keep both layers in sync.
 
-public enum TaskType { Feature, Bug, Design, ImpactAnalysis, Research, Chore }
+// Feature is the PM's unit of scope handed to the Principal — the whole initial
+// build, or one change request — and is never assigned to an engineer. The
+// Principal decomposes a Feature into Task/Bug/Chore units that engineers execute.
+public enum TaskType { Feature, Task, Bug, Chore }
 
 public enum TaskStatus
 {
@@ -12,6 +15,11 @@ public enum TaskStatus
     // becomes Ready (accepted → an engineer fixes it) or Rejected (kept, with the
     // reason, as a durable "not a bug" verdict QA must not re-file).
     Triage, Rejected,
+    // Feature lifecycle: a PM-opened Feature is born Triage (the Principal decomposes
+    // it), then Active once its child tasks exist — Active means "decomposed, children
+    // building; no queue re-claims it" — and Done when the harness sees every child
+    // reach a terminal state, which is what arms QA.
+    Active,
     Cancelled
 }
 

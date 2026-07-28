@@ -115,7 +115,7 @@ public class DesignPhaseTests : IDisposable
         // A prior build already finished a task — so a fresh design run is a change request,
         // and the Principal should do impact analysis rather than design from scratch.
         _tasks.Insert(TaskRecord.Create(
-            TaskType.Feature, "Existing feature", "Already built and merged", 100_000,
+            TaskType.Task, "Existing feature", "Already built and merged", 100_000,
             assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Done });
 
         var llm = new ScriptedLlmClient(
@@ -184,12 +184,13 @@ public class DesignPhaseTests : IDisposable
         SeedRequirements("01-todos.md");
 
         // First create_task has an empty objective (the factory rejects it); the
-        // second names a task type with no engineer template — a task that would
-        // crash the runner at claim time, refused here instead. Then it recovers.
+        // second names the Feature type — the Principal's own parent unit, never an
+        // engineer task, so it has no engineer template and is refused here instead of
+        // crashing the runner at claim time. Then it recovers.
         var llm = new ScriptedLlmClient(
             ScriptedLlmClient.Tool("create_task", ("title", "Bad"), ("objective", "")),
             ScriptedLlmClient.Tool("create_task",
-                ("title", "Also bad"), ("objective", "Investigate options"), ("type", "research")),
+                ("title", "Also bad"), ("objective", "Investigate options"), ("type", "feature")),
             CreateTask("Todo storage", "Add and complete todos", "01-todos.md@v1"),
             ScriptedLlmClient.Tool("done", ("summary", "Recovered and created the task.")));
 
@@ -202,7 +203,7 @@ public class DesignPhaseTests : IDisposable
         // The refusals were delivered to the model as observations, not crashes.
         var observations = string.Join("\n", llm.Requests.Skip(1).Select(r => r.Messages[^1].Content));
         Assert.Contains("ERROR:", observations);
-        Assert.Contains("feature, bug, or chore", observations);
+        Assert.Contains("task, bug, or chore", observations);
 
         // The done(summary) is the design phase's client-facing summary.
         Assert.Equal("Recovered and created the task.", outcome.Summary);

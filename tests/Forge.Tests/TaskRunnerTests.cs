@@ -44,7 +44,7 @@ public class TaskRunnerTests : IDisposable
     private TaskRecord ReadyTask(int budget = 100_000) =>
         _tasks.Transition(
             _tasks.Insert(TaskRecord.Create(
-                TaskType.Feature, "Add greeting", "Create greeting.txt containing 'hello'", budget,
+                TaskType.Task, "Add greeting", "Create greeting.txt containing 'hello'", budget,
                 assignedRole: AgentRole.Engineer, createdBy: "human")).Id,
             TaskStatus.Ready);
 
@@ -392,7 +392,7 @@ public class TaskRunnerTests : IDisposable
     /// <summary>A task inserted straight to Done — a completed build for QA to verify.</summary>
     private TaskRecord DoneTask() =>
         _tasks.Insert(TaskRecord.Create(
-            TaskType.Feature, "Seeded feature", "Already built and merged", 100_000,
+            TaskType.Task, "Seeded feature", "Already built and merged", 100_000,
             assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Done });
 
     /// <summary>Drive the autonomous loop until it drains (returns null).</summary>

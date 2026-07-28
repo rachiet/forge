@@ -36,7 +36,7 @@ public class MeteredLlmClientTests : IDisposable
 
     private long StartTask(int budget)
     {
-        var task = _tasks.Insert(TaskRecord.Create(TaskType.Feature, "T", "O", budget));
+        var task = _tasks.Insert(TaskRecord.Create(TaskType.Task, "T", "O", budget));
         _tasks.Transition(task.Id, TaskStatus.Ready);
         _tasks.Transition(task.Id, TaskStatus.Claimed);
         _tasks.Transition(task.Id, TaskStatus.InProgress);

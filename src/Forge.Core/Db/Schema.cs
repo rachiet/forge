@@ -42,7 +42,11 @@ public static class Schema
         CREATE TABLE IF NOT EXISTS tasks (
           id INTEGER PRIMARY KEY,
           milestone_id INTEGER REFERENCES milestones(id),
-          type TEXT NOT NULL CHECK(type IN ('feature','bug','design','impact_analysis','research','chore')),
+          -- The parent Feature this task decomposes (self-reference). NULL for a
+          -- top-level task (a Feature itself, or a standalone task). Children the
+          -- Principal creates from a Feature carry that Feature's id here.
+          parent_id INTEGER REFERENCES tasks(id),
+          type TEXT NOT NULL CHECK(type IN ('feature','task','bug','chore')),
           title TEXT NOT NULL CHECK(length(title) > 0),
           objective TEXT NOT NULL CHECK(length(objective) > 0),
           acceptance_criteria TEXT,
@@ -52,7 +56,7 @@ public static class Schema
             ('pm','principal','engineer','qa','researcher')),
           status TEXT NOT NULL DEFAULT 'created' CHECK(status IN
             ('created','ready','claimed','in_progress','in_review','merging',
-             'qa','done','blocked','out_of_budget','triage','rejected','cancelled')),
+             'qa','done','blocked','out_of_budget','triage','rejected','active','cancelled')),
           token_budget INTEGER NOT NULL CHECK(token_budget > 0),
           tokens_spent INTEGER NOT NULL DEFAULT 0 CHECK(tokens_spent >= 0),
           -- How many times this task ran out of resources (budget/iteration) after
