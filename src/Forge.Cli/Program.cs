@@ -45,6 +45,9 @@ app.Configure(config =>
             .WithDescription("Create a project's data directory: project.db, bare repo, workspaces.");
     });
 
+    config.AddCommand<BoardCommand>("board")
+        .WithDescription("Serve the client's progress page: milestones, features, agent spend, and the PM chat.");
+
     config.AddBranch("prices", prices =>
     {
         prices.SetDescription("Model prices: what Forge will charge each tier against.");

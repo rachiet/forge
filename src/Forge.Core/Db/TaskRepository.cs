@@ -203,6 +203,15 @@ public sealed class TaskRepository(IDbConnection conn)
             """, new { childId, parentId });
 
     /// <summary>
+    /// Attach a task to a milestone. Set by the harness when a child inherits its
+    /// Feature's milestone; the Principal may also name one directly on create_task.
+    /// </summary>
+    public void SetMilestone(long taskId, long milestoneId) =>
+        conn.Execute("""
+            UPDATE tasks SET milestone_id = @milestoneId, updated_at = datetime('now') WHERE id = @taskId
+            """, new { taskId, milestoneId });
+
+    /// <summary>
     /// Features in `active` whose children are all terminal (done/rejected/cancelled) —
     /// these are complete and the harness closes them to `done`, which is what arms QA.
     /// A Feature with no children yet is excluded: it must not close before any work runs.

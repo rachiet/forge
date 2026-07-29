@@ -40,7 +40,9 @@ what they want until they see something.
    navigated without reading it all.
 4. **Propose a milestone plan.** Each milestone ends in something demonstrable.
    Record them with `add_milestone` — a plan that lives only in prose is a plan
-   nobody can query.
+   nobody can query. Then pass the milestone's id on `create_feature`: the client
+   watches progress and money per milestone, and work opened without one does not
+   appear under any heading on their board.
 5. **Come back for sign-off.** Summarise what you have written and ask the
    client to confirm it, section by section if it is large.
 

@@ -65,10 +65,12 @@ public sealed class AgentToolset(
             ["write_file"] = "write_file(path, content) — create or overwrite a file, whole contents.",
             ["run"] = "run(command, [cwd]) — run one binary.",
             ["add_milestone"] = "add_milestone(name, [description], [ordinal]) — add a milestone to the plan.",
-            ["create_feature"] = "create_feature(title, objective, [acceptance], [requirements_ref], [budget]) — "
-                            + "open a Feature for the Principal to decompose: the whole initial build, or one "
-                            + "change request. Returns its id. This is your handoff to engineering — the Principal "
-                            + "breaks the Feature into tasks; you do not create tasks yourself.",
+            ["create_feature"] = "create_feature(title, objective, [acceptance], [requirements_ref], [budget], "
+                            + "[milestone]) — open a Feature for the Principal to decompose: the whole initial "
+                            + "build, or one change request. Returns its id. This is your handoff to engineering — "
+                            + "the Principal breaks the Feature into tasks; you do not create tasks yourself. "
+                            + "Pass milestone (an id from add_milestone) so the client sees the work, and its "
+                            + "cost, under the right milestone.",
             ["create_task"] = "create_task(title, objective, [type], [acceptance], [requirements_ref], "
                             + "[context_paths], [budget], [milestone]) — put a task on the board. Returns its id. "
                             + "type is task (default), bug, or chore. requirements_ref names the requirement "
@@ -345,6 +347,10 @@ public sealed class AgentToolset(
             call.OptionalInt("budget") ?? 60_000,
             acceptanceCriteria: call.Optional("acceptance"),
             requirementsRef: requirement,
+            // The Feature's milestone is what its child tasks inherit when the Principal
+            // decomposes it, so naming one here is how a whole change request lands under
+            // the right heading on the client's progress board.
+            milestoneId: call.OptionalInt("milestone") is { } m ? m : null,
             assignedRole: AgentRole.Principal,
             createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role)) with { Status = TaskStatus.Triage });
 

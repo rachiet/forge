@@ -277,6 +277,33 @@ movable and shareable, so keys must not ride along in that payload.
   `OpenProject`, and must be no-ops the second time. The DDL in `Schema.cs` only ever
   creates *missing* tables, so it cannot reshape an existing one.
 
+### Client progress board [DECIDED] (`forge board <project>`)
+
+- **The client's whole window on the project**: milestones, features, spend per agent, and
+  the PM chat — which stays their only input. Served by `forge board` on localhost via a
+  minimal API hosted inside the CLI (a `FrameworkReference`, not a second executable);
+  the page polls `/api/board` every 3s.
+- **A read model, never a second source of truth** (`Board/BoardQuery.cs`). Every figure is
+  queried from tasks/milestones/token_ledger/messages at request time, so the page cannot
+  drift from the ledger. Nothing is cached or denormalised.
+- **Milestone state is derived from its tasks, not read from `milestones.status`** — the
+  same rule routing follows. Nothing ever advanced that column (all 8 of weatherboard's sat
+  at `planned` through a finished project), and a status column nobody writes is worse than
+  no column. done = all tasks done; active = any in flight or any done; else pending.
+- **Milestone linkage is the harness's job, not the model's.** `create_task`/`create_feature`
+  accept `milestone`, the design brief now lists the PM's milestones with their ids
+  (`DesignPhase.MilestoneSection`) so the Principal has something to pass, and
+  `TaskRunner` makes a child **inherit its Feature's milestone** when it adopts it. Before
+  this, `milestone_id` was never populated by any code path.
+- **"Work outside features" is a required section, not a nicety.** ~15% of calls carry no
+  `task_id` at all (PM chat, design, QA) and bugs/chores sit under no Feature — on
+  weatherboard, features were $15.58 of a $23.45 total. Without that row the client sees
+  $7.87 they cannot account for. `BoardQueryTests` asserts the reconciliation.
+- **Chat is a real PM turn.** `POST /api/chat` runs `PmChat.SendAsync` in the background
+  (a turn takes far longer than a browser will wait) behind a semaphore, and the reply
+  arrives via the same polling that drives the rest. Note `forge run` still has no
+  concurrency guard, so the board's lock protects only its own writers.
+
 ### Logging / observability [DECIDED] (settled while building the event log)
 - **Six columns, fixed:** `timestamp | project | task | domain | action | message`.
   `project` is on every line (the story); `task` is the unit within it and is

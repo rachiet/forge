@@ -12,6 +12,17 @@
     <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
   </ItemGroup>
 
+  <!-- `forge board` hosts a small local API for the client's progress page. A framework
+       reference rather than a second executable: one binary keeps the CLI the single
+       entry point, and the web host only exists while that command runs. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Forge.Core\Forge.Core.csproj" />
   </ItemGroup>

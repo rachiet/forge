@@ -162,6 +162,14 @@ public sealed class TaskRunner(
         foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
         {
             _tasks.SetParent(child.Id, feature.Id);
+
+            // A child inherits the Feature's milestone unless the Principal named one
+            // itself. Mechanical rather than asked-for: the client's progress view groups
+            // by milestone, and a child that quietly lands with none would silently drop
+            // its cost out of that view (Principle 6 — the harness enforces).
+            if (feature.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
+                _tasks.SetMilestone(child.Id, milestone);
+
             if (_tasks.Get(child.Id).Status == TaskStatus.Created)
                 Transition(child.Id, TaskStatus.Ready, log);
         }

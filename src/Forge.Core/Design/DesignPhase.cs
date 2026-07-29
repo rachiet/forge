@@ -60,8 +60,10 @@ public sealed class DesignPhase(
         var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
+        var brief = (isChangeRequest ? ChangeRequestBrief() : Brief()) + MilestoneSection();
+
         var result = await loop
-            .RunChatAsync([new LlmMessage("user", isChangeRequest ? ChangeRequestBrief() : Brief())], executor, ct)
+            .RunChatAsync([new LlmMessage("user", brief)], executor, ct)
             .ConfigureAwait(false);
 
         // The design docs are the Principal's artifacts; they go straight to trunk,
@@ -114,6 +116,37 @@ public sealed class DesignPhase(
         (logger ?? ForgeLogger.Null)
             .Message($"Client signed off on the design — {pending.Count} task(s) released to the board");
         return pending.Count;
+    }
+
+    /// <summary>
+    /// The PM's milestone plan, appended to whichever brief is running.
+    ///
+    /// Without this the Principal cannot attach a task to a milestone even though
+    /// `create_task` has always accepted one: the ids live in a table it never sees,
+    /// so every task was created with a null milestone and the client's progress view
+    /// had nothing to group by. Ids are listed explicitly because that is what
+    /// `create_task(milestone: N)` takes.
+    /// </summary>
+    private string MilestoneSection()
+    {
+        var milestones = new MilestoneRepository(conn).List();
+        if (milestones.Count == 0) return "";
+
+        var lines = string.Join("\n", milestones.Select(m => $"- id {m.Id}: {m.Name}"));
+        return $"""
+
+
+            ## Milestones
+
+            The PM has agreed this milestone plan with the client:
+
+            {lines}
+
+            Pass `milestone: <id>` on every `create_task` so each unit of work belongs to
+            the milestone it advances. The client watches progress and cost per milestone,
+            so a task with no milestone is invisible to them. If a task genuinely serves no
+            milestone (pure scaffolding, say), leave it off rather than guessing.
+            """;
     }
 
     private static string Brief() => """

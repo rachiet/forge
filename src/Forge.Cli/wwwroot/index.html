@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forge — project board</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔨</text></svg>">
+<style>
+  :root {
+    --ground:#EEF1F5; --surface:#FFF; --sunken:#E3E8EF; --line:#D3DAE3;
+    --ink:#161B22; --muted:#5C6774; --faint:#8894A3; --accent:#2E6F8E;
+    --done:#23815076; --done-ink:#1C6B44; --active:#1FA76A; --pending:#B8690F;
+    --shadow:0 1px 2px rgba(22,27,34,.06), 0 8px 24px -12px rgba(22,27,34,.18);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0E1218; --surface:#161C25; --sunken:#1D242F; --line:#29323F;
+      --ink:#DFE6EF; --muted:#94A1B2; --faint:#6B7889; --accent:#5FA8CC;
+      --done:#2E8B5E80; --done-ink:#4FBE87; --active:#34D399; --pending:#E0913C;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+         line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .page { max-width:1240px; margin:0 auto; padding:24px 20px 40px; }
+
+  .topbar { display:flex; flex-wrap:wrap; align-items:baseline; gap:12px 20px;
+            padding-bottom:18px; border-bottom:2px solid var(--line); margin-bottom:22px; }
+  .brand { font-family:var(--mono); font-size:.68rem; letter-spacing:.18em;
+           text-transform:uppercase; color:var(--faint); flex-basis:100%; }
+  .project { font-size:1.9rem; font-weight:640; letter-spacing:-.02em; margin:0; }
+  .runpill { font-family:var(--mono); font-size:.7rem; letter-spacing:.06em; padding:3px 10px;
+             border-radius:999px; background:color-mix(in srgb, var(--active) 16%, transparent);
+             color:var(--active); border:1px solid color-mix(in srgb, var(--active) 40%, transparent); }
+  .runpill[data-state="planning"] { background:color-mix(in srgb, var(--pending) 16%, transparent);
+             color:var(--pending); border-color:color-mix(in srgb, var(--pending) 40%, transparent); }
+  .grandtotal { margin-left:auto; text-align:right; }
+  .grandtotal .n { font-family:var(--mono); font-size:1.9rem; font-weight:600;
+                   font-variant-numeric:tabular-nums; letter-spacing:-.02em; display:block; }
+  .grandtotal .l { font-family:var(--mono); font-size:.62rem; letter-spacing:.16em;
+                   text-transform:uppercase; color:var(--faint); }
+
+  .grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:20px; align-items:start; }
+  @media (max-width:900px) { .grid { grid-template-columns:1fr; } }
+  .rail { display:flex; flex-direction:column; gap:20px; min-width:0; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:10px;
+          box-shadow:var(--shadow); overflow:hidden; }
+  .card-head { display:flex; align-items:center; gap:10px; padding:13px 16px;
+               border-bottom:1px solid var(--line); background:var(--sunken); }
+  .card-head h2 { margin:0; font-family:var(--mono); font-size:.7rem; letter-spacing:.16em;
+                  text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .card-head .sub { margin-left:auto; font-family:var(--mono); font-size:.68rem;
+                    color:var(--faint); font-variant-numeric:tabular-nums; }
+
+  .row { display:grid; grid-template-columns:14px minmax(0,1fr) auto; align-items:center;
+         gap:12px; padding:11px 16px; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .row .name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.92rem; }
+  .row .cost { font-family:var(--mono); font-size:.88rem; font-variant-numeric:tabular-nums; }
+  .row .cost.none { color:var(--faint); }
+  .dot { width:10px; height:10px; border-radius:50%; justify-self:center; }
+  .st-done .dot { background:var(--done-ink); }
+  .st-active .dot { background:var(--active); animation:pulse 1.5s ease-in-out infinite; }
+  .st-pending .dot { background:transparent; border:2px solid var(--pending); }
+  .st-done { background:color-mix(in srgb, var(--done) 22%, transparent); }
+  .st-active { background:color-mix(in srgb, var(--active) 12%, transparent);
+               box-shadow:inset 3px 0 0 var(--active); }
+  .st-pending { box-shadow:inset 3px 0 0 color-mix(in srgb, var(--pending) 55%, transparent); }
+  @keyframes pulse {
+    0%,100% { opacity:1; box-shadow:0 0 0 0 color-mix(in srgb, var(--active) 55%, transparent); }
+    50% { opacity:.55; box-shadow:0 0 0 5px color-mix(in srgb, var(--active) 0%, transparent); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .st-active .dot { animation:none; outline:2px solid var(--active); outline-offset:2px; }
+  }
+  .row-total { display:grid; grid-template-columns:14px minmax(0,1fr) auto; gap:12px; padding:12px 16px;
+               border-top:2px solid var(--line); background:var(--sunken); font-weight:620; }
+  .row-total .name { font-family:var(--mono); font-size:.7rem; letter-spacing:.14em;
+                     text-transform:uppercase; color:var(--muted); }
+  .row-total .cost { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:.95rem; }
+
+  .agents { padding:6px 16px 14px; display:flex; flex-direction:column; }
+  .agent { display:grid; grid-template-columns:92px minmax(0,1fr) 72px; align-items:center;
+           gap:12px; padding:8px 0; }
+  .agent .who { font-family:var(--mono); font-size:.78rem; letter-spacing:.04em; color:var(--muted); }
+  .agent .track { height:9px; background:var(--sunken); border-radius:3px; overflow:hidden; }
+  /* display:block matters: an inline span ignores width and height, which renders every
+     bar as an empty track of identical length. */
+  .agent .fill { display:block; height:100%; min-width:2px; background:var(--accent);
+                 border-radius:3px; transition:width .4s ease; }
+  .agent .amt { font-family:var(--mono); font-size:.85rem; font-variant-numeric:tabular-nums; text-align:right; }
+
+  .chat { position:sticky; top:20px; display:flex; flex-direction:column; height:min(78vh,760px); }
+  @media (max-width:900px) { .chat { position:static; height:560px; } }
+  .thread { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:88%; font-size:.9rem; }
+  .msg .who { font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase;
+              color:var(--faint); display:block; margin-bottom:4px; }
+  .msg .bubble { padding:9px 12px; border-radius:10px; border:1px solid var(--line);
+                 background:var(--sunken); white-space:pre-wrap; word-wrap:break-word; }
+  .msg.you { align-self:flex-end; }
+  .msg.you .who { text-align:right; }
+  .msg.you .bubble { background:color-mix(in srgb, var(--accent) 14%, transparent);
+                     border-color:color-mix(in srgb, var(--accent) 34%, transparent); }
+  .thinking { font-family:var(--mono); font-size:.72rem; color:var(--faint); padding:0 16px 10px; }
+  .thinking span { animation:blink 1.4s infinite; }
+  @keyframes blink { 0%,100%{opacity:.3} 50%{opacity:1} }
+  .composer { border-top:1px solid var(--line); padding:12px; display:flex; gap:8px; background:var(--sunken); }
+  .composer input { flex:1; min-width:0; font:inherit; font-size:.9rem; color:var(--ink);
+                    background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 12px; }
+  .composer button { font-family:var(--mono); font-size:.74rem; letter-spacing:.08em; text-transform:uppercase;
+                     background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 16px; cursor:pointer; }
+  .composer button:disabled { opacity:.5; cursor:not-allowed; }
+  :is(input,button):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .placeholder { padding:26px 16px; text-align:center; color:var(--faint); }
+  .placeholder .bar { height:11px; border-radius:4px; background:var(--sunken); margin:9px auto; }
+  .placeholder p { font-size:.82rem; margin:16px 0 0; }
+  .err { margin:0; padding:10px 16px; font-size:.8rem; color:#fff;
+         background:color-mix(in srgb, #C0392B 82%, black); }
+  .offline { position:fixed; bottom:14px; right:14px; font-family:var(--mono); font-size:.7rem;
+             background:var(--pending); color:#fff; padding:6px 12px; border-radius:7px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span class="brand">Forge · client progress board</span>
+    <h1 class="project" id="projName">…</h1>
+    <span class="runpill" id="runPill">● …</span>
+    <div class="grandtotal">
+      <span class="n" id="grandTotal">$0.00</span>
+      <span class="l">total spend</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <main class="rail" id="rail"></main>
+
+    <aside class="card chat">
+      <div class="card-head">
+        <h2>Project manager</h2>
+        <span class="sub">your only interface</span>
+      </div>
+      <div class="thread" id="thread"></div>
+      <p class="thinking hidden" id="thinking">the project manager is replying<span>…</span></p>
+      <p class="err hidden" id="chatErr"></p>
+      <form class="composer" id="composer">
+        <input type="text" id="msg" placeholder="Message the project manager…"
+               aria-label="Message the project manager" autocomplete="off">
+        <button type="submit" id="send">Send</button>
+      </form>
+    </aside>
+  </div>
+</div>
+<div class="offline hidden" id="offline">board offline — retrying</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const usd = n => '$' + Number(n || 0).toFixed(2);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+// The ledger stores roles snake_case; "Pm" and "Qa" are not how anyone writes them.
+const ROLE = { pm:'PM', qa:'QA', principal:'Principal', engineer:'Engineer', researcher:'Researcher' };
+const roleName = r => ROLE[r] || r;
+
+let lastChatId = 0, sending = false;
+
+function rows(items) {
+  return items.map(i => `
+    <div class="row st-${esc(i.state)}">
+      <span class="dot"></span>
+      <span class="name" title="${esc(i.name)}">${esc(i.name)}</span>
+      <span class="cost${i.costUsd > 0 ? '' : ' none'}">${i.costUsd > 0 ? usd(i.costUsd) : '—'}</span>
+    </div>`).join('');
+}
+
+function section(title, sub, body, total) {
+  return `<section class="card">
+    <div class="card-head"><h2>${esc(title)}</h2><span class="sub">${esc(sub)}</span></div>
+    ${body}
+    ${total ? `<div class="row-total"><span></span><span class="name">${esc(total.label)}</span>
+       <span class="cost">${usd(total.value)}</span></div>` : ''}
+  </section>`;
+}
+
+function renderRail(d) {
+  if (!d.planned) {
+    $('rail').innerHTML = `<section class="card">
+      <div class="card-head"><h2>Not planned yet</h2></div>
+      <div class="placeholder">
+        <div class="bar" style="width:62%"></div><div class="bar" style="width:44%"></div>
+        <div class="bar" style="width:53%"></div>
+        <p>Milestones and features appear here once you and the project manager agree
+           the plan. Until then, the conversation is the whole page.</p>
+      </div></section>`;
+    return;
+  }
+
+  let html = '';
+  if (d.milestones.length) {
+    const done = d.milestones.filter(m => m.state === 'done').length;
+    html += section('Milestones', `${done} of ${d.milestones.length} complete`,
+      rows(d.milestones), { label: 'Project total', value: d.totalCostUsd });
+  }
+  if (d.features.length) {
+    const done = d.features.filter(f => f.state === 'done').length;
+    const sum = d.features.reduce((a, f) => a + f.costUsd, 0);
+    html += section('Features', `${done} of ${d.features.length} complete`,
+      rows(d.features), { label: 'Features subtotal', value: sum });
+  }
+
+  // Shown whenever it is non-zero: without it the milestone and feature figures do not
+  // add up to the total, and the client is left with money they cannot account for.
+  const outside = d.projectLevelCostUsd + d.unparentedTaskCostUsd;
+  if (outside > 0) {
+    html += section('Work outside features', `${Math.round(outside / d.totalCostUsd * 100)}% of spend`, `
+      <div class="row st-done"><span class="dot"></span>
+        <span class="name">Requirements, design &amp; acceptance testing</span>
+        <span class="cost">${usd(d.projectLevelCostUsd)}</span></div>
+      <div class="row st-done"><span class="dot"></span>
+        <span class="name">Bug fixes &amp; chores</span>
+        <span class="cost">${usd(d.unparentedTaskCostUsd)}</span></div>`);
+  }
+
+  if (d.agents.length) {
+    const max = Math.max(...d.agents.map(a => a.costUsd), 0.0001);
+    const calls = d.agents.reduce((a, x) => a + x.calls, 0);
+    html += section('Spend by agent', `${calls.toLocaleString()} calls`,
+      `<div class="agents">${d.agents.map(a => `
+        <div class="agent">
+          <span class="who">${esc(roleName(a.role))}</span>
+          <span class="track"><span class="fill" style="width:${(a.costUsd / max * 100).toFixed(1)}%"></span></span>
+          <span class="amt">${usd(a.costUsd)}</span>
+        </div>`).join('')}</div>`,
+      { label: 'All agents', value: d.totalCostUsd });
+  }
+  $('rail').innerHTML = html;
+}
+
+function renderChat(chat) {
+  const newest = chat.length ? chat[chat.length - 1].id : 0;
+  if (newest === lastChatId) return;             // nothing new; don't fight the scroll
+  lastChatId = newest;
+  const thread = $('thread');
+  const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 60;
+  thread.innerHTML = chat.map(m => `
+    <div class="msg ${m.from === 'client' ? 'you' : ''}">
+      <span class="who">${m.from === 'client' ? 'You' : 'PM'}</span>
+      <div class="bubble">${esc(m.text)}</div>
+    </div>`).join('');
+  if (atBottom) thread.scrollTop = thread.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/board');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    $('offline').classList.add('hidden');
+
+    $('projName').textContent = d.project;
+    $('grandTotal').textContent = usd(d.totalCostUsd);
+    const pill = $('runPill');
+    pill.textContent = '● ' + d.state;
+    pill.dataset.state = d.state;
+
+    renderRail(d);
+    renderChat(d.chat);
+
+    $('thinking').classList.toggle('hidden', !d.pmBusy);
+    $('send').disabled = d.pmBusy || sending;
+    $('chatErr').classList.toggle('hidden', !d.pmError);
+    if (d.pmError) $('chatErr').textContent = d.pmError;
+  } catch {
+    $('offline').classList.remove('hidden');
+  }
+}
+
+$('composer').addEventListener('submit', async e => {
+  e.preventDefault();
+  const input = $('msg');
+  const text = input.value.trim();
+  if (!text || sending) return;
+
+  sending = true; $('send').disabled = true;
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    if (r.ok) { input.value = ''; $('thinking').classList.remove('hidden'); }
+    else {
+      const body = await r.json().catch(() => ({}));
+      $('chatErr').textContent = body.error || 'Could not send that message.';
+      $('chatErr').classList.remove('hidden');
+    }
+  } finally {
+    sending = false;
+    poll();
+  }
+});
+
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>
