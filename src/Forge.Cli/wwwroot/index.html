@@ -443,8 +443,9 @@ async function poll() {
 
     $('thinking').classList.toggle('hidden', !d.pmBusy);
     $('send').disabled = d.pmBusy || sending;
-    $('chatErr').classList.toggle('hidden', !d.pmError);
-    if (d.pmError) $('chatErr').textContent = d.pmError;
+    const problem = d.pmError || d.runError;
+    $('chatErr').classList.toggle('hidden', !problem);
+    if (problem) $('chatErr').textContent = problem;
   } catch {
     $('offline').classList.remove('hidden');
   }

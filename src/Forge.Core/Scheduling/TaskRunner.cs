@@ -15,7 +15,11 @@ using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Core.Scheduling;
 
-public sealed record TaskRunOutcome(long TaskId, EndReason End, TaskStatus Status, string Summary);
+public sealed record TaskRunOutcome(
+    long TaskId, EndReason End, TaskStatus Status, string Summary,
+    // The project's dollar cap refused a call. Nothing on the board failed; the loop
+    // must stop pulling work until the client raises the cap.
+    bool ProjectBudgetExhausted = false);
 
 /// <summary>
 /// One serial worker (spec §1: v1 is one worker; the cap is config, not
@@ -146,6 +150,11 @@ public sealed class TaskRunner(
         var design = new DesignPhase(paths, project, conn, llm, vault, prompts, _log);
         var outcome = await design.RunAsync(ct).ConfigureAwait(false);
 
+        if (outcome.ProjectBudgetExhausted)
+            return new TaskRunOutcome(feature.Id, outcome.End, feature.Status,
+                $"Feature {feature.Id} decomposition paused — project budget exhausted.",
+                ProjectBudgetExhausted: true);
+
         // No tasks means the Principal pushed back (an ill-advised CR ends in escalate,
         // which leaves a pending pm message that NextPrincipalOwned skips) or the design
         // run crashed. Either way, leave the Feature in triage rather than activating an
@@ -224,11 +233,17 @@ public sealed class TaskRunner(
         _workspaces.Prepare(task, branch);
         var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
 
+        var before = _tasks.List().Select(t => t.Id).ToHashSet();
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
         var result = await RunWithCrashRetryAsync(() =>
             loop.RunTriageAsync(TriagePacket(task), _tasks.Get(task.Id), executor, ct)).ConfigureAwait(false);
 
+        ReleaseTriageSubtasks(task, before, log);
+
         var status = _tasks.Get(task.Id).Status;
+        if (result.ProjectBudgetExhausted)
+            return new TaskRunOutcome(task.Id, result.End, status,
+                $"Triage of task {task.Id} paused — project budget exhausted.", ProjectBudgetExhausted: true);
         // redirect → Ready (resolved); escalate → still owned but a pending pm message
         // parks it on a human. Anything else means triage itself failed to resolve it.
         if (status is TaskStatus.OutOfBudget or TaskStatus.Blocked && result.End != EndReason.Escalated)
@@ -236,6 +251,27 @@ public sealed class TaskRunner(
 
         return new TaskRunOutcome(task.Id, result.End, status,
             $"Triaged task {task.Id}: {result.ProgressNote ?? SnakeCaseEnum.ToSnakeCase(result.End)}.");
+    }
+
+    /// <summary>
+    /// Adopt and release whatever tasks the Principal created while triaging a stuck
+    /// task. Without this they were born `created` and STAYED there — the only release
+    /// paths were design sign-off and Feature decomposition, neither of which runs after
+    /// a triage — so a "break it down" verdict quietly deadlocked the board with work
+    /// nobody could claim. Same harness-owned back-fill as decomposition: parent them to
+    /// the task they decompose, inherit its milestone, and flip them claimable.
+    /// </summary>
+    private void ReleaseTriageSubtasks(TaskRecord triaged, IReadOnlySet<long> before, ForgeLogger log)
+    {
+        foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
+        {
+            _tasks.SetParent(child.Id, triaged.Id);
+            if (triaged.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
+                _tasks.SetMilestone(child.Id, milestone);
+            if (_tasks.Get(child.Id).Status == TaskStatus.Created)
+                Transition(child.Id, TaskStatus.Ready, log);
+            log.Message($"Triage subtask {child.Id} adopted under task {triaged.Id} and released.");
+        }
     }
 
     /// <summary>
@@ -370,6 +406,13 @@ public sealed class TaskRunner(
         var result = await RunWithCrashRetryAsync(() =>
             loop.RunChatAsync([new LlmMessage("user", QaBrief())], executor, ct)).ConfigureAwait(false);
 
+        // A spent project cap refused QA's calls: the round never really ran, so the
+        // watermark must not move (that would falsely mark the project verified) and no
+        // qa_escalated flag is set — raising the budget re-runs QA as if nothing happened.
+        if (result.ProjectBudgetExhausted)
+            return new TaskRunOutcome(0, result.End, TaskStatus.Qa,
+                "QA paused — project budget exhausted.", ProjectBudgetExhausted: true);
+
         // A provider outage that outlasts the retries: don't advance the watermark (that
         // would falsely mark the project QA-verified) and stop the loop; surface it to the
         // human via the PM. qa_escalated is cleared on the next design sign-off.
@@ -445,6 +488,9 @@ public sealed class TaskRunner(
             loop.RunTriageAsync(BugTriagePacket(bug), _tasks.Get(bug.Id), executor, ct)).ConfigureAwait(false);
 
         var status = _tasks.Get(bug.Id).Status;
+        if (result.ProjectBudgetExhausted)
+            return new TaskRunOutcome(bug.Id, result.End, status,
+                $"Bug {bug.Id} triage paused — project budget exhausted.", ProjectBudgetExhausted: true);
         if (status == TaskStatus.Triage) // undecided (ran out) — hand it to a human, don't spin
         {
             var note = $"Bug {bug.Id} could not be triaged automatically — needs a human decision.";
@@ -708,12 +754,30 @@ public sealed class TaskRunner(
     {
         _workspaces.CommitAll(task.Id, $"wip(task {task.Id}): {result.End} after {result.Iterations} turns");
 
-        return result.End switch
+        return result switch
         {
-            EndReason.Crash when CrashCount(task.Id) <= CrashRetryCap => ResumeAfterCrash(task, result, log),
-            EndReason.Budget or EndReason.Iterations or EndReason.Crash => ParkOutOfBudget(task, result, log),
+            // The PROJECT cap, not this task's budget: the task did nothing wrong, so it
+            // is neither struck nor transitioned — the whole build pauses instead.
+            { ProjectBudgetExhausted: true } => PauseForProjectBudget(task, result, log),
+            { End: EndReason.Crash } when CrashCount(task.Id) <= CrashRetryCap => ResumeAfterCrash(task, result, log),
+            { End: EndReason.Budget or EndReason.Iterations or EndReason.Crash } => ParkOutOfBudget(task, result, log),
             _ => ParkBlocked(task, result, log),
         };
+    }
+
+    /// <summary>
+    /// The project's dollar cap is spent. Leave the task exactly as it stands —
+    /// claimable, workspace and note intact, no strike — so raising the budget and
+    /// pressing Start resumes it through the normal kill-and-resume path. Striking here
+    /// was the old failure: one exhausted cap marched every remaining task through the
+    /// strike ladder to blocked, and raising the budget found a wrecked board.
+    /// </summary>
+    private TaskRunOutcome PauseForProjectBudget(TaskRecord task, AgentRunResult result, ForgeLogger log)
+    {
+        var summary = $"Project budget exhausted — task {task.Id} left as-is to resume once the cap is raised.";
+        log.Event(EventType.LlmRefused, summary);
+        return new TaskRunOutcome(task.Id, result.End, _tasks.Get(task.Id).Status, summary,
+            ProjectBudgetExhausted: true);
     }
 
     private int CrashCount(long taskId) =>

@@ -18,7 +18,10 @@ public sealed record AgentRunResult(
     bool? ReviewApproved = null,
     string? ReviewFeedback = null,
     string? ReviewConvention = null,
-    string? RejectedBugReason = null);
+    string? RejectedBugReason = null,
+    // End == Budget with this set means the PROJECT cap refused the call — no task
+    // overran anything, so the runner must pause the build, never strike the task.
+    bool ProjectBudgetExhausted = false);
 
 /// <summary>
 /// The harness's inner loop (spec §4.1):
@@ -143,10 +146,12 @@ public sealed class AgentLoop(
             }
             catch (BudgetExhaustedException ex)
             {
-                // The supervisor refused the call; the loop's only job is to stop.
-                // TaskRunner.Park then moves the task to OutOfBudget and counts the strike.
+                // The supervisor refused the call; the loop's only job is to stop and say
+                // which budget it was. A task over its own budget goes to TaskRunner.Park
+                // (OutOfBudget, a strike); a spent PROJECT cap pauses the whole build.
                 log.Event(EventType.LlmRefused, ex.Message);
-                return Finish(instanceId, EndReason.Budget, iterations, toolset, task, log, ex.Message, lastMessage);
+                return Finish(instanceId, EndReason.Budget, iterations, toolset, task, log, ex.Message, lastMessage)
+                    with { ProjectBudgetExhausted = ex.ProjectCap };
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

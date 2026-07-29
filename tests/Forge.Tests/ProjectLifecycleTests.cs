@@ -196,4 +196,20 @@ public class ProjectLifecycleTests : IDisposable
     [InlineData("")]
     public void A_name_that_could_escape_the_data_root_is_refused(string name) =>
         Assert.Throws<ArgumentException>(() => ForgePaths.ValidName(name));
+
+    [Fact]
+    public async Task The_lease_beats_itself_so_a_long_task_cannot_be_mistaken_for_a_corpse()
+    {
+        // Beat() used to be the worker loop's job, called only BETWEEN tasks — and one
+        // task routinely outlasts the timeout, so the lease read stale mid-task and a
+        // second build could start. The timer makes liveness independent of task length.
+        using var lease = WorkerLease.TryAcquire(_paths, "alpha", beatEvery: TimeSpan.FromMilliseconds(40));
+        Assert.NotNull(lease);
+
+        var first = WorkerLease.Current(_paths)!.HeartbeatAt;
+        await Task.Delay(300);
+        var later = WorkerLease.Current(_paths)!.HeartbeatAt;
+
+        Assert.True(later > first, $"heartbeat never advanced ({first:O} → {later:O})");
+    }
 }

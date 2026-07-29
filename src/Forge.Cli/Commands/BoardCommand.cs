@@ -38,8 +38,12 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     }
 
     private readonly SemaphoreSlim _chatLock = new(1, 1);
-    private readonly Dictionary<string, bool> _pmBusy = new();
-    private readonly Dictionary<string, string> _pmError = new();
+    // Concurrent on purpose: written from background PM/worker tasks and read on
+    // ASP.NET request threads at the same time — a plain Dictionary is undefined
+    // behaviour under that access pattern.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _pmBusy = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _pmError = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _runError = new();
 
     // The build the board itself is running, if any. One at a time by decision, and
     // enforced across the whole machine by WorkerLease — a terminal `forge run` takes
@@ -130,6 +134,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 Spec = snapshot.SpecReady ? SpecReader.Read(_paths, project) : [],
                 PmBusy = _pmBusy.GetValueOrDefault(project),
                 PmError = _pmError.GetValueOrDefault(project),
+                RunError = _runError.GetValueOrDefault(project),
                 Worker = worker,
                 Building = worker?.Project == project,
             });
@@ -184,6 +189,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                             "Only one project builds at a time.",
                 });
 
+            _runError.TryRemove(request.Project, out _);
             _workerCancel = new CancellationTokenSource();
             _workerProject = request.Project;
             _worker = Task.Run(() => RunWorkerAsync(dbPath, request.Project, _workerCancel.Token));
@@ -252,7 +258,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     {
         await _chatLock.WaitAsync().ConfigureAwait(false);
         _pmBusy[project] = true;
-        _pmError.Remove(project);
+        _pmError.TryRemove(project, out _);
         try
         {
             using var conn = Database.OpenProject(dbPath);
@@ -283,7 +289,16 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     private async Task RunWorkerAsync(string dbPath, string project, CancellationToken ct)
     {
         using var lease = WorkerLease.TryAcquire(_paths, project);
-        if (lease is null) return;
+        if (lease is null)
+        {
+            // The client got a 202 before we got here; without this line a lost race
+            // (a terminal run grabbed the lease first) would look like a dead button.
+            _runError[project] = WorkerLease.Current(_paths) is { } held
+                ? $"'{held.Project}' is already building (pid {held.Pid}) — one build at a time."
+                : "Could not start: another worker grabbed the lease first.";
+            return;
+        }
+        _runError.TryRemove(project, out _);
 
         using var conn = Database.OpenProject(dbPath);
         using var sink = new FileLogSink(_paths.ProjectLog(project));
@@ -299,6 +314,14 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 lease.Beat();
                 var outcome = await runner.RunNextByPriorityAsync(ct).ConfigureAwait(false);
                 if (outcome is null) break;      // board drained
+                if (outcome.ProjectBudgetExhausted)
+                {
+                    // Nothing failed; the cap is spent. Stop pulling work — the page's
+                    // budget strip explains, and Raise + Start resumes from here.
+                    _runError[project] = "Project budget exhausted — the build is paused. " +
+                                         "Raise the budget and press Start to continue.";
+                    break;
+                }
             }
         }
         catch (OperationCanceledException) { /* the client pressed stop */ }

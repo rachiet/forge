@@ -57,16 +57,25 @@ public interface ILlmClient
 /// so the amounts are carried as pre-formatted text rather than forced into a
 /// single unit that would fit neither.
 /// </summary>
-public sealed class BudgetExhaustedException(string scope, string spent, string budget)
+public sealed class BudgetExhaustedException(string scope, string spent, string budget, bool projectCap)
     : InvalidOperationException($"{scope} budget exhausted: {spent} spent of {budget}. LLM call refused.")
 {
     public string Scope { get; } = scope;
     public string Spent { get; } = spent;
     public string Budget { get; } = budget;
 
+    /// <summary>
+    /// True when the PROJECT's dollar cap is spent, false when one task's token budget
+    /// is. The distinction decides everything downstream: a task over its own budget is
+    /// that task's failure (strike it, hand it to the Principal), but a project over its
+    /// cap is a client money decision — no task did anything wrong, so nothing may be
+    /// struck; the whole build pauses until the client raises the cap.
+    /// </summary>
+    public bool ProjectCap { get; } = projectCap;
+
     public static BudgetExhaustedException Tokens(string scope, long spent, long budget) =>
-        new(scope, $"{spent:N0} tokens", $"{budget:N0}");
+        new(scope, $"{spent:N0} tokens", $"{budget:N0}", projectCap: false);
 
     public static BudgetExhaustedException Usd(string scope, decimal spent, decimal budget) =>
-        new(scope, $"${spent:F4}", $"${budget:F2}");
+        new(scope, $"${spent:F4}", $"${budget:F2}", projectCap: true);
 }

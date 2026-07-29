@@ -33,15 +33,25 @@ public sealed class WorkerLease : IDisposable
 {
     private readonly string _path;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Timer? _autoBeat;
+    private readonly object _gate = new();
     private WorkerStatus _status;
     private bool _released;
 
-    private WorkerLease(string path, WorkerStatus status, Func<DateTimeOffset> clock)
+    private WorkerLease(string path, WorkerStatus status, Func<DateTimeOffset> clock, TimeSpan? beatEvery)
     {
         _path = path;
         _status = status;
         _clock = clock;
         Write();
+
+        // The lease beats ITSELF while held. Leaving Beat() to the worker's loop was
+        // the original design and it was wrong: a single task run is many LLM calls and
+        // routinely outlasts the 90s timeout, at which point the lease read as stale
+        // mid-task and a second build could start — the exact collision this type
+        // exists to prevent. A timer is indifferent to how long one task takes.
+        var interval = beatEvery ?? TimeSpan.FromTicks(WorkerStatus.Timeout.Ticks / 3);
+        _autoBeat = new Timer(_ => Beat(), null, interval, interval);
     }
 
     public static string PathFor(ForgePaths paths) => Path.Combine(paths.DataRoot, "worker.json");
@@ -59,7 +69,8 @@ public sealed class WorkerLease : IDisposable
     /// rather than an OS lock: the holder may be a different process on a different
     /// terminal, and the heartbeat is what makes a stale claim recoverable.
     /// </summary>
-    public static WorkerLease? TryAcquire(ForgePaths paths, string project, Func<DateTimeOffset>? clock = null)
+    public static WorkerLease? TryAcquire(
+        ForgePaths paths, string project, Func<DateTimeOffset>? clock = null, TimeSpan? beatEvery = null)
     {
         clock ??= () => DateTimeOffset.UtcNow;
         var path = PathFor(paths);
@@ -68,15 +79,19 @@ public sealed class WorkerLease : IDisposable
         if (Read(path) is { } held && held.IsLive(now)) return null;
 
         return new WorkerLease(path,
-            new WorkerStatus(project, Environment.ProcessId, now, now), clock);
+            new WorkerStatus(project, Environment.ProcessId, now, now), clock, beatEvery);
     }
 
-    /// <summary>Called as the worker loops; silence is what frees the lease.</summary>
+    /// <summary>Refresh the heartbeat; silence is what frees the lease. The internal
+    /// timer calls this on its own — the manual call is belt-and-braces per loop tick.</summary>
     public void Beat()
     {
-        if (_released) return;
-        _status = _status with { HeartbeatAt = _clock() };
-        Write();
+        lock (_gate)
+        {
+            if (_released) return;
+            _status = _status with { HeartbeatAt = _clock() };
+            Write();
+        }
     }
 
     private void Write()
@@ -111,8 +126,12 @@ public sealed class WorkerLease : IDisposable
 
     public void Dispose()
     {
-        if (_released) return;
-        _released = true;
+        lock (_gate)
+        {
+            if (_released) return;
+            _released = true;
+        }
+        _autoBeat?.Dispose();
         try
         {
             if (File.Exists(_path)) File.Delete(_path);

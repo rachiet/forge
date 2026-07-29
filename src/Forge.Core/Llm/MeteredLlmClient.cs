@@ -53,7 +53,14 @@ public sealed class MeteredLlmClient(
             var spent = _ledger.ProjectTotals().CostUsd;
             if (spent >= budget)
             {
-                QueueBudgetEscalation(attribution, "Project", $"${spent:F4}", $"${budget:F2}");
+                // Escalate once, not once per refused call: after the cap trips, every
+                // task the loop touches is refused, and each refusal landing its own
+                // escalation would bury the PM in identical messages.
+                if (!_messages.Pending("pm").Any(m =>
+                        m.Type == MessageType.Escalation && m.Payload.StartsWith("Project budget exhausted")))
+                {
+                    QueueBudgetEscalation(attribution, "Project", $"${spent:F4}", $"${budget:F2}");
+                }
                 throw BudgetExhaustedException.Usd("Project", spent, budget);
             }
         }

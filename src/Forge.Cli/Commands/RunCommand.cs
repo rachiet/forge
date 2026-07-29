@@ -96,6 +96,13 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
             }
             Report(outcome);
             ran++;
+            if (outcome.ProjectBudgetExhausted)
+            {
+                AnsiConsole.MarkupLine(
+                    "[yellow]Project budget exhausted — the build is paused, nothing was struck.[/] " +
+                    "Raise the budget (the board's Raise button, or forge run --project-budget) and run again.");
+                break;
+            }
         }
         while (settings.Loop && !cancellationToken.IsCancellationRequested);
 

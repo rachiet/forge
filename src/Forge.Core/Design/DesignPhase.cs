@@ -15,7 +15,10 @@ public sealed record DesignOutcome(
     EndReason End,
     int TasksCreated,
     CoverageReport Coverage,
-    string Summary);
+    string Summary,
+    // The project's dollar cap refused the run — pause the build, don't treat the
+    // design (or a Feature decomposition reusing it) as having failed.
+    bool ProjectBudgetExhausted = false);
 
 /// <summary>
 /// The design phase (spec §7, M3): the Principal reads the requirements and
@@ -88,7 +91,7 @@ public sealed class DesignPhase(
         // progress note. Reply is kept first for any future chat-shaped design turn.
         var summary = result.Reply ?? result.ProgressNote
             ?? $"Design ended ({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns.";
-        return new DesignOutcome(result.End, created, coverage, summary);
+        return new DesignOutcome(result.End, created, coverage, summary, result.ProjectBudgetExhausted);
     }
 
     /// <summary>
