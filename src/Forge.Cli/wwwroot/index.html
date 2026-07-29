@@ -377,13 +377,20 @@ function renderChat(chat) {
   if (atBottom) thread.scrollTop = thread.scrollHeight;
 }
 
+let lastPickerHtml = '';
 async function refreshProjects() {
   const r = await fetch('/api/projects');
   const d = await r.json();
   providers = d.providers;
   const picker = $('projPicker');
-  picker.innerHTML = d.projects.map(p =>
+  const html = d.projects.map(p =>
     `<option value="${esc(p.name)}">${esc(p.name)} — ${esc(p.state)}</option>`).join('');
+  // Rebuilding the options collapses an open dropdown mid-choice; only touch the
+  // DOM when the list really changed, and never while the user is in it.
+  if (html !== lastPickerHtml && document.activeElement !== picker) {
+    picker.innerHTML = html;
+    lastPickerHtml = html;
+  }
   picker.classList.toggle('hidden', d.projects.length === 0);
 
   if (!d.projects.length) { showEmptyState(); return; }

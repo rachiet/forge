@@ -261,14 +261,23 @@ movable and shareable, so keys must not ride along in that payload.
   `cost_nanos` (USD × 1e-9, an integer so `SUM()` stays exact) and `priced_with` (the
   snapshot that priced it). Keeping the buckets is what makes a row's cost recomputable
   when a rate is corrected — the property that makes depending on an external feed safe.
-- **Two budget units, two jobs.** The **project** budget is USD (`--project-budget`),
-  enforced by summing `cost_nanos`. A **task** budget stays tokens and deliberately still
-  counts only `tokens_in + tokens_out`: it is an approximate guard on one runaway agent,
-  not a spend control, and it undercounts real traffic by ~25x because cache reads
-  dominate. That is knowingly tolerated; money safety is the dollar cap's job. Normalising
-  it is a question for the second provider (Anthropic excludes cached tokens from
-  `input_tokens`; OpenAI and Gemini include them), and changing it would require
-  re-baselining every default budget by roughly 20x.
+- **Two budget units, two jobs — and two different failure modes.** The **project**
+  budget is USD (stored per project; `--project-budget` overrides per invocation),
+  enforced by summing `cost_nanos` and re-read **per call** when unset on the CLI, so
+  raising it from the board takes effect mid-build. A **task** budget stays tokens and
+  deliberately still counts only `tokens_in + tokens_out`: an approximate guard on one
+  runaway agent, undercounting real traffic ~25x because cache reads dominate —
+  knowingly tolerated; money safety is the dollar cap's job.
+- **A spent project cap PAUSES; a spent task budget STRIKES.** They arrive as the same
+  `EndReason.Budget`, distinguished by `BudgetExhaustedException.ProjectCap` →
+  `AgentRunResult/TaskRunOutcome.ProjectBudgetExhausted`. Task-budget exhaustion is that
+  task's failure: OutOfBudget, a strike, the Principal's queue. Project-cap exhaustion is
+  a client money decision: the task is left exactly as it stands (claimable, no strike,
+  no transition), the loop stops pulling work, ONE escalation reaches the PM (deduped
+  against pending), and QA/triage phases short-circuit without moving the QA watermark —
+  a budget-refused QA round must never mark the project verified. The old behaviour
+  marched every remaining task through the strike ladder to blocked; do not reintroduce
+  it. Covered by `BudgetPauseTests`.
 - **Per-role spend needs no new attribution.** `token_ledger` has carried
   `agent_instance_id`, `role` and `task_id` since M0, so "what did the PM cost" is
   `GROUP BY role` (`LedgerRepository.SpendByRole`, shown by `forge log`). Role granularity
@@ -286,15 +295,22 @@ movable and shareable, so keys must not ride along in that payload.
 - **A read model, never a second source of truth** (`Board/BoardQuery.cs`). Every figure is
   queried from tasks/milestones/token_ledger/messages at request time, so the page cannot
   drift from the ledger. Nothing is cached or denormalised.
-- **Milestone state is derived from its tasks, not read from `milestones.status`** — the
-  same rule routing follows. Nothing ever advanced that column (all 8 of weatherboard's sat
-  at `planned` through a finished project), and a status column nobody writes is worse than
-  no column. done = all tasks done; active = any in flight or any done; else pending.
+- **Milestone state is derived from its tasks — there is NO stored status column.**
+  `milestones.status` was dropped (with `MilestoneStatus`): nothing ever advanced it past
+  `planned` through a whole finished project, and a stored status beside a derived one is
+  two sources of truth. done = all tasks done; active = any in flight or any done; else
+  pending. The same cleanup dropped write-only `messages.thread_id` and the dead
+  `projects.token_budget` on the global registry; `project_meta` accessors live on
+  `Db/ProjectMetaRepository`, not TaskRepository.
 - **Milestone linkage is the harness's job, not the model's.** `create_task`/`create_feature`
   accept `milestone`, the design brief now lists the PM's milestones with their ids
   (`DesignPhase.MilestoneSection`) so the Principal has something to pass, and
-  `TaskRunner` makes a child **inherit its Feature's milestone** when it adopts it. Before
-  this, `milestone_id` was never populated by any code path.
+  `TaskRunner` makes a child **inherit its Feature's milestone** when it adopts it —
+  including subtasks created during a stuck-task triage, which are also adopted, given
+  the parent's milestone, and **released to `ready`** (before that fix they were born
+  `created` with no release path and deadlocked the board). PM guidance: a change-request
+  Feature names its one milestone; the initial build passes NONE (it spans the whole
+  plan — the Principal assigns per task).
 - **"Work outside features" is a required section, not a nicety.** ~15% of calls carry no
   `task_id` at all (PM chat, design, QA) and bugs/chores sit under no Feature — on
   weatherboard, features were $15.58 of a $23.45 total. Without that row the client sees
@@ -323,7 +339,12 @@ movable and shareable, so keys must not ride along in that payload.
   board's Start button and a terminal `forge run` take it, so they cannot collide on one
   database. Staleness is judged by the heartbeat rather than file mtime, so a crashed
   worker frees the lease by falling silent. This finally closes the "forge run has no
-  concurrency guard" hazard.
+  concurrency guard" hazard. Two properties are load-bearing: the lease **beats itself**
+  on an internal timer (a single task run routinely outlasts the 90s timeout — beating
+  only between tasks let the lease read stale mid-task, re-opening the exact collision it
+  prevents), and acquisition is **atomic** (`FileMode.CreateNew`, not check-then-write,
+  which let two simultaneous acquirers both win). Stopping mid-task is safe by design:
+  the cancelled instance parks and the task resumes via the normal kill-and-resume path.
 - **"Building" and "working" are different facts and stay separate.** `state` is how far
   the plan has got (from the data); `building` is whether a worker is alive this second
   (from the lease). A project can sit at `building` with nothing running, and the client

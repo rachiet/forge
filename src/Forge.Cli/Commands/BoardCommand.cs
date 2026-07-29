@@ -186,6 +186,8 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 _workerCancel?.Cancel();
                 return Results.Accepted();
             }
+            if (request.Action != "start")
+                return Results.BadRequest(new { error = $"Unknown action '{request.Action}' — start or stop." });
 
             if (_worker is { IsCompleted: false })
                 return Results.Conflict(new { error = $"Already building {_workerProject}." });
@@ -245,15 +247,8 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             try
             {
                 using var conn = Database.OpenProject(dbPath);
-                var snapshot = new BoardQuery(conn, name).Snapshot(chatLimit: 0);
-                projects.Add(new
-                {
-                    name,
-                    state = snapshot.State,
-                    totalCostUsd = snapshot.TotalCostUsd,
-                    budgetUsd = snapshot.BudgetUsd,
-                    provider = snapshot.Provider,
-                });
+                var (state, totalCostUsd, budgetUsd, provider) = new BoardQuery(conn, name).Summary();
+                projects.Add(new { name, state, totalCostUsd, budgetUsd, provider });
             }
             catch (Exception ex)
             {

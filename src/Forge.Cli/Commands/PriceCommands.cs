@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Forge.Core;
 using Forge.Core.Llm;
 using Forge.Core.Llm.Pricing;
@@ -14,16 +15,38 @@ namespace Forge.Cli.Commands;
 /// </summary>
 public sealed class PricesShowCommand : Command<PricesShowCommand.Settings>
 {
-    public sealed class Settings : CommandSettings;
+    public sealed class Settings : CommandSettings
+    {
+        [CommandOption("--project <NAME>")]
+        [Description("Show the models this project will actually run on (its stored provider), not the machine default.")]
+        public string? Project { get; init; }
+    }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken ct)
     {
         var paths = ForgePaths.Resolve();
-        var config = LlmConfig.Load(paths.DataRoot);
+
+        // Providers are per project now; a machine-level view can be actively wrong
+        // about what a given build will cost.
+        string? projectProvider = null;
+        if (settings.Project is { Length: > 0 } name)
+        {
+            var dbPath = paths.ProjectDb(name);
+            if (!File.Exists(dbPath))
+            {
+                AnsiConsole.MarkupLineInterpolated($"[red]No project '{name}' at {dbPath}.[/]");
+                return 1;
+            }
+            using var conn = Forge.Core.Db.Database.OpenProject(dbPath);
+            projectProvider = new ProjectSettings(conn).Provider;
+        }
+
+        var config = LlmConfig.Load(paths.DataRoot, projectProvider);
         var catalog = LlmSetup.Prices(paths);
         var client = LlmClientFactory.Create(config);
 
-        AnsiConsole.MarkupLineInterpolated($"[bold]Provider[/]  {config.Provider}");
+        var scope = settings.Project is { Length: > 0 } proj ? $"project {proj}" : "machine default";
+        AnsiConsole.MarkupLineInterpolated($"[bold]Provider[/]  {config.Provider}  ({scope})");
 
         try
         {

@@ -16,10 +16,23 @@ public static class SpecReader
 {
     private const string RequirementsDir = "docs/requirements";
 
+    /// <summary>
+    /// Keyed by repo path, valid while trunk's HEAD is unchanged. The page polls every
+    /// 3s and a spec of N files costs N+1 git subprocesses to read — but between
+    /// commits the answer cannot differ, so one rev-parse per poll replaces the lot.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        string, (string Sha, IReadOnlyList<SpecSection> Sections)> Cache = new();
+
     public static IReadOnlyList<SpecSection> Read(ForgePaths paths, string project)
     {
         var repo = paths.ProjectBareRepo(project);
         if (!Directory.Exists(repo)) return [];
+
+        var head = Git.Run(repo, "rev-parse", WorkspaceManager.TrunkBranch);
+        if (head.ExitCode != 0) return [];
+        var sha = head.Stdout.Trim();
+        if (Cache.TryGetValue(repo, out var cached) && cached.Sha == sha) return cached.Sections;
 
         var listing = Git.Run(repo, "ls-tree", "--name-only",
             $"{WorkspaceManager.TrunkBranch}:{RequirementsDir}");
@@ -35,6 +48,7 @@ public static class SpecReader
             if (body.ExitCode != 0) continue;
             sections.Add(new SpecSection(file, TitleOf(body.Stdout, file), body.Stdout));
         }
+        Cache[repo] = (sha, sections);
         return sections;
     }
 

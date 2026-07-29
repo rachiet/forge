@@ -59,6 +59,20 @@ public sealed class BoardQuery(IDbConnection conn, string project)
         ), 0)
         """;
 
+    /// <summary>What the dropdown needs and nothing more — the full snapshot pulls
+    /// chat, agents and the reconciliation buckets, which the project LIST never shows,
+    /// and it is queried for every project on every poll.</summary>
+    public (string State, decimal TotalCostUsd, decimal? BudgetUsd, string? Provider) Summary()
+    {
+        var settings = new ProjectSettings(conn);
+        return (
+            ProjectState(Milestones(), Features()),
+            LedgerRepository.FromNanos(
+                conn.ExecuteScalar<long>("SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger")),
+            settings.BudgetUsd,
+            settings.Provider);
+    }
+
     public BoardSnapshot Snapshot(int chatLimit = 200)
     {
         var milestones = Milestones();
