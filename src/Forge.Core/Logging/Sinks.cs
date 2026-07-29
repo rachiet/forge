@@ -16,7 +16,12 @@ public sealed class FileLogSink : ILogSink
     {
         Path = path;
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-        _writer = new StreamWriter(path, append: true) { AutoFlush = true };
+        // FileShare.ReadWrite, because two writers on one project log is now a real
+        // shape: the board's PM chat turn and its worker run in one process but hold
+        // separate sinks, and a terminal `forge log` may read alongside. The default
+        // (FileShare.Read) made the second open THROW on Windows.
+        _writer = new StreamWriter(new FileStream(
+            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
     }
 
     public void Write(LogEntry entry)

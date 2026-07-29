@@ -187,4 +187,30 @@ public class BoardQueryTests : IDisposable
 
         Assert.Equal("complete", Board().State);
     }
+
+    [Fact]
+    public void A_cancelled_features_spend_still_reconciles_instead_of_vanishing()
+    {
+        // The features section hides a cancelled feature — but its money must not
+        // disappear with it, or the client sees a total no section explains.
+        var kept = Task(TaskType.Feature, "Kept feature");
+        var keptChild = Task(TaskType.Task, "kept child", parent: kept.Id);
+        var cancelled = Task(TaskType.Feature, "Cancelled feature");
+        var orphan = Task(TaskType.Task, "cancelled child", parent: cancelled.Id);
+        _tasks.Transition(cancelled.Id, TaskStatus.Cancelled);
+
+        Spend(keptChild.Id, 3.00m);
+        Spend(cancelled.Id, 0.40m);   // the cancelled feature's own decomposition turn
+        Spend(orphan.Id, 1.60m);
+
+        var board = Board();
+
+        Assert.Single(board.Features);                       // the cancelled one is hidden
+        var features = board.Features.Sum(f => f.CostUsd);
+        Assert.Equal(3.00m, features);
+        Assert.Equal(2.00m, board.UnparentedTaskCostUsd);    // 0.40 + 1.60 land here
+
+        Assert.Equal(board.TotalCostUsd,
+            features + board.ProjectLevelCostUsd + board.UnparentedTaskCostUsd);
+    }
 }

@@ -65,21 +65,42 @@ public sealed class WorkerLease : IDisposable
     }
 
     /// <summary>
-    /// Take the lease, or return null if someone else holds it. Checked-then-written
-    /// rather than an OS lock: the holder may be a different process on a different
-    /// terminal, and the heartbeat is what makes a stale claim recoverable.
+    /// Take the lease, or return null if someone else holds it. The claim itself is
+    /// atomic — `FileMode.CreateNew` is create-or-fail at the OS level — so two
+    /// processes racing here cannot both win, which a read-then-write check allowed:
+    /// both would read "no live lease" and both would proceed. A stale file (dead
+    /// holder) is deleted and the claim retried; if a rival slips into that gap and
+    /// creates first, our retry fails and we correctly lose.
     /// </summary>
     public static WorkerLease? TryAcquire(
         ForgePaths paths, string project, Func<DateTimeOffset>? clock = null, TimeSpan? beatEvery = null)
     {
         clock ??= () => DateTimeOffset.UtcNow;
         var path = PathFor(paths);
-        var now = clock();
 
-        if (Read(path) is { } held && held.IsLive(now)) return null;
-
-        return new WorkerLease(path,
-            new WorkerStatus(project, Environment.ProcessId, now, now), clock, beatEvery);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var now = clock();
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                var status = new WorkerStatus(project, Environment.ProcessId, now, now);
+                using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+                using (var writer = new StreamWriter(stream))
+                {
+                    writer.Write(JsonSerializer.Serialize(status));
+                }
+                return new WorkerLease(path, status, clock, beatEvery);
+            }
+            catch (IOException)
+            {
+                // The file exists: someone holds (or held) the lease.
+                if (Read(path) is { } held && held.IsLive(now)) return null;
+                try { File.Delete(path); }             // dead holder — clear and retry once
+                catch (IOException) { return null; }   // rival cleaning up too; let them win
+            }
+        }
+        return null;
     }
 
     /// <summary>Refresh the heartbeat; silence is what frees the lease. The internal

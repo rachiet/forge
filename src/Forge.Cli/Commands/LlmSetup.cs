@@ -31,7 +31,11 @@ internal static class LlmSetup
             LlmClientFactory.Create(config),
             conn,
             Prices(paths, logger),
-            projectBudgetUsd ?? settings.BudgetUsd);
+            // An explicit CLI flag is a fixed cap for this invocation; otherwise the
+            // stored setting is read per call, so the board's Raise button takes
+            // effect on a build already in flight.
+            projectBudgetUsd,
+            liveBudgetUsd: () => settings.BudgetUsd);
     }
 
     public static PriceCatalog Prices(ForgePaths paths, ForgeLogger? logger = null) =>

@@ -57,6 +57,14 @@ public sealed record LlmConfig
             }
         }
 
+        // Keys as the operator wrote them: "Reasoning" must mean the reasoning tier.
+        // PropertyNameCaseInsensitive covers property NAMES, not dictionary keys, so
+        // without this rebuild a mis-cased override was silently ignored.
+        config = config with
+        {
+            Models = new Dictionary<string, string>(config.Models, StringComparer.OrdinalIgnoreCase),
+        };
+
         // Precedence, most specific first: the environment (a one-off override), then
         // the project's own choice, then the machine-wide file.
         if (Environment.GetEnvironmentVariable(ProviderEnvVar) is { Length: > 0 } provider)

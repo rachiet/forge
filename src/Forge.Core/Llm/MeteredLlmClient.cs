@@ -26,7 +26,8 @@ public sealed class MeteredLlmClient(
     ILlmClient inner,
     IDbConnection projectConn,
     PriceCatalog prices,
-    decimal? projectBudgetUsd = null) : ILlmClient
+    decimal? projectBudgetUsd = null,
+    Func<decimal?>? liveBudgetUsd = null) : ILlmClient
 {
     private const double NudgeThreshold = 0.70;
 
@@ -48,7 +49,10 @@ public sealed class MeteredLlmClient(
 
     private void RefuseIfExhausted(LlmAttribution attribution)
     {
-        if (projectBudgetUsd is { } budget)
+        // Re-read per call when a live source is wired (the board passes the project's
+        // stored settings): the client raising the cap mid-build must take effect on the
+        // NEXT call, not after a restart. A fixed value (the CLI flag) still wins.
+        if ((projectBudgetUsd ?? liveBudgetUsd?.Invoke()) is { } budget)
         {
             var spent = _ledger.ProjectTotals().CostUsd;
             if (spent >= budget)

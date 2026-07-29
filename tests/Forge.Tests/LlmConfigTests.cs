@@ -103,4 +103,12 @@ public class LlmConfigTests : IDisposable
         Assert.Equal(ModelTier.Coding, AgentRecipe.Engineer.Tier);
         Assert.Equal(ModelTier.Reasoning, AgentRecipe.Principal.Tier);
     }
+
+    [Fact]
+    public void A_mis_cased_override_key_still_lands_on_its_tier()
+    {
+        WriteConfig("""{ "models": { "Reasoning": "pinned-model" } }""");
+
+        Assert.Equal("pinned-model", LlmConfig.Load(_root).Override(ModelTier.Reasoning));
+    }
 }

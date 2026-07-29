@@ -45,6 +45,14 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _pmError = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _runError = new();
 
+    // One sink per project for the life of the host: a chat turn and a worker running
+    // together used to open two writers on the same forge.log, interleaving lines and
+    // throwing outright on Windows. Never disposed per-turn; the process owns them.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FileLogSink> _sinks = new();
+
+    private ForgeLogger LoggerFor(string project) => new(
+        _sinks.GetOrAdd(project, p => new FileLogSink(_paths.ProjectLog(p))), project);
+
     // The build the board itself is running, if any. One at a time by decision, and
     // enforced across the whole machine by WorkerLease — a terminal `forge run` takes
     // the same lease, so a Start click cannot collide with one.
@@ -202,6 +210,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
 
         await app.RunAsync(cancellationToken).ConfigureAwait(false);
         _workerCancel?.Cancel();
+        foreach (var sink in _sinks.Values) sink.Dispose();
         return 0;
     }
 
@@ -262,8 +271,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         try
         {
             using var conn = Database.OpenProject(dbPath);
-            using var sink = new FileLogSink(_paths.ProjectLog(project));
-            var logger = new ForgeLogger(sink, project);
+            var logger = LoggerFor(project);
             var chat = new PmChat(
                 _paths, project, conn, LlmSetup.Metered(_paths, conn, logger: logger),
                 new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger);
@@ -301,8 +309,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         _runError.TryRemove(project, out _);
 
         using var conn = Database.OpenProject(dbPath);
-        using var sink = new FileLogSink(_paths.ProjectLog(project));
-        var logger = new ForgeLogger(sink, project);
+        var logger = LoggerFor(project);
         var runner = new TaskRunner(
             _paths, project, conn, LlmSetup.Metered(_paths, conn, logger: logger),
             new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger);

@@ -194,4 +194,19 @@ public class MeteredLlmClientTests : IDisposable
         Assert.Equal("claude-opus-4-8", client.ModelFor(ModelTier.Reasoning));
         Assert.Equal("claude-sonnet-5", client.ModelFor(ModelTier.Coding));
     }
+
+    [Fact]
+    public async Task Raising_the_live_budget_takes_effect_on_the_next_call_without_a_restart()
+    {
+        decimal? cap = 0.001m;   // below one call's cost
+        var client = new MeteredLlmClient(
+            new FakeLlmClient(600, 500), _conn, TestPrices.Catalog, liveBudgetUsd: () => cap);
+
+        await client.CompleteAsync(Request(null));   // spends past the cap
+        await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(null)));
+
+        cap = 100m;   // the client pressed Raise — same instance, no restart
+        var response = await client.CompleteAsync(Request(null));
+        Assert.Equal("ok", response.Content);
+    }
 }

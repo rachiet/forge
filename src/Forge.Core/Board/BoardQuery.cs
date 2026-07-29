@@ -72,14 +72,21 @@ public sealed class BoardQuery(IDbConnection conn, string project)
         var projectLevel = LedgerRepository.FromNanos(conn.ExecuteScalar<long>(
             "SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger WHERE task_id IS NULL"));
 
-        // Task work that sits under no feature — bugs, chores, standalone tasks.
+        // Task work that sits under no feature THE PAGE SHOWS. The features section
+        // excludes cancelled/rejected features, so their subtrees — and their own
+        // ledger rows — must land here instead: money that appears in the total but in
+        // no section is money the client cannot account for, which is the one property
+        // this page must never lose. (Weatherboard really has a cancelled feature.)
         var unparented = LedgerRepository.FromNanos(conn.ExecuteScalar<long>("""
             SELECT COALESCE(SUM(l.cost_nanos),0)
             FROM token_ledger l
             JOIN tasks t ON t.id = l.task_id
-            WHERE t.type <> 'feature'
-              AND (t.parent_id IS NULL
-                   OR NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id = t.parent_id AND p.type = 'feature'))
+            WHERE (t.type <> 'feature'
+                   AND (t.parent_id IS NULL
+                        OR NOT EXISTS (SELECT 1 FROM tasks p
+                                       WHERE p.id = t.parent_id AND p.type = 'feature'
+                                         AND p.status NOT IN ('cancelled','rejected'))))
+               OR (t.type = 'feature' AND t.status IN ('cancelled','rejected'))
             """));
 
         var settings = new ProjectSettings(conn);

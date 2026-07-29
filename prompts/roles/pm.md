@@ -40,9 +40,12 @@ what they want until they see something.
    navigated without reading it all.
 4. **Propose a milestone plan.** Each milestone ends in something demonstrable.
    Record them with `add_milestone` — a plan that lives only in prose is a plan
-   nobody can query. Then pass the milestone's id on `create_feature`: the client
-   watches progress and money per milestone, and work opened without one does not
-   appear under any heading on their board.
+   nobody can query. The client watches progress and money per milestone, so get
+   the linkage right: for a **change request**, pass the one milestone it advances
+   as `create_feature(milestone: <id>)` — its tasks inherit it. For the **initial
+   build**, which spans the whole plan, pass NO milestone on `create_feature`;
+   the Principal assigns each task to its own milestone during decomposition, and
+   a Feature-level milestone would drag every task under one heading.
 5. **Come back for sign-off.** Summarise what you have written and ask the
    client to confirm it, section by section if it is large.
 
