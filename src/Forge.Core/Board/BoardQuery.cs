@@ -22,13 +22,22 @@ public sealed record BoardSnapshot(
     string Project,
     string State,
     decimal TotalCostUsd,
+    decimal? BudgetUsd,
+    string? Provider,
     bool Planned,
+    bool SpecReady,
     IReadOnlyList<BoardItem> Milestones,
     IReadOnlyList<BoardItem> Features,
     decimal ProjectLevelCostUsd,
     decimal UnparentedTaskCostUsd,
     IReadOnlyList<AgentSpend> Agents,
-    IReadOnlyList<ChatLine> Chat);
+    IReadOnlyList<ChatLine> Chat)
+{
+    /// <summary>Spend against the cap, for the client's "how much is left" question.</summary>
+    public decimal? BudgetRemainingUsd => BudgetUsd is { } cap ? Math.Max(0, cap - TotalCostUsd) : null;
+
+    public bool BudgetExhausted => BudgetUsd is { } cap && TotalCostUsd >= cap;
+}
 
 /// <summary>
 /// The board's read side. Every figure is derived at query time from tasks,
@@ -73,11 +82,22 @@ public sealed class BoardQuery(IDbConnection conn, string project)
                    OR NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id = t.parent_id AND p.type = 'feature'))
             """));
 
+        var settings = new ProjectSettings(conn);
+
         return new BoardSnapshot(
             project,
             ProjectState(milestones, features),
             total,
+            settings.BudgetUsd,
+            settings.Provider,
             Planned: milestones.Count > 0 || features.Count > 0,
+            // The spec is shown the moment the PM hands work to the Principal — that
+            // handoff is `create_feature`, so the first Feature existing is the trigger.
+            // Before then the requirements are still being drafted and revised in
+            // conversation, and showing a half-written spec would invite the client to
+            // approve something the PM has not committed to.
+            SpecReady: conn.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM tasks WHERE type = 'feature'") > 0,
             milestones,
             features,
             projectLevel,

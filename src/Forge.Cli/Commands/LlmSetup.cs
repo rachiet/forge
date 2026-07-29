@@ -14,15 +14,24 @@ namespace Forge.Cli.Commands;
 /// </summary>
 internal static class LlmSetup
 {
+    /// <summary>
+    /// The project's own settings win over the machine's. `llm.json` is one file for
+    /// the whole data root, so without this every project on the machine would share
+    /// one provider — and the second project created would silently run on the first
+    /// one's models. Likewise the budget: a cap that lives only in a CLI flag is no cap
+    /// at all on the next run that omits it.
+    /// </summary>
     public static MeteredLlmClient Metered(
-        ForgePaths paths, IDbConnection conn, decimal? projectBudgetUsd, ForgeLogger? logger = null)
+        ForgePaths paths, IDbConnection conn, decimal? projectBudgetUsd = null, ForgeLogger? logger = null)
     {
-        var config = LlmConfig.Load(paths.DataRoot);
+        var settings = new ProjectSettings(conn);
+        var config = LlmConfig.Load(paths.DataRoot, settings.Provider);
+
         return new MeteredLlmClient(
             LlmClientFactory.Create(config),
             conn,
             Prices(paths, logger),
-            projectBudgetUsd);
+            projectBudgetUsd ?? settings.BudgetUsd);
     }
 
     public static PriceCatalog Prices(ForgePaths paths, ForgeLogger? logger = null) =>

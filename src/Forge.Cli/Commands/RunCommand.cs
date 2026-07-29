@@ -57,6 +57,18 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
 
         var llm = LlmSetup.Metered(paths, conn, settings.ProjectBudget, logger);
 
+        // Only one project builds at a time, machine-wide. Taking the lease here is what
+        // lets the board know a terminal run is in flight — and stops its Start button
+        // from putting a second worker on the same database.
+        using var lease = WorkerLease.TryAcquire(paths, settings.Project);
+        if (lease is null)
+        {
+            var held = WorkerLease.Current(paths);
+            AnsiConsole.MarkupLineInterpolated(
+                $"[red]'{held?.Project}' is already building (pid {held?.Pid}).[/] One build at a time.");
+            return 1;
+        }
+
         var runner = new TaskRunner(
             paths, settings.Project, conn, llm,
             new SecretsVault(paths.VaultDir), PromptLibrary.Resolve(), logger);
@@ -73,6 +85,7 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         {
             // Priority: a Principal-owned stuck task (blocked/out-of-budget) is cleared
             // before the engineer advances, because it usually gates the rest of the DAG.
+            lease.Beat();
             var outcome = await runner.RunNextByPriorityAsync(cancellationToken);
             if (outcome is null)
             {

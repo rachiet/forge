@@ -301,8 +301,33 @@ movable and shareable, so keys must not ride along in that payload.
   $7.87 they cannot account for. `BoardQueryTests` asserts the reconciliation.
 - **Chat is a real PM turn.** `POST /api/chat` runs `PmChat.SendAsync` in the background
   (a turn takes far longer than a browser will wait) behind a semaphore, and the reply
-  arrives via the same polling that drives the rest. Note `forge run` still has no
-  concurrency guard, so the board's lock protects only its own writers.
+  arrives via the same polling that drives the rest.
+- **`forge board` takes no project** — it serves them all, with the project as a query
+  parameter, so the dropdown switches without restarting the host. `POST /api/projects`
+  creates one (name, budget, provider) via `ProjectBootstrap.Init`; the client never
+  needs a terminal.
+- **Per-project settings live in `project_meta`** (`ProjectSettings`: `llm_provider`,
+  `budget_usd`), not in the global registry and not in `llm.json`. Two reasons, both bugs
+  that existed before: `llm.json` is machine-wide, so two projects could not choose
+  different providers — the second silently ran on the first one's models; and
+  `--project-budget` was a per-invocation flag, so the next run that omitted it had **no
+  cap at all**. Provider precedence is `FORGE_LLM_PROVIDER` → project → llm.json → default.
+  The budget is raisable from the page, because hitting the cap otherwise dead-ends a
+  client whose only interface is the board.
+- **The spec appears when the PM hands work over**, not while it is being drafted:
+  `SpecReady` is "a Feature exists", since `create_feature` is the PM's handoff to the
+  Principal. Read from **trunk via `git show`** (`Board/SpecReader.cs`), never from the
+  PM's working clone, which can sit mid-edit. Rendered inline and collapsed.
+- **One build at a time, machine-wide** (`Scheduling/WorkerLease.cs`) — a decision, not a
+  limitation. A JSON lease at `<data root>/worker.json` carrying a heartbeat; both the
+  board's Start button and a terminal `forge run` take it, so they cannot collide on one
+  database. Staleness is judged by the heartbeat rather than file mtime, so a crashed
+  worker frees the lease by falling silent. This finally closes the "forge run has no
+  concurrency guard" hazard.
+- **"Building" and "working" are different facts and stay separate.** `state` is how far
+  the plan has got (from the data); `building` is whether a worker is alive this second
+  (from the lease). A project can sit at `building` with nothing running, and the client
+  must be able to see that — the pill reads "planning · idle" or "working".
 
 ### Logging / observability [DECIDED] (settled while building the event log)
 - **Six columns, fixed:** `timestamp | project | task | domain | action | message`.

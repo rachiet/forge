@@ -124,6 +124,52 @@
   .offline { position:fixed; bottom:14px; right:14px; font-family:var(--mono); font-size:.7rem;
              background:var(--pending); color:#fff; padding:6px 12px; border-radius:7px; }
   .hidden { display:none !important; }
+
+  /* project switcher + actions */
+  select, .btn { font-family:var(--mono); font-size:.72rem; letter-spacing:.06em;
+                 border:1px solid var(--line); border-radius:7px; padding:6px 10px;
+                 background:var(--surface); color:var(--ink); cursor:pointer; }
+  .btn.primary { background:var(--accent); color:#fff; border-color:transparent; }
+  .btn.stop { background:var(--pending); color:#fff; border-color:transparent; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .topbar .actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  /* budget strip */
+  .budget { display:flex; align-items:baseline; gap:8px; justify-content:flex-end;
+            font-family:var(--mono); font-size:.68rem; color:var(--faint); }
+  .budget b { color:var(--ink); font-weight:600; }
+  .budget.over b { color:var(--pending); }
+
+  /* spec panel */
+  details.spec { border-bottom:1px solid var(--line); }
+  details.spec:last-of-type { border-bottom:0; }
+  details.spec > summary { padding:11px 16px; cursor:pointer; font-size:.92rem; list-style:none; }
+  details.spec > summary::-webkit-details-marker { display:none; }
+  details.spec > summary::before { content:"▸ "; color:var(--faint); }
+  details.spec[open] > summary::before { content:"▾ "; }
+  .specbody { padding:4px 20px 18px; font-size:.88rem; max-width:70ch; }
+  .specbody h1,.specbody h2,.specbody h3 { font-size:1rem; margin:16px 0 6px; }
+  .specbody h1 { font-size:1.1rem; }
+  .specbody ul { padding-left:20px; margin:6px 0; }
+  .specbody code { font-family:var(--mono); font-size:.85em; background:var(--sunken);
+                   padding:1px 4px; border-radius:4px; }
+  .specbody p { margin:6px 0; }
+
+  /* create-project dialog */
+  dialog { border:1px solid var(--line); border-radius:12px; background:var(--surface);
+           color:var(--ink); padding:0; box-shadow:var(--shadow); width:min(420px,92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.45); }
+  dialog form { padding:20px; display:flex; flex-direction:column; gap:14px; }
+  dialog h2 { margin:0; font-size:1.15rem; }
+  dialog label { display:flex; flex-direction:column; gap:5px; font-family:var(--mono);
+                 font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
+  dialog input, dialog select { font-family:var(--sans); font-size:.92rem; text-transform:none;
+                letter-spacing:normal; padding:9px 11px; border:1px solid var(--line);
+                border-radius:8px; background:var(--ground); color:var(--ink); }
+  dialog .hint { font-family:var(--sans); font-size:.74rem; color:var(--faint);
+                 text-transform:none; letter-spacing:normal; }
+  dialog .row { display:flex; gap:10px; justify-content:flex-end; }
+  dialog .err { border-radius:8px; }
 </style>
 </head>
 <body>
@@ -132,9 +178,19 @@
     <span class="brand">Forge · client progress board</span>
     <h1 class="project" id="projName">…</h1>
     <span class="runpill" id="runPill">● …</span>
+    <div class="actions">
+      <select id="projPicker" aria-label="Switch project"></select>
+      <button class="btn" id="newProject">+ New project</button>
+      <button class="btn primary hidden" id="startBtn">Start building</button>
+      <button class="btn stop hidden" id="stopBtn">Stop</button>
+    </div>
     <div class="grandtotal">
       <span class="n" id="grandTotal">$0.00</span>
       <span class="l">total spend</span>
+      <div class="budget hidden" id="budgetStrip">
+        <span id="budgetText"></span>
+        <button class="btn" id="raiseBudget">Raise</button>
+      </div>
     </div>
   </header>
 
@@ -159,6 +215,29 @@
 </div>
 <div class="offline hidden" id="offline">board offline — retrying</div>
 
+<dialog id="newDialog">
+  <form method="dialog" id="newForm">
+    <h2>Start a new project</h2>
+    <label>Project name
+      <input id="npName" required placeholder="weatherboard" autocomplete="off">
+      <span class="hint">Letters, digits, hyphen and underscore — it becomes the folder name.</span>
+    </label>
+    <label>Budget
+      <input id="npBudget" type="number" min="1" step="1" value="25" required>
+      <span class="hint">A hard cap in US dollars. You can raise it later.</span>
+    </label>
+    <label>Model provider
+      <select id="npProvider"></select>
+      <span class="hint">Needs that provider's key in ~/forge_env.</span>
+    </label>
+    <p class="err hidden" id="npErr"></p>
+    <div class="row">
+      <button class="btn" value="cancel" id="npCancel" type="button">Cancel</button>
+      <button class="btn primary" id="npGo">Go</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const $ = id => document.getElementById(id);
 const usd = n => '$' + Number(n || 0).toFixed(2);
@@ -170,6 +249,38 @@ const ROLE = { pm:'PM', qa:'QA', principal:'Principal', engineer:'Engineer', res
 const roleName = r => ROLE[r] || r;
 
 let lastChatId = 0, sending = false;
+let project = decodeURIComponent(location.hash.slice(1)) || null;
+let providers = [];
+
+function selectProject(name) {
+  project = name;
+  location.hash = encodeURIComponent(name);
+  lastChatId = 0;                       // force a chat repaint for the new project
+  $('thread').innerHTML = '';
+  poll();
+}
+
+/* A deliberately small markdown subset — the spec is PM-authored prose: headings,
+   lists, emphasis, inline code. Escaped first, so nothing in the document can inject
+   markup. Not a general renderer, and does not need to be. */
+function markdown(src) {
+  const lines = esc(src).split('\n');
+  let html = '', inList = false;
+  const inline = t => t
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+  for (const line of lines) {
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
+    if (inList) { html += '</ul>'; inList = false; }
+    if (h) { const n = Math.min(h[1].length + 1, 4); html += `<h${n}>${inline(h[2])}</h${n}>`; }
+    else if (line.trim()) html += `<p>${inline(line)}</p>`;
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
 
 function rows(items) {
   return items.map(i => `
@@ -228,6 +339,15 @@ function renderRail(d) {
         <span class="cost">${usd(d.unparentedTaskCostUsd)}</span></div>`);
   }
 
+  if (d.specReady && d.spec.length) {
+    html += `<section class="card">
+      <div class="card-head"><h2>Specification</h2>
+        <span class="sub">${d.spec.length} section${d.spec.length === 1 ? '' : 's'}</span></div>
+      ${d.spec.map(sec => `<details class="spec"><summary>${esc(sec.title)}</summary>
+        <div class="specbody">${markdown(sec.markdown)}</div></details>`).join('')}
+    </section>`;
+  }
+
   if (d.agents.length) {
     const max = Math.max(...d.agents.map(a => a.costUsd), 0.0001);
     const calls = d.agents.reduce((a, x) => a + x.calls, 0);
@@ -257,18 +377,66 @@ function renderChat(chat) {
   if (atBottom) thread.scrollTop = thread.scrollHeight;
 }
 
+async function refreshProjects() {
+  const r = await fetch('/api/projects');
+  const d = await r.json();
+  providers = d.providers;
+  const picker = $('projPicker');
+  picker.innerHTML = d.projects.map(p =>
+    `<option value="${esc(p.name)}">${esc(p.name)} — ${esc(p.state)}</option>`).join('');
+  picker.classList.toggle('hidden', d.projects.length === 0);
+
+  if (!d.projects.length) { showEmptyState(); return; }
+  if (!project || !d.projects.some(p => p.name === project)) selectProject(d.projects[0].name);
+  picker.value = project;
+}
+
+function showEmptyState() {
+  project = null;
+  $('projName').textContent = 'no projects yet';
+  $('runPill').classList.add('hidden');
+  $('rail').innerHTML = `<section class="card"><div class="placeholder">
+      <p>Nothing here yet. Create a project to start talking to the project manager.</p>
+    </div></section>`;
+  $('thread').innerHTML = '';
+  $('composer').classList.add('hidden');
+}
+
 async function poll() {
+  if (!project) return;
   try {
-    const r = await fetch('/api/board');
+    const r = await fetch('/api/board?project=' + encodeURIComponent(project));
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     $('offline').classList.add('hidden');
 
     $('projName').textContent = d.project;
     $('grandTotal').textContent = usd(d.totalCostUsd);
+    $('composer').classList.remove('hidden');
+
+    // Two different facts, deliberately not merged: `state` is how far the plan has
+    // got, `building` is whether anything is executing this second. A project can sit
+    // at "building" with no worker alive, and the client must be able to see that.
     const pill = $('runPill');
-    pill.textContent = '● ' + d.state;
-    pill.dataset.state = d.state;
+    pill.classList.remove('hidden');
+    pill.textContent = d.building ? '● working' : '● ' + d.state + ' · idle';
+    pill.dataset.state = d.building ? 'building' : d.state;
+
+    const otherBusy = d.worker && d.worker.project !== d.project;
+    $('startBtn').classList.toggle('hidden', d.building);
+    $('startBtn').disabled = otherBusy || d.budgetExhausted;
+    $('startBtn').title = otherBusy ? `${d.worker.project} is building — one at a time`
+                        : d.budgetExhausted ? 'Budget exhausted — raise it to continue' : '';
+    $('stopBtn').classList.toggle('hidden', !d.building);
+
+    const strip = $('budgetStrip');
+    strip.classList.toggle('hidden', d.budgetUsd == null);
+    strip.classList.toggle('over', !!d.budgetExhausted);
+    if (d.budgetUsd != null) {
+      $('budgetText').innerHTML = d.budgetExhausted
+        ? `budget of <b>${usd(d.budgetUsd)}</b> exhausted`
+        : `<b>${usd(d.budgetRemainingUsd)}</b> left of ${usd(d.budgetUsd)}`;
+    }
 
     renderRail(d);
     renderChat(d.chat);
@@ -293,7 +461,7 @@ $('composer').addEventListener('submit', async e => {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({ project, message: text }),
     });
     if (r.ok) { input.value = ''; $('thinking').classList.remove('hidden'); }
     else {
@@ -307,8 +475,65 @@ $('composer').addEventListener('submit', async e => {
   }
 });
 
-poll();
-setInterval(poll, 3000);
+$('projPicker').addEventListener('change', e => selectProject(e.target.value));
+
+$('newProject').addEventListener('click', () => {
+  $('npProvider').innerHTML = providers.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  $('npErr').classList.add('hidden');
+  $('npName').value = '';
+  $('newDialog').showModal();
+});
+$('npCancel').addEventListener('click', () => $('newDialog').close());
+
+$('newForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = {
+    name: $('npName').value.trim(),
+    budgetUsd: Number($('npBudget').value),
+    provider: $('npProvider').value,
+  };
+  const r = await fetch('/api/projects', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    $('npErr').textContent = err.error || 'Could not create that project.';
+    $('npErr').classList.remove('hidden');
+    return;
+  }
+  $('newDialog').close();
+  await refreshProjects();
+  selectProject(body.name);
+  $('msg').focus();
+});
+
+$('raiseBudget').addEventListener('click', async () => {
+  const next = prompt('New budget in US dollars:');
+  if (!next) return;
+  await fetch('/api/budget', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, budgetUsd: Number(next) }),
+  });
+  poll();
+});
+
+for (const [id, action] of [['startBtn', 'start'], ['stopBtn', 'stop']]) {
+  $(id).addEventListener('click', async () => {
+    const r = await fetch('/api/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, action }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      $('chatErr').textContent = err.error || 'Could not change the build state.';
+      $('chatErr').classList.remove('hidden');
+    }
+    poll();
+  });
+}
+
+refreshProjects().then(poll);
+setInterval(() => { refreshProjects(); poll(); }, 3000);
 </script>
 </body>
 </html>

@@ -32,7 +32,11 @@ public sealed record LlmConfig
     /// EnvFile, so a one-off `FORGE_LLM_PROVIDER=openai forge run` behaves the way
     /// anyone would expect without editing a file.
     /// </summary>
-    public static LlmConfig Load(string dataRoot)
+    /// <param name="projectProvider">
+    /// The provider this project chose, which outranks the machine-wide file — the
+    /// client picks a provider per project, and llm.json cannot express that.
+    /// </param>
+    public static LlmConfig Load(string dataRoot, string? projectProvider = null)
     {
         var path = Path.Combine(dataRoot, "llm.json");
         var config = new LlmConfig();
@@ -53,8 +57,13 @@ public sealed record LlmConfig
             }
         }
 
-        return Environment.GetEnvironmentVariable(ProviderEnvVar) is { Length: > 0 } provider
-            ? config with { Provider = provider }
+        // Precedence, most specific first: the environment (a one-off override), then
+        // the project's own choice, then the machine-wide file.
+        if (Environment.GetEnvironmentVariable(ProviderEnvVar) is { Length: > 0 } provider)
+            return config with { Provider = provider };
+
+        return projectProvider is { Length: > 0 } chosen
+            ? config with { Provider = chosen }
             : config;
     }
 
