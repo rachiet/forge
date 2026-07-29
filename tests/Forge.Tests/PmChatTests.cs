@@ -103,7 +103,6 @@ public class PmChatTests : IDisposable
         var milestones = new MilestoneRepository(_conn).List();
         Assert.Equal(["Working todo list", "Accounts"], milestones.Select(m => m.Name));
         Assert.Equal([1, 2], milestones.Select(m => m.Ordinal));
-        Assert.All(milestones, m => Assert.Equal(MilestoneStatus.Planned, m.Status));
     }
 
     [Fact]

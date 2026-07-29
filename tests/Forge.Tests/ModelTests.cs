@@ -124,7 +124,7 @@ public class MessageTests
     {
         foreach (var type in Enum.GetValues<MessageType>())
         {
-            var m = Message.FromRow(type, 1, null, "pm", "client", null, "hi", MessageStatus.Done, "2026-07-19");
+            var m = Message.FromRow(type, 1, "pm", "client", null, "hi", MessageStatus.Done, "2026-07-19");
             Assert.Equal(type, m.Type);
             Assert.Equal(MessageStatus.Done, m.Status);
         }

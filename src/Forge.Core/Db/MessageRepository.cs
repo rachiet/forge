@@ -9,7 +9,6 @@ public sealed class MessageRepository(IDbConnection conn)
     private sealed record Row
     {
         public long Id { get; init; }
-        public long? ThreadId { get; init; }
         public string FromAgent { get; init; } = "";
         public string ToAgent { get; init; } = "";
         public long? TaskId { get; init; }
@@ -19,12 +18,12 @@ public sealed class MessageRepository(IDbConnection conn)
         public string? CreatedAt { get; init; }
 
         public Message ToMessage() => Message.FromRow(
-            SnakeCaseEnum.Parse<MessageType>(Type), Id, ThreadId, FromAgent, ToAgent,
+            SnakeCaseEnum.Parse<MessageType>(Type), Id, FromAgent, ToAgent,
             TaskId, Payload, SnakeCaseEnum.Parse<MessageStatus>(Status), CreatedAt);
     }
 
     private const string SelectColumns = """
-        SELECT id AS Id, thread_id AS ThreadId, from_agent AS FromAgent, to_agent AS ToAgent,
+        SELECT id AS Id, from_agent AS FromAgent, to_agent AS ToAgent,
                task_id AS TaskId, type AS Type, payload AS Payload, status AS Status,
                created_at AS CreatedAt
         FROM messages
@@ -33,13 +32,12 @@ public sealed class MessageRepository(IDbConnection conn)
     public Message Insert(Message message)
     {
         var id = conn.ExecuteScalar<long>("""
-            INSERT INTO messages (thread_id, from_agent, to_agent, task_id, type, payload, status)
-            VALUES (@ThreadId, @FromAgent, @ToAgent, @TaskId, @Type, @Payload, @Status)
+            INSERT INTO messages (from_agent, to_agent, task_id, type, payload, status)
+            VALUES (@FromAgent, @ToAgent, @TaskId, @Type, @Payload, @Status)
             RETURNING id
             """,
             new
             {
-                message.ThreadId,
                 message.FromAgent,
                 message.ToAgent,
                 message.TaskId,

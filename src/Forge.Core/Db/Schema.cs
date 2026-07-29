@@ -9,9 +9,10 @@ public static class Schema
 {
     /// <summary>Global forge.db: project registry + secret names. Values live in the vault, never here.</summary>
     public const string GlobalDdl = """
+        -- A bare registry. Per-project settings (budget, provider) live in that
+        -- project's own project_meta — the project directory is self-contained.
         CREATE TABLE IF NOT EXISTS projects (
           name TEXT PRIMARY KEY,
-          token_budget INTEGER CHECK(token_budget IS NULL OR token_budget > 0),
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -26,7 +27,6 @@ public static class Schema
     public const string ProjectDdl = """
         CREATE TABLE IF NOT EXISTS messages (
           id INTEGER PRIMARY KEY,
-          thread_id INTEGER,
           from_agent TEXT NOT NULL,
           to_agent   TEXT NOT NULL,
           task_id INTEGER REFERENCES tasks(id),
@@ -124,12 +124,14 @@ public static class Schema
         CREATE INDEX IF NOT EXISTS ix_ledger_task ON token_ledger(task_id);
         CREATE INDEX IF NOT EXISTS ix_ledger_role ON token_ledger(role);
 
+        -- No status column, deliberately: a milestone's state is DERIVED from its
+        -- tasks (the board's rule for every state it shows). The old column was dead
+        -- weight nothing ever advanced past 'planned' — a stored status beside a
+        -- derived one is exactly the two-sources-of-truth this schema forbids.
         CREATE TABLE IF NOT EXISTS milestones (
           id INTEGER PRIMARY KEY,
           name TEXT NOT NULL,
           description TEXT,
-          status TEXT NOT NULL DEFAULT 'planned'
-            CHECK(status IN ('planned','active','demo_ready','accepted')),
           ordinal INTEGER NOT NULL
         );
 

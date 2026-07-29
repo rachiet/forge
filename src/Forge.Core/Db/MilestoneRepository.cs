@@ -11,7 +11,6 @@ public sealed class MilestoneRepository(IDbConnection conn)
         public long Id { get; init; }
         public string Name { get; init; } = "";
         public string? Description { get; init; }
-        public string Status { get; init; } = "";
         public int Ordinal { get; init; }
 
         public MilestoneRecord ToRecord() => new()
@@ -19,14 +18,12 @@ public sealed class MilestoneRepository(IDbConnection conn)
             Id = Id,
             Name = Name,
             Description = Description,
-            Status = SnakeCaseEnum.Parse<MilestoneStatus>(Status),
             Ordinal = Ordinal,
         };
     }
 
     private const string SelectColumns = """
-        SELECT id AS Id, name AS Name, description AS Description,
-               status AS Status, ordinal AS Ordinal
+        SELECT id AS Id, name AS Name, description AS Description, ordinal AS Ordinal
         FROM milestones
         """;
 
@@ -36,17 +33,11 @@ public sealed class MilestoneRepository(IDbConnection conn)
             throw new ArgumentException("Milestone name must be non-empty.", nameof(milestone));
 
         var id = conn.ExecuteScalar<long>("""
-            INSERT INTO milestones (name, description, status, ordinal)
-            VALUES (@Name, @Description, @Status, @Ordinal)
+            INSERT INTO milestones (name, description, ordinal)
+            VALUES (@Name, @Description, @Ordinal)
             RETURNING id
             """,
-            new
-            {
-                milestone.Name,
-                milestone.Description,
-                Status = SnakeCaseEnum.ToSnakeCase(milestone.Status),
-                milestone.Ordinal,
-            });
+            new { milestone.Name, milestone.Description, milestone.Ordinal });
         return milestone with { Id = id };
     }
 
@@ -60,7 +51,4 @@ public sealed class MilestoneRepository(IDbConnection conn)
     public int NextOrdinal() =>
         conn.ExecuteScalar<int>("SELECT COALESCE(MAX(ordinal), 0) + 1 FROM milestones");
 
-    public void SetStatus(long id, MilestoneStatus status) =>
-        conn.Execute("UPDATE milestones SET status = @status WHERE id = @id",
-            new { id, status = SnakeCaseEnum.ToSnakeCase(status) });
 }

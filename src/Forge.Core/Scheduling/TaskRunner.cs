@@ -52,6 +52,7 @@ public sealed class TaskRunner(
 
     private readonly TaskRepository _tasks = new(conn);
     private readonly MessageRepository _messages = new(conn);
+    private readonly ProjectMetaRepository _meta = new(conn);
     private readonly AgentInstanceRepository _instances = new(conn);
     private readonly WorkspaceManager _workspaces = new(paths, project);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
@@ -185,7 +186,7 @@ public sealed class TaskRunner(
 
         // A new Feature is a fresh QA cycle: clear any earlier "did not converge" flag,
         // the same re-arm design approve used to do before the flow became autonomous.
-        _tasks.SetMeta("qa_escalated", "0");
+        _meta.Set("qa_escalated", "0");
         Transition(feature.Id, TaskStatus.Active, log);
 
         var summary = $"Feature {feature.Id} decomposed into {outcome.TasksCreated} task(s) and activated.";
@@ -342,7 +343,7 @@ public sealed class TaskRunner(
     /// <summary>How many QA↔fix rounds before a non-converging project is escalated to the client.</summary>
     private const int QaRoundCap = 5;
 
-    private int MetaInt(string key) => int.TryParse(_tasks.GetMeta(key), out var v) ? v : 0;
+    private int MetaInt(string key) => int.TryParse(_meta.Get(key), out var v) ? v : 0;
 
     /// <summary>
     /// Run a triage/QA phase, retrying a provider crash in place (up to the crash cap)
@@ -380,7 +381,7 @@ public sealed class TaskRunner(
             var note = $"QA and fixes did not converge after {QaRoundCap} rounds — escalating to the client.";
             _log.Event(EventType.ErrorInternal, note);
             _messages.Insert(Message.Create(MessageType.Escalation, "system", "pm", note)); // project-scoped, no task
-            _tasks.SetMeta("qa_escalated", "1");
+            _meta.Set("qa_escalated", "1");
             return new TaskRunOutcome(0, EndReason.Escalated, TaskStatus.Qa, note);
         }
 
@@ -420,7 +421,7 @@ public sealed class TaskRunner(
         {
             var crashNote = "QA could not complete — the provider failed after retries. Re-run once it's healthy.";
             _messages.Insert(Message.Create(MessageType.Escalation, "system", "pm", crashNote));
-            _tasks.SetMeta("qa_escalated", "1");
+            _meta.Set("qa_escalated", "1");
             _log.Event(EventType.ErrorProvider, crashNote);
             return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, crashNote);
         }
@@ -431,8 +432,8 @@ public sealed class TaskRunner(
         // has now verified. Newly-filed bugs are still in triage (not done), so this only
         // rises again when an accepted bug is fixed or a change request's tasks complete —
         // which is exactly what re-triggers QA, and equally for both.
-        _tasks.SetMeta("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
-        _tasks.SetMeta("qa_verified_count", _tasks.CountDone().ToString());
+        _meta.Set("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
+        _meta.Set("qa_verified_count", _tasks.CountDone().ToString());
 
         var summary = filed == 0
             ? "QA passed — every requirement met; the project is accepted."

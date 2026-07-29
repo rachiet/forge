@@ -24,6 +24,7 @@ public static class Database
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         var conn = Open(dbPath);
         conn.Execute(Schema.GlobalDdl);
+        Migrations.ApplyGlobal(conn);
         return conn;
     }
 

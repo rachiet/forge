@@ -30,7 +30,7 @@ public class BoardQueryTests : IDisposable
     private long Milestone(string name, int ordinal) =>
         new MilestoneRepository(_conn).Insert(new MilestoneRecord
         {
-            Name = name, Ordinal = ordinal, Status = MilestoneStatus.Planned,
+            Name = name, Ordinal = ordinal,
         }).Id;
 
     private TaskRecord Task(TaskType type, string title, long? milestone = null, long? parent = null)

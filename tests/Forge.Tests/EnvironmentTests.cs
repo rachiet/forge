@@ -109,12 +109,16 @@ public class ToolExecutorEnvironmentTests : IDisposable
         Directory.CreateDirectory(_jail);
         Environment.SetEnvironmentVariable(Canary, "sk-ant-should-never-leak");
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-api01-also-should-never-leak");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "sk-oai-should-never-leak");
+        Environment.SetEnvironmentVariable("GEMINI_API_KEY", "goog-should-never-leak");
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(Canary, null);
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", null);
+        Environment.SetEnvironmentVariable("GEMINI_API_KEY", null);
         Directory.Delete(_jail, recursive: true);
     }
 
@@ -128,8 +132,13 @@ public class ToolExecutorEnvironmentTests : IDisposable
 
         Assert.Equal(0, result.ExitCode);
         Assert.DoesNotContain(Canary, result.Stdout);
+        // Every provider key rides the same allowlist, so every one must be invisible.
         Assert.DoesNotContain("ANTHROPIC_API_KEY", result.Stdout);
+        Assert.DoesNotContain("OPENAI_API_KEY", result.Stdout);
+        Assert.DoesNotContain("GEMINI_API_KEY", result.Stdout);
         Assert.DoesNotContain("sk-ant-", result.Stdout);
+        Assert.DoesNotContain("sk-oai-", result.Stdout);
+        Assert.DoesNotContain("goog-", result.Stdout);
     }
 
     [Fact]

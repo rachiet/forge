@@ -124,4 +124,87 @@ public class MigrationTests : IDisposable
         Assert.DoesNotContain("cost_usd", columns);
         Assert.Contains("tokens_in", columns);
     }
+
+    [Fact]
+    public void Legacy_milestone_status_and_message_thread_id_are_dropped_with_rows_intact()
+    {
+        // A database from before the C-group cleanup: milestones still carry the dead
+        // status column, messages still carry the write-only thread_id.
+        using (var conn = new SqliteConnection($"Data Source={_dbPath}"))
+        {
+            conn.Open();
+            conn.Execute(Schema.ProjectDdl);
+            conn.Execute("""
+                DROP TABLE milestones;
+                CREATE TABLE milestones (
+                  id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                  status TEXT NOT NULL DEFAULT 'planned'
+                    CHECK(status IN ('planned','active','demo_ready','accepted')),
+                  ordinal INTEGER NOT NULL
+                );
+                INSERT INTO milestones (id, name, description, status, ordinal)
+                VALUES (3, 'City search', 'the first demo', 'planned', 1);
+
+                DROP TABLE messages;
+                CREATE TABLE messages (
+                  id INTEGER PRIMARY KEY, thread_id INTEGER,
+                  from_agent TEXT NOT NULL, to_agent TEXT NOT NULL,
+                  task_id INTEGER REFERENCES tasks(id),
+                  type TEXT NOT NULL CHECK(type IN ('question','answer','review','decision',
+                                           'escalation','status','change_request','system_nudge')),
+                  payload TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','done')),
+                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO messages (id, thread_id, from_agent, to_agent, type, payload, status)
+                VALUES (7, 42, 'client', 'pm', 'question', 'how much?', 'done');
+                """);
+        }
+
+        using var migrated = Database.OpenProject(_dbPath);
+
+        Assert.DoesNotContain("status",
+            migrated.Query<string>("SELECT name FROM pragma_table_info('milestones')"));
+        Assert.DoesNotContain("thread_id",
+            migrated.Query<string>("SELECT name FROM pragma_table_info('messages')"));
+
+        var milestone = Assert.Single(new MilestoneRepository(migrated).List());
+        Assert.Equal((3L, "City search", 1), (milestone.Id, milestone.Name, milestone.Ordinal));
+
+        var payload = Assert.Single(migrated.Query<string>("SELECT payload FROM messages"));
+        Assert.Equal("how much?", payload);
+    }
+
+    [Fact]
+    public void The_global_registry_sheds_its_dead_budget_column()
+    {
+        var globalPath = Path.Combine(Path.GetTempPath(), $"forge-global-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var conn = new SqliteConnection($"Data Source={globalPath}"))
+            {
+                conn.Open();
+                conn.Execute("""
+                    CREATE TABLE projects (
+                      name TEXT PRIMARY KEY,
+                      token_budget INTEGER CHECK(token_budget IS NULL OR token_budget > 0),
+                      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    INSERT INTO projects (name, token_budget) VALUES ('weatherboard', 50000);
+                    """);
+            }
+
+            using var migrated = Database.OpenGlobal(globalPath);
+            Assert.DoesNotContain("token_budget",
+                migrated.Query<string>("SELECT name FROM pragma_table_info('projects')"));
+            Assert.Equal("weatherboard",
+                migrated.ExecuteScalar<string>("SELECT name FROM projects"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            foreach (var f in new[] { globalPath, $"{globalPath}-wal", $"{globalPath}-shm" })
+                if (File.Exists(f)) File.Delete(f);
+        }
+    }
 }

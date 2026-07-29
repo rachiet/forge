@@ -32,8 +32,6 @@ public enum MessageType
 
 public enum MessageStatus { Pending, InProgress, Done }
 
-public enum MilestoneStatus { Planned, Active, DemoReady, Accepted }
-
 public enum EndReason { Done, Budget, Iterations, Crash, Escalated }
 
 /// <summary>PascalCase enum member ⇄ snake_case TEXT, as stored under the CHECK constraints.</summary>

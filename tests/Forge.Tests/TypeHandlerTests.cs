@@ -48,7 +48,6 @@ public class TypeHandlerTests
     [Theory]
     [InlineData(MessageType.ChangeRequest, "change_request")]
     [InlineData(MessageType.SystemNudge, "system_nudge")]
-    [InlineData(MilestoneStatus.DemoReady, "demo_ready")]
     public void Multi_word_enums_map_to_snake_case<T>(T value, string text) where T : struct, Enum
     {
         Assert.Equal(text, SnakeCaseEnum.ToSnakeCase(value));

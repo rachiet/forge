@@ -8,7 +8,6 @@ namespace Forge.Core.Model;
 public abstract record Message
 {
     public long Id { get; init; }
-    public long? ThreadId { get; init; }
     public required string FromAgent { get; init; }
     public required string ToAgent { get; init; }
     public long? TaskId { get; init; }
@@ -20,7 +19,7 @@ public abstract record Message
 
     public static Message Create(
         MessageType type, string fromAgent, string toAgent, string payload,
-        long? taskId = null, long? threadId = null)
+        long? taskId = null)
     {
         if (string.IsNullOrWhiteSpace(fromAgent))
             throw new ArgumentException("Sender must be non-empty.", nameof(fromAgent));
@@ -36,21 +35,16 @@ public abstract record Message
                 "Messages must be task-anchored; task_id may be null only for client chat or system notices.",
                 nameof(taskId));
 
-        return Construct(type, fromAgent, toAgent, payload) with
-        {
-            TaskId = taskId,
-            ThreadId = threadId,
-        };
+        return Construct(type, fromAgent, toAgent, payload) with { TaskId = taskId };
     }
 
     /// <summary>Rehydrate the right subtype from a stored type discriminator.</summary>
     public static Message FromRow(
-        MessageType type, long id, long? threadId, string fromAgent, string toAgent,
+        MessageType type, long id, string fromAgent, string toAgent,
         long? taskId, string payload, MessageStatus status, string? createdAt) =>
         Construct(type, fromAgent, toAgent, payload) with
         {
             Id = id,
-            ThreadId = threadId,
             TaskId = taskId,
             Status = status,
             CreatedAt = createdAt,

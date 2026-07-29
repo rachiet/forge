@@ -436,7 +436,7 @@ public class TaskRunnerTests : IDisposable
         Assert.Contains("## Observed", bug.Objective);              // harness-captured evidence, not prose
         Assert.Contains("git status", bug.Objective);               // the exact command QA ran is the repro
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));     // the fix reached trunk
-        Assert.Equal("2", _tasks.GetMeta("qa_rounds"));             // ran, then re-ran and accepted
+        Assert.Equal("2", new ProjectMetaRepository(_conn).Get("qa_rounds"));             // ran, then re-ran and accepted
     }
 
     [Fact]
@@ -460,7 +460,7 @@ public class TaskRunnerTests : IDisposable
         Assert.Contains("REJECTED", bug.ProgressNote!);
         // A pure-rejection cycle accepts nothing new, so QA ran exactly once and stopped —
         // no create-bug / reject / re-QA loop.
-        Assert.Equal("1", _tasks.GetMeta("qa_rounds"));
+        Assert.Equal("1", new ProjectMetaRepository(_conn).Get("qa_rounds"));
     }
 
     [Fact]
@@ -471,7 +471,7 @@ public class TaskRunnerTests : IDisposable
         // First QA cycle: nothing to file, project accepted.
         var runner = Runner(new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("done", ("summary", "all good")) });
         await DrainAsync(runner);
-        Assert.Equal("1", _tasks.GetMeta("qa_rounds"));
+        Assert.Equal("1", new ProjectMetaRepository(_conn).Get("qa_rounds"));
 
         // A change request's task lands as done. Nothing else is claimable, but the
         // done-count now exceeds what QA verified, so QA runs again — same trigger as a fix.
@@ -480,7 +480,7 @@ public class TaskRunnerTests : IDisposable
 
         Assert.NotNull(outcome);
         Assert.Equal(TaskStatus.Qa, outcome!.Status);
-        Assert.Equal("2", _tasks.GetMeta("qa_rounds"));
+        Assert.Equal("2", new ProjectMetaRepository(_conn).Get("qa_rounds"));
     }
 
     [Fact]

@@ -238,15 +238,6 @@ public sealed class TaskRepository(IDbConnection conn)
             SELECT COUNT(*) FROM tasks WHERE type != 'bug' AND status = 'done'
             """) > 0;
 
-    public string? GetMeta(string key) =>
-        conn.QueryFirstOrDefault<string>("SELECT value FROM project_meta WHERE key = @key", new { key });
-
-    public void SetMeta(string key, string value) =>
-        conn.Execute("""
-            INSERT INTO project_meta (key, value) VALUES (@key, @value)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """, new { key, value });
-
     public void SetProgressNote(long taskId, string note) =>
         conn.Execute("""
             UPDATE tasks SET progress_note = @note, updated_at = datetime('now')

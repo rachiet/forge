@@ -17,6 +17,95 @@ public static class Migrations
     {
         DropLedgerCostColumn(conn);
         AddLedgerCacheAndCostColumns(conn);
+        DropMilestoneStatusColumn(conn);
+        DropMessagesThreadId(conn);
+    }
+
+    /// <summary>The global forge.db's own migrations — currently dropping the dead budget column.</summary>
+    public static void ApplyGlobal(SqliteConnection conn)
+    {
+        var columns = conn.Query<string>("SELECT name FROM pragma_table_info('projects')");
+        if (!columns.Contains("token_budget")) return;
+
+        // token_budget on the registry was dead on both axes: no code ever read it, and
+        // after the move to dollar budgets it was the wrong unit too. Settings live in
+        // each project's own project_meta. Rebuild (the column carries a CHECK).
+        Rebuild(conn, "projects", """
+            CREATE TABLE projects_new (
+              name TEXT PRIMARY KEY,
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO projects_new (name, created_at)
+            SELECT name, created_at FROM projects;
+            DROP TABLE projects;
+            ALTER TABLE projects_new RENAME TO projects;
+            """);
+    }
+
+    /// <summary>
+    /// milestones.status is gone: the board DERIVES milestone state from the tasks
+    /// attached to it, and nothing ever advanced the stored column past 'planned' —
+    /// a stored status beside a derived one is two sources of truth.
+    /// </summary>
+    private static void DropMilestoneStatusColumn(SqliteConnection conn)
+    {
+        var columns = conn.Query<string>("SELECT name FROM pragma_table_info('milestones')");
+        if (!columns.Contains("status")) return;
+
+        Rebuild(conn, "milestones", """
+            CREATE TABLE milestones_new (
+              id INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              description TEXT,
+              ordinal INTEGER NOT NULL
+            );
+            INSERT INTO milestones_new (id, name, description, ordinal)
+            SELECT id, name, description, ordinal FROM milestones;
+            DROP TABLE milestones;
+            ALTER TABLE milestones_new RENAME TO milestones;
+            """);
+    }
+
+    /// <summary>messages.thread_id was written and never once queried — dead weight.</summary>
+    private static void DropMessagesThreadId(SqliteConnection conn)
+    {
+        var columns = conn.Query<string>("SELECT name FROM pragma_table_info('messages')");
+        if (!columns.Contains("thread_id")) return;
+
+        Rebuild(conn, "messages", """
+            CREATE TABLE messages_new (
+              id INTEGER PRIMARY KEY,
+              from_agent TEXT NOT NULL,
+              to_agent   TEXT NOT NULL,
+              task_id INTEGER REFERENCES tasks(id),
+              type TEXT NOT NULL CHECK(type IN ('question','answer','review','decision',
+                                       'escalation','status','change_request','system_nudge')),
+              payload TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','done')),
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO messages_new (id, from_agent, to_agent, task_id, type, payload, status, created_at)
+            SELECT id, from_agent, to_agent, task_id, type, payload, status, created_at FROM messages;
+            DROP TABLE messages;
+            ALTER TABLE messages_new RENAME TO messages;
+            CREATE INDEX IF NOT EXISTS ix_messages_queue ON messages(to_agent, status, created_at);
+            """);
+    }
+
+    /// <summary>The SQLite table-rebuild recipe, shared: FK pragma off around a transactional swap.</summary>
+    private static void Rebuild(SqliteConnection conn, string table, string script)
+    {
+        conn.Execute("PRAGMA foreign_keys=off;");
+        try
+        {
+            using var tx = conn.BeginTransaction();
+            conn.Execute(script, transaction: tx);
+            tx.Commit();
+        }
+        finally
+        {
+            conn.Execute("PRAGMA foreign_keys=on;");
+        }
     }
 
     /// <summary>

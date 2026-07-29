@@ -31,7 +31,6 @@ public sealed record MilestoneRecord
     public long Id { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }
-    public MilestoneStatus Status { get; init; } = MilestoneStatus.Planned;
     public required int Ordinal { get; init; }
 }
 

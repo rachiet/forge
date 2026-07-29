@@ -114,7 +114,7 @@ public sealed class DesignPhase(
         // Re-arm QA: a signed-off change request is a fresh cycle, so clear any earlier
         // "did not converge" escalation. The done-count watermark handles the rest — the
         // new tasks completing lifts it, which re-triggers QA once they are all done.
-        if (pending.Count > 0) tasks.SetMeta("qa_escalated", "0");
+        if (pending.Count > 0) new ProjectMetaRepository(conn).Set("qa_escalated", "0");
 
         (logger ?? ForgeLogger.Null)
             .Message($"Client signed off on the design — {pending.Count} task(s) released to the board");

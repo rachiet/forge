@@ -19,13 +19,13 @@ public sealed class ProjectSettings(IDbConnection conn)
     public const string ProviderKey = "llm_provider";
     public const string BudgetKey = "budget_usd";
 
-    private readonly TaskRepository _meta = new(conn);
+    private readonly ProjectMetaRepository _meta = new(conn);
 
     /// <summary>The configured provider, or null to fall back to llm.json / the default.</summary>
     public string? Provider
     {
-        get => _meta.GetMeta(ProviderKey) is { Length: > 0 } value ? value : null;
-        set => _meta.SetMeta(ProviderKey, value ?? "");
+        get => _meta.Get(ProviderKey) is { Length: > 0 } value ? value : null;
+        set => _meta.Set(ProviderKey, value ?? "");
     }
 
     /// <summary>
@@ -35,9 +35,9 @@ public sealed class ProjectSettings(IDbConnection conn)
     /// </summary>
     public decimal? BudgetUsd
     {
-        get => decimal.TryParse(_meta.GetMeta(BudgetKey), NumberStyles.Any,
+        get => decimal.TryParse(_meta.Get(BudgetKey), NumberStyles.Any,
             CultureInfo.InvariantCulture, out var value) && value > 0 ? value : null;
-        set => _meta.SetMeta(BudgetKey,
+        set => _meta.Set(BudgetKey,
             value is { } v && v > 0 ? v.ToString(CultureInfo.InvariantCulture) : "");
     }
 }
