@@ -1,5 +1,6 @@
 using System.Data;
 using Forge.Core.Db;
+using Forge.Core.Llm.Pricing;
 using Forge.Core.Model;
 
 namespace Forge.Core.Llm;
@@ -10,25 +11,30 @@ namespace Forge.Core.Llm;
 ///  - refuses the call outright once the task (or project) budget is spent, by
 ///    throwing — the task's terminal state (OutOfBudget → the Principal's queue,
 ///    with a strike counted) is decided in one place, TaskRunner.Park, not here;
-///  - escalates a project-wide budget cap to the PM (a client spend decision);
+///  - escalates a project-wide budget cap to the PM (a client money decision);
 ///  - writes a token_ledger row and bumps tasks.tokens_spent after every call;
 ///  - injects a system_nudge message when a call crosses 70% of the task budget.
 ///
-/// The unit throughout is tokens, never dollars: token counts come back from the
-/// provider on every response and are what it bills on, whereas a dollar figure
-/// would have to be derived from a price table we maintain by hand and that goes
-/// stale silently on the next rate change.
+/// The two budgets are deliberately different units, because they do different jobs.
+/// The *project* budget is dollars: it is the client's real spend, priced from all
+/// four token buckets against a live rate table. The *task* budget stays tokens: it
+/// exists to stop one agent looping forever, and is an approximation — it counts the
+/// uncached prompt remainder plus output, so it undercounts real traffic by a wide
+/// margin. That is tolerated knowingly; money safety comes from the dollar cap.
 /// </summary>
 public sealed class MeteredLlmClient(
     ILlmClient inner,
     IDbConnection projectConn,
-    long? projectTokenBudget = null) : ILlmClient
+    PriceCatalog prices,
+    decimal? projectBudgetUsd = null) : ILlmClient
 {
     private const double NudgeThreshold = 0.70;
 
     private readonly TaskRepository _tasks = new(projectConn);
     private readonly MessageRepository _messages = new(projectConn);
     private readonly LedgerRepository _ledger = new(projectConn);
+
+    public string ModelFor(ModelTier tier) => inner.ModelFor(tier);
 
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
@@ -42,14 +48,13 @@ public sealed class MeteredLlmClient(
 
     private void RefuseIfExhausted(LlmAttribution attribution)
     {
-        if (projectTokenBudget is { } projectBudget)
+        if (projectBudgetUsd is { } budget)
         {
-            var totals = _ledger.ProjectTotals();
-            var projectSpent = totals.TokensIn + totals.TokensOut;
-            if (projectSpent >= projectBudget)
+            var spent = _ledger.ProjectTotals().CostUsd;
+            if (spent >= budget)
             {
-                QueueBudgetEscalation(attribution, "Project", projectSpent, projectBudget);
-                throw new BudgetExhaustedException("Project", projectSpent, projectBudget);
+                QueueBudgetEscalation(attribution, "Project", $"${spent:F4}", $"${budget:F2}");
+                throw BudgetExhaustedException.Usd("Project", spent, budget);
             }
         }
 
@@ -61,13 +66,13 @@ public sealed class MeteredLlmClient(
         // Enforcement is not making the call. Parking the task — OutOfBudget, a strike,
         // the workspace kept, the Principal notified — is TaskRunner.Park's job, so it
         // isn't split across two owners that could disagree.
-        throw new BudgetExhaustedException($"Task {taskId}", task.TokensSpent, task.TokenBudget);
+        throw BudgetExhaustedException.Tokens($"Task {taskId}", task.TokensSpent, task.TokenBudget);
     }
 
-    private void QueueBudgetEscalation(LlmAttribution attribution, string scope, long spent, long budget) =>
+    private void QueueBudgetEscalation(LlmAttribution attribution, string scope, string spent, string budget) =>
         _messages.Insert(Message.Create(
             MessageType.Escalation, "system", "pm",
-            $"{scope} budget exhausted ({spent}/{budget} tokens); LLM call by " +
+            $"{scope} budget exhausted ({spent} of {budget}); LLM call by " +
             $"{attribution.AgentInstanceId} refused" +
             (attribution.TaskId is { } t ? $"; task {t} blocked." : "."),
             attribution.TaskId));
@@ -75,6 +80,12 @@ public sealed class MeteredLlmClient(
     private void Record(LlmRequest request, LlmUsage usage)
     {
         var attribution = request.Attribution;
+
+        // Priced here rather than at read time so the ledger records what the call cost
+        // when it was made. All four buckets are stored alongside, so a row can still be
+        // re-derived later if the rate table is corrected.
+        var price = prices.For(request.Model);
+
         _ledger.Append(new TokenLedgerEntry
         {
             AgentInstanceId = attribution.AgentInstanceId,
@@ -83,6 +94,10 @@ public sealed class MeteredLlmClient(
             Model = request.Model,
             TokensIn = usage.TokensIn,
             TokensOut = usage.TokensOut,
+            CacheReadTokens = usage.CacheReadTokens,
+            CacheWriteTokens = usage.CacheWriteTokens,
+            CostUsd = price.CostOf(usage),
+            PricedWith = prices.Snapshot.Id,
         });
 
         if (attribution.TaskId is not { } taskId) return;

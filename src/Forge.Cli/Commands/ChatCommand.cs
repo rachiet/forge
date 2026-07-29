@@ -32,9 +32,9 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
         [Description("Print the conversation so far and exit.")]
         public bool HistoryOnly { get; init; }
 
-        [CommandOption("--project-budget <TOKENS>")]
-        [Description("Hard project-wide token cap. Calls are refused once it is reached.")]
-        public long? ProjectBudget { get; init; }
+        [CommandOption("--project-budget <USD>")]
+        [Description(LlmSetup.BudgetDescription)]
+        public decimal? ProjectBudget { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(
@@ -50,11 +50,12 @@ public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
 
         using var conn = Database.OpenProject(dbPath);
         using var sink = new FileLogSink(paths.ProjectLog(settings.Project));
+        var logger = new ForgeLogger(sink, settings.Project);
         var chat = new PmChat(
             paths, settings.Project, conn,
-            new MeteredLlmClient(new AnthropicLlmClient(), conn, settings.ProjectBudget),
+            LlmSetup.Metered(paths, conn, settings.ProjectBudget, logger),
             new SecretsVault(paths.VaultDir), PromptLibrary.Resolve(),
-            new ForgeLogger(sink, settings.Project));
+            logger);
 
         PrintHistory(chat);
         if (settings.HistoryOnly) return 0;

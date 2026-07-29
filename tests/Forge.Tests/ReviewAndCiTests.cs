@@ -52,7 +52,7 @@ public class ReviewAndCiTests : IDisposable
 
     private TaskRunner Runner(ILlmClient llm, Func<string, CiResult> ci) => new(
         _paths, Project, _conn,
-        new MeteredLlmClient(llm, _conn),
+        new MeteredLlmClient(llm, _conn, TestPrices.Catalog),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger: null, ci: ci);
 
     private string ShowFromTrunk(string path) =>

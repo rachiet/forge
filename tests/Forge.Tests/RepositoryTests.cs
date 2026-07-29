@@ -159,7 +159,9 @@ public class RepositoryTests : IDisposable
             TokensOut = 100,
         });
 
-        Assert.Equal((1000, 500), ledger.TaskTotals(task.Id));
+        var taskTotals = ledger.TaskTotals(task.Id);
+        Assert.Equal(1000, taskTotals.TokensIn);
+        Assert.Equal(500, taskTotals.TokensOut);
         var project = ledger.ProjectTotals();
         Assert.Equal(1200, project.TokensIn);
         Assert.Equal(600, project.TokensOut);

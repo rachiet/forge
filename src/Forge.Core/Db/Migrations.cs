@@ -13,7 +13,36 @@ namespace Forge.Core.Db;
 /// </summary>
 public static class Migrations
 {
-    public static void ApplyProject(SqliteConnection conn) => DropLedgerCostColumn(conn);
+    public static void ApplyProject(SqliteConnection conn)
+    {
+        DropLedgerCostColumn(conn);
+        AddLedgerCacheAndCostColumns(conn);
+    }
+
+    /// <summary>
+    /// Give an existing ledger the cache buckets and the cost column. Plain ADD
+    /// COLUMN, unlike the drop above: SQLite adds columns in place, and a NOT NULL
+    /// column is legal as long as it carries a default — which is right anyway,
+    /// since rows written before this point genuinely had no cost recorded.
+    /// </summary>
+    private static void AddLedgerCacheAndCostColumns(SqliteConnection conn)
+    {
+        var columns = conn.Query<string>("SELECT name FROM pragma_table_info('token_ledger')").ToHashSet();
+
+        foreach (var (name, ddl) in new[]
+                 {
+                     ("cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
+                     ("cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
+                     ("cost_nanos", "INTEGER NOT NULL DEFAULT 0"),
+                     ("priced_with", "TEXT"),
+                 })
+        {
+            if (!columns.Contains(name))
+                conn.Execute($"ALTER TABLE token_ledger ADD COLUMN {name} {ddl};");
+        }
+
+        conn.Execute("CREATE INDEX IF NOT EXISTS ix_ledger_role ON token_ledger(role);");
+    }
 
     /// <summary>
     /// Remove token_ledger.cost_usd. Forge meters in tokens — the count the provider

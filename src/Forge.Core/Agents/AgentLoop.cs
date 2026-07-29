@@ -102,10 +102,14 @@ public sealed class AgentLoop(
         // every line this run emits carries the right correlation automatically.
         var log = task is { } scoped ? _baseLog.For(scoped.Id) : _baseLog;
 
+        // Resolved once per instance, not per turn: the model must not change under a
+        // conversation. The recipe asks for a tier; the configured client names it.
+        var model = llm.ModelFor(_recipe.Tier);
+
         var instanceId = _instances.NewId(_recipe.InstancePrefix);
-        _instances.Start(instanceId, _recipe.Role, _recipe.Model, task?.Id);
+        _instances.Start(instanceId, _recipe.Role, model, task?.Id);
         log.Event(EventType.InstanceStart,
-            $"{instanceId} ({SnakeCaseEnum.ToSnakeCase(_recipe.Role)}, {_recipe.Model})");
+            $"{instanceId} ({SnakeCaseEnum.ToSnakeCase(_recipe.Role)}, {model})");
 
         var toolset = new AgentToolset(executor, conn, _recipe, task, log);
         var attribution = new LlmAttribution(instanceId, _recipe.Role, task?.Id);
@@ -127,7 +131,7 @@ public sealed class AgentLoop(
             {
                 response = await llm.CompleteAsync(new LlmRequest
                 {
-                    Model = _recipe.Model,
+                    Model = model,
                     System = system,
                     // Snapshot, not the live list: a request is a value, and an
                     // adapter that queues or retries must not see later turns appear

@@ -9,6 +9,8 @@ namespace Forge.Tests;
 /// </summary>
 public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
 {
+    public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
     private readonly Queue<string> _turns = new(turns);
 
     public List<LlmRequest> Requests { get; } = [];

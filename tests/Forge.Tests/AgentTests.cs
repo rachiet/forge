@@ -405,7 +405,7 @@ public class AgentLoopTests : IDisposable
     {
         var task = StartTask(budget: 300); // one call costs 150; the second is refused
         var llm = new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("list_dir") };
-        var metered = new MeteredLlmClient(llm, _conn);
+        var metered = new MeteredLlmClient(llm, _conn, TestPrices.Catalog);
 
         var result = await Loop(metered).RunAsync(task, _executor);
 
@@ -437,6 +437,8 @@ public class AgentLoopTests : IDisposable
 
     private sealed class FailingLlmClient(string message) : ILlmClient
     {
+        public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new HttpRequestException(message);
     }
@@ -470,6 +472,8 @@ public class AgentLoopTests : IDisposable
     /// <summary>Always raises TaskCanceledException — stands in for an HTTP-stack timeout.</summary>
     private sealed class CancelThrowingLlmClient : ILlmClient
     {
+        public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new TaskCanceledException("simulated provider timeout");
     }
@@ -482,7 +486,7 @@ public class AgentLoopTests : IDisposable
             ScriptedLlmClient.Tool("list_dir"),
             ScriptedLlmClient.Tool("list_dir"),
             ScriptedLlmClient.Tool("done", ("summary", "Wrapped up as instructed.")));
-        var metered = new MeteredLlmClient(llm, _conn);
+        var metered = new MeteredLlmClient(llm, _conn, TestPrices.Catalog);
 
         await Loop(metered).RunAsync(task, _executor);
 

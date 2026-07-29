@@ -42,7 +42,7 @@ public class PmChatTests : IDisposable
 
     private PmChat Chat(ILlmClient llm) => new(
         _paths, Project, _conn,
-        new MeteredLlmClient(llm, _conn),
+        new MeteredLlmClient(llm, _conn, TestPrices.Catalog),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve());
 
     private string ShowFromTrunk(string path) =>
@@ -188,6 +188,8 @@ public class PmChatTests : IDisposable
 
     private sealed class FailingLlmClient : ILlmClient
     {
+        public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new HttpRequestException("Status Code: TooManyRequests");
     }

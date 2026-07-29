@@ -1,3 +1,4 @@
+using Forge.Core.Llm;
 using Forge.Core.Model;
 
 namespace Forge.Core.Agents;
@@ -10,7 +11,13 @@ namespace Forge.Core.Agents;
 public sealed record AgentRecipe
 {
     public required AgentRole Role { get; init; }
-    public required string Model { get; init; }
+
+    /// <summary>
+    /// How much model this role needs. Not a model id: the configured ILlmClient
+    /// resolves the tier, so a recipe never names a provider's model and swapping
+    /// providers does not touch this file.
+    /// </summary>
+    public required ModelTier Tier { get; init; }
 
     /// <summary>Layer A: prompts/roles/&lt;name&gt;.md, versioned in git.</summary>
     public required string RolePrompt { get; init; }
@@ -54,7 +61,7 @@ public sealed record AgentRecipe
     public static AgentRecipe Engineer => (new AgentRecipe
     {
         Role = AgentRole.Engineer,
-        Model = "claude-sonnet-5",
+        Tier = ModelTier.Coding,
         RolePrompt = "engineer",
         InstancePrefix = "eng",
         AlwaysInContext = ["CONVENTIONS.md"],
@@ -74,7 +81,7 @@ public sealed record AgentRecipe
     public static AgentRecipe Pm => (new AgentRecipe
     {
         Role = AgentRole.Pm,
-        Model = "claude-opus-4-8",
+        Tier = ModelTier.Reasoning,
         RolePrompt = "pm",
         InstancePrefix = "pm",
         AlwaysInContext = ["PROJECT.md", "STATUS.md", "docs/requirements/INDEX.md"],
@@ -101,7 +108,7 @@ public sealed record AgentRecipe
     public static AgentRecipe Principal => (new AgentRecipe
     {
         Role = AgentRole.Principal,
-        Model = "claude-opus-4-8",
+        Tier = ModelTier.Reasoning,
         RolePrompt = "principal",
         InstancePrefix = "prin",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md", "docs/requirements/INDEX.md"],
@@ -122,7 +129,7 @@ public sealed record AgentRecipe
     public static AgentRecipe PrincipalReview => (new AgentRecipe
     {
         Role = AgentRole.Principal,
-        Model = "claude-opus-4-8",
+        Tier = ModelTier.Reasoning,
         RolePrompt = "principal-review",
         InstancePrefix = "rev",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
@@ -146,7 +153,7 @@ public sealed record AgentRecipe
     public static AgentRecipe PrincipalTriage => (new AgentRecipe
     {
         Role = AgentRole.Principal,
-        Model = "claude-opus-4-8",
+        Tier = ModelTier.Reasoning,
         RolePrompt = "principal",
         InstancePrefix = "triage",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
@@ -170,7 +177,7 @@ public sealed record AgentRecipe
         Role = AgentRole.Qa,
         // Verifying behaviour against a fixed contract is not high-reasoning work — the
         // cheaper coding tier is plenty, and QA runs a full pass every cycle.
-        Model = "claude-sonnet-5",
+        Tier = ModelTier.Coding,
         RolePrompt = "qa",
         InstancePrefix = "qa",
         AlwaysInContext = ["PROJECT.md", "docs/requirements/INDEX.md"],
@@ -191,7 +198,7 @@ public sealed record AgentRecipe
     public static AgentRecipe PrincipalImplementer => (new AgentRecipe
     {
         Role = AgentRole.Principal,
-        Model = "claude-opus-4-8",
+        Tier = ModelTier.Reasoning,
         RolePrompt = "engineer",
         InstancePrefix = "prin-impl",
         AlwaysInContext = ["CONVENTIONS.md"],

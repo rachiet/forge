@@ -51,7 +51,7 @@ public class TaskRunnerTests : IDisposable
     /// <summary>Metered, as in production — an agent never sees an undecorated client.</summary>
     private TaskRunner Runner(ILlmClient llm, Forge.Core.Logging.ForgeLogger? logger = null) => new(
         _paths, Project, _conn,
-        new MeteredLlmClient(llm, _conn),
+        new MeteredLlmClient(llm, _conn, TestPrices.Catalog),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger);
 
     /// <summary>Read a file out of the bare repo — the source of truth, not the workspace.</summary>
@@ -352,6 +352,8 @@ public class TaskRunnerTests : IDisposable
     /// <summary>A provider adapter that always fails — stands in for a 429 / outage.</summary>
     private sealed class ThrowingLlmClient : ILlmClient
     {
+        public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("provider unavailable (429)");
     }
@@ -359,6 +361,8 @@ public class TaskRunnerTests : IDisposable
     /// <summary>Throws on the first N calls (a transient blip), then replays a script.</summary>
     private sealed class FlakyThenScriptedLlmClient(int throwsFirst, params string[] turns) : ILlmClient
     {
+        public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
         private int _thrown;
         private readonly Queue<string> _turns = new(turns);
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)

@@ -214,6 +214,55 @@ movable and shareable, so keys must not ride along in that payload.
   network boundary; a 429 or auth failure ends the instance as `crash` with the
   workspace and progress note intact, so the resume path handles it.
 
+### Models, providers and cost [DECIDED] (settled while adding multi-provider support)
+
+- **No code names a model — recipes name a *tier*.** `ModelTier` is `Fast | Coding |
+  Reasoning` (the vocabulary spec §3 already used), and `AgentRecipe.Tier` replaced the
+  old `Model` string. The configured `ILlmClient` resolves tier → model id via
+  `ModelFor(tier)`, so orchestration policy ("an engineer needs the coding tier") stays
+  separate from provider knowledge ("what that tier is called at Anthropic today").
+  Adding a role remains a record + a prompt file; adding a provider is one adapter class
+  with a three-entry tier map plus one case in `LlmClientFactory`. `AgentLoop` resolves
+  the model **once per instance**, never per turn — a conversation must not change model
+  underneath itself.
+- **The provider is configuration, not code.** `<data root>/llm.json` names the provider
+  and may pin any tier's model id; `FORGE_LLM_PROVIDER` overrides it (same
+  environment-beats-file rule as `EnvFile`). No file at all is valid — the default
+  provider's built-in map applies. Malformed JSON throws rather than silently defaulting,
+  because the only other symptom would be a surprising bill.
+- **Prices are fetched, never hardcoded** (`Llm/Pricing/`). `PriceCatalog` reads
+  LiteLLM's table (`model_prices_and_context_window.json`), chosen because its keys are
+  provider-native model ids — the exact strings recipes resolve to — so no name mapping
+  can silently mis-price. Cached in memory for the process and on disk at
+  `<data root>/prices/` with a **1-day TTL** and a conditional GET; machine-wide, not per
+  project, since prices are not project-scoped. A failed refresh falls back to the stale
+  snapshot; a **model miss forces one refresh before it is allowed to fail**, because the
+  everyday cost of a TTL is a model newer than the table.
+- **An unpriced model refuses to run.** No zero-cost fallback, no guessed cache
+  multiplier — with a dollar budget, costing $0 is a cap that never trips. Same rule for
+  a cache bucket with no rate: free while the bucket is empty, `ModelNotPricedException`
+  the moment it isn't.
+- **The ledger stores all four token buckets plus cost.** `tokens_in` (the *uncached*
+  prompt remainder), `tokens_out`, `cache_read_tokens`, `cache_write_tokens`, plus
+  `cost_nanos` (USD × 1e-9, an integer so `SUM()` stays exact) and `priced_with` (the
+  snapshot that priced it). Keeping the buckets is what makes a row's cost recomputable
+  when a rate is corrected — the property that makes depending on an external feed safe.
+- **Two budget units, two jobs.** The **project** budget is USD (`--project-budget`),
+  enforced by summing `cost_nanos`. A **task** budget stays tokens and deliberately still
+  counts only `tokens_in + tokens_out`: it is an approximate guard on one runaway agent,
+  not a spend control, and it undercounts real traffic by ~25x because cache reads
+  dominate. That is knowingly tolerated; money safety is the dollar cap's job. Normalising
+  it is a question for the second provider (Anthropic excludes cached tokens from
+  `input_tokens`; OpenAI and Gemini include them), and changing it would require
+  re-baselining every default budget by roughly 20x.
+- **Per-role spend needs no new attribution.** `token_ledger` has carried
+  `agent_instance_id`, `role` and `task_id` since M0, so "what did the PM cost" is
+  `GROUP BY role` (`LedgerRepository.SpendByRole`, shown by `forge log`). Role granularity
+  only: design/review/triage/implementation all report as `principal`, which is accepted.
+- **Schema changes to populated tables go in `Db/Migrations.cs`**, run on every
+  `OpenProject`, and must be no-ops the second time. The DDL in `Schema.cs` only ever
+  creates *missing* tables, so it cannot reshape an existing one.
+
 ### Logging / observability [DECIDED] (settled while building the event log)
 - **Six columns, fixed:** `timestamp | project | task | domain | action | message`.
   `project` is on every line (the story); `task` is the unit within it and is
@@ -262,17 +311,9 @@ M5 (QA) → M6 (CRs). Anti-pattern: standing up all personas at once.
 ## Non-negotiables to preserve in code
 - Budgets enforced by refusing the next LLM call, never by asking the model.
 - All LLM calls flow through one `MeteredLlmClient` decorator (ledger + caps).
-- **Never hardcode a model price.** Rates come from `PriceCatalog` (LiteLLM's table,
-  cached at `<data root>/prices/` with a 1-day TTL); no provider serves prices over an
-  API, and a hand-maintained constant goes stale silently — the reason the old
-  `ModelPricing` class is gone. An unpriced model **refuses to run**: with a dollar
-  budget, costing $0 is a cap that never trips.
-- **Two budget units, two jobs.** The *project* budget is dollars — real spend, priced
-  from all four token buckets. A *task* budget stays tokens: an approximate guard on one
-  runaway agent, not a spend control. Note it counts the uncached remainder plus output,
-  so it undercounts real volume by ~25x; that is tolerated deliberately, and normalising
-  it is a question for when a second provider lands (Anthropic excludes cached tokens
-  from `input_tokens`; OpenAI and Gemini include them).
+- Never hardcode a model id or a model price: recipes name a `ModelTier`, the configured
+  `ILlmClient` resolves it, and rates come from `PriceCatalog`. An unpriced model refuses
+  to run. See "Models, providers and cost" above.
 - Merge/CI/test state read from git and process output, never from agent claims.
 - Secrets: agents see `{{secret:NAME}}`; substitution in the tool executor at
   exec time; values never in DB, context, or logs.

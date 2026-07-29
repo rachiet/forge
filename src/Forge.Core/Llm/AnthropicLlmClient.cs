@@ -14,8 +14,23 @@ namespace Forge.Core.Llm;
 public sealed class AnthropicLlmClient : ILlmClient
 {
     public const string ApiKeyVariable = "ANTHROPIC_API_KEY";
+    public const string ProviderName = "anthropic";
+
+    /// <summary>
+    /// This provider's answer to each tier. The only place in Forge that names an
+    /// Anthropic model — recipes ask for a tier, and an operator can override any
+    /// entry in llm.json without touching code.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
+        new Dictionary<ModelTier, string>
+        {
+            [ModelTier.Fast] = "claude-haiku-4-5",
+            [ModelTier.Coding] = "claude-sonnet-5",
+            [ModelTier.Reasoning] = "claude-opus-4-8",
+        };
 
     private readonly AnthropicClient _client;
+    private readonly IReadOnlyDictionary<ModelTier, string> _models;
 
     /// <summary>
     /// Forge authenticates its calls to the Anthropic Messages API with a Claude API
@@ -24,14 +39,20 @@ public sealed class AnthropicLlmClient : ILlmClient
     /// `x-api-key` header. Pass a key explicitly only in tests; in normal use the SDK
     /// resolves ANTHROPIC_API_KEY from the environment itself.
     /// </summary>
-    public AnthropicLlmClient(string? apiKey = null)
+    public AnthropicLlmClient(string? apiKey = null, LlmConfig? config = null)
     {
         apiKey ??= Environment.GetEnvironmentVariable(ApiKeyVariable);
 
         _client = string.IsNullOrWhiteSpace(apiKey)
             ? new AnthropicClient()
             : new AnthropicClient { ApiKey = apiKey };
+
+        _models = Enum.GetValues<ModelTier>().ToDictionary(
+            tier => tier,
+            tier => config?.Override(tier) ?? DefaultModels[tier]);
     }
+
+    public string ModelFor(ModelTier tier) => _models[tier];
 
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {

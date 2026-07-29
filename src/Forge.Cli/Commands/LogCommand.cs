@@ -68,13 +68,44 @@ public sealed class LogCommand : Command<LogCommand.Settings>
             AnsiConsole.Write(table);
         }
 
-        var (tokensIn, tokensOut) = settings.TaskId is { } taskId
+        var totals = settings.TaskId is { } taskId
             ? ledger.TaskTotals(taskId)
             : ledger.ProjectTotals();
         var scope = settings.TaskId is { } t ? $" (task {t})" : "";
-        AnsiConsole.MarkupLineInterpolated(
-            $"[grey]Token spend{scope}: {tokensIn:N0} in / {tokensOut:N0} out[/]");
+        AnsiConsole.MarkupLine(
+            $"[grey]Spend{scope}: [bold]${totals.CostUsd:F4}[/] — {totals.TotalTokens:N0} tokens " +
+            $"({totals.TokensIn:N0} in / {totals.TokensOut:N0} out / " +
+            $"{totals.CacheReadTokens:N0} cache read / {totals.CacheWriteTokens:N0} cache write)[/]");
+
+        // Per-role only for the whole project: inside a single task the breakdown is
+        // one row and says nothing the line above did not.
+        if (settings.TaskId is null) RenderRoleSpend(ledger);
         return 0;
+    }
+
+    /// <summary>
+    /// What each role cost. The ledger has carried role on every row since M0, so
+    /// this needed no new attribution — only a cost column to sum.
+    /// </summary>
+    private static void RenderRoleSpend(LedgerRepository ledger)
+    {
+        var spend = ledger.SpendByRole();
+        if (spend.Count == 0) return;
+
+        var table = new Table().Border(TableBorder.Rounded).Title("Spend by role");
+        table.AddColumn("Role");
+        table.AddColumn(new TableColumn("Calls").RightAligned());
+        table.AddColumn(new TableColumn("Tokens").RightAligned());
+        table.AddColumn(new TableColumn("Cost").RightAligned());
+        foreach (var role in spend)
+        {
+            table.AddRow(
+                Markup.Escape(Forge.Core.Model.SnakeCaseEnum.ToSnakeCase(role.Role)),
+                role.Calls.ToString("N0"),
+                role.TotalTokens.ToString("N0"),
+                $"${role.CostUsd:F4}");
+        }
+        AnsiConsole.Write(table);
     }
 
     /// <summary>

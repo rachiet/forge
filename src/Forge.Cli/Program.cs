@@ -45,6 +45,15 @@ app.Configure(config =>
             .WithDescription("Create a project's data directory: project.db, bare repo, workspaces.");
     });
 
+    config.AddBranch("prices", prices =>
+    {
+        prices.SetDescription("Model prices: what Forge will charge each tier against.");
+        prices.AddCommand<PricesShowCommand>("show")
+            .WithDescription("Show the cached price table's age and the rate for every configured model.");
+        prices.AddCommand<PricesUpdateCommand>("update")
+            .WithDescription("Force a price refresh, ignoring the cache TTL.");
+    });
+
     config.AddBranch("secrets", secrets =>
     {
         secrets.SetDescription("Manage the encrypted secrets vault. Agents only ever see {{secret:NAME}}.");

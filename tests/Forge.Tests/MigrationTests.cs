@@ -93,7 +93,9 @@ public class MigrationTests : IDisposable
             TokensOut = 100,
         });
 
-        Assert.Equal((1200, 600), new LedgerRepository(conn).ProjectTotals());
+        var totals = new LedgerRepository(conn).ProjectTotals();
+        Assert.Equal(1200, totals.TokensIn);
+        Assert.Equal(600, totals.TokensOut);
     }
 
     [Fact]

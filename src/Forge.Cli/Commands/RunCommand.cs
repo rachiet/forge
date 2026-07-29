@@ -32,9 +32,9 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         [Description("Keep claiming tasks until the board has no more work for the role.")]
         public bool Loop { get; init; }
 
-        [CommandOption("--project-budget <TOKENS>")]
-        [Description("Hard project-wide token cap. Calls are refused once it is reached.")]
-        public long? ProjectBudget { get; init; }
+        [CommandOption("--project-budget <USD>")]
+        [Description(LlmSetup.BudgetDescription)]
+        public decimal? ProjectBudget { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(
@@ -50,15 +50,12 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
 
         using var conn = Database.OpenProject(dbPath);
 
-        // The undecorated provider adapter never leaves this line — every call an
-        // agent makes goes through the supervisor.
-        var llm = new MeteredLlmClient(
-            new AnthropicLlmClient(), conn, settings.ProjectBudget);
-
         // Default sink: the project's log file. Swap this line to point logs
         // anywhere — a console sink, a composite, a remote service.
         using var sink = new FileLogSink(paths.ProjectLog(settings.Project));
         var logger = new ForgeLogger(sink, settings.Project);
+
+        var llm = LlmSetup.Metered(paths, conn, settings.ProjectBudget, logger);
 
         var runner = new TaskRunner(
             paths, settings.Project, conn, llm,

@@ -102,12 +102,27 @@ public static class Schema
           role TEXT NOT NULL CHECK(role IN ('pm','principal','engineer','qa','researcher')),
           task_id INTEGER REFERENCES tasks(id),
           model TEXT NOT NULL,
+          -- The four buckets a provider reports separately. tokens_in is the
+          -- *uncached* prompt remainder, so the real prompt size is the sum of
+          -- tokens_in + cache_read + cache_write. All four are stored because cost
+          -- prices them at different rates — and because keeping them makes a row's
+          -- cost recomputable when the price table changes.
           tokens_in INTEGER NOT NULL CHECK(tokens_in >= 0),
           tokens_out INTEGER NOT NULL CHECK(tokens_out >= 0),
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_read_tokens >= 0),
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_write_tokens >= 0),
+          -- USD × 1e-9. An integer so SUM() stays exact: budget enforcement is a
+          -- SUM comparison, and float drift across thousands of rows is not a
+          -- property money should have.
+          cost_nanos INTEGER NOT NULL DEFAULT 0 CHECK(cost_nanos >= 0),
+          -- Which price snapshot produced cost_nanos, so a re-priced row can be told
+          -- apart from an original one.
+          priced_with TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_ledger_task ON token_ledger(task_id);
+        CREATE INDEX IF NOT EXISTS ix_ledger_role ON token_ledger(role);
 
         CREATE TABLE IF NOT EXISTS milestones (
           id INTEGER PRIMARY KEY,

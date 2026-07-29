@@ -10,6 +10,19 @@ public sealed record TokenLedgerEntry
     public required string Model { get; init; }
     public required int TokensIn { get; init; }
     public required int TokensOut { get; init; }
+    public int CacheReadTokens { get; init; }
+    public int CacheWriteTokens { get; init; }
+
+    /// <summary>
+    /// What this one call cost, priced from all four buckets. Stored as integer
+    /// nano-dollars; decimal here because money should not round-trip through binary
+    /// floating point.
+    /// </summary>
+    public decimal CostUsd { get; init; }
+
+    /// <summary>Identifies the price snapshot that produced <see cref="CostUsd"/>.</summary>
+    public string? PricedWith { get; init; }
+
     public string? CreatedAt { get; init; }
 }
 

@@ -59,7 +59,7 @@ public class DesignPhaseTests : IDisposable
 
     private DesignPhase Design(ILlmClient llm) => new(
         _paths, Project, _conn,
-        new MeteredLlmClient(llm, _conn),
+        new MeteredLlmClient(llm, _conn, TestPrices.Catalog),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve());
 
     private string ShowFromTrunk(string path) =>
@@ -164,7 +164,7 @@ public class DesignPhaseTests : IDisposable
         // Before sign-off, the worker finds nothing — the tasks are `created`, not `ready`.
         var runner = new Forge.Core.Scheduling.TaskRunner(
             _paths, Project, _conn,
-            new MeteredLlmClient(new ScriptedLlmClient(), _conn),
+            new MeteredLlmClient(new ScriptedLlmClient(), _conn, TestPrices.Catalog),
             new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve());
         Assert.Null(runner.NextTask(AgentRole.Engineer));
 

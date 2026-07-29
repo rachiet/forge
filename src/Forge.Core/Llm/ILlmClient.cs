@@ -36,17 +36,37 @@ public sealed record LlmResponse
 /// <summary>
 /// The one LLM gateway. ALL calls flow through the MeteredLlmClient decorator —
 /// never hand an undecorated provider adapter to an agent loop.
+///
+/// The client is also the single authority on model ids: nothing else in Forge may
+/// name a model. A recipe asks for a tier and the configured client answers with
+/// whatever it calls that tier, which is what lets the provider be swapped in
+/// configuration rather than in code.
 /// </summary>
 public interface ILlmClient
 {
     Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default);
+
+    /// <summary>The concrete model id this provider uses for the given tier.</summary>
+    string ModelFor(ModelTier tier);
 }
 
-/// <summary>Raised instead of making the call — budgets are enforced by refusal, never by asking the model.</summary>
-public sealed class BudgetExhaustedException(string scope, long spent, long budget)
-    : InvalidOperationException($"{scope} token budget exhausted: {spent} spent of {budget}. LLM call refused.")
+/// <summary>
+/// Raised instead of making the call — budgets are enforced by refusal, never by
+/// asking the model. The two budgets are denominated differently on purpose: a
+/// project cap is money, a task cap is an approximate guard on one runaway agent,
+/// so the amounts are carried as pre-formatted text rather than forced into a
+/// single unit that would fit neither.
+/// </summary>
+public sealed class BudgetExhaustedException(string scope, string spent, string budget)
+    : InvalidOperationException($"{scope} budget exhausted: {spent} spent of {budget}. LLM call refused.")
 {
     public string Scope { get; } = scope;
-    public long Spent { get; } = spent;
-    public long Budget { get; } = budget;
+    public string Spent { get; } = spent;
+    public string Budget { get; } = budget;
+
+    public static BudgetExhaustedException Tokens(string scope, long spent, long budget) =>
+        new(scope, $"{spent:N0} tokens", $"{budget:N0}");
+
+    public static BudgetExhaustedException Usd(string scope, decimal spent, decimal budget) =>
+        new(scope, $"${spent:F4}", $"${budget:F2}");
 }

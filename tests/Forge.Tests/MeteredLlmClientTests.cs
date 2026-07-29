@@ -1,5 +1,6 @@
 using Forge.Core.Db;
 using Forge.Core.Llm;
+using Forge.Core.Llm.Pricing;
 using Forge.Core.Model;
 using Microsoft.Data.Sqlite;
 using TaskStatus = Forge.Core.Model.TaskStatus;
@@ -8,8 +9,10 @@ namespace Forge.Tests;
 
 public class MeteredLlmClientTests : IDisposable
 {
-    private sealed class FakeLlmClient(int tokensIn, int tokensOut) : ILlmClient
+    private sealed class FakeLlmClient(int tokensIn, int tokensOut, int cacheRead = 0, int cacheWrite = 0) : ILlmClient
     {
+        public string ModelFor(ModelTier tier) => TestPrices.For(tier);
+
         public int Calls { get; private set; }
 
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
@@ -19,7 +22,7 @@ public class MeteredLlmClientTests : IDisposable
             {
                 Content = "ok",
                 StopReason = "end_turn",
-                Usage = new LlmUsage(tokensIn, tokensOut),
+                Usage = new LlmUsage(tokensIn, tokensOut, cacheRead, cacheWrite),
             });
         }
     }
@@ -55,7 +58,7 @@ public class MeteredLlmClientTests : IDisposable
     {
         var taskId = StartTask(budget: 10_000);
         var inner = new FakeLlmClient(1000, 500);
-        var client = new MeteredLlmClient(inner, _conn);
+        var client = new MeteredLlmClient(inner, _conn, TestPrices.Catalog);
 
         await client.CompleteAsync(Request(taskId));
 
@@ -69,7 +72,7 @@ public class MeteredLlmClientTests : IDisposable
     public async Task Crossing_70_percent_injects_one_system_nudge()
     {
         var taskId = StartTask(budget: 1000);
-        var client = new MeteredLlmClient(new FakeLlmClient(300, 100), _conn);
+        var client = new MeteredLlmClient(new FakeLlmClient(300, 100), _conn, TestPrices.Catalog);
         var messages = new MessageRepository(_conn);
 
         await client.CompleteAsync(Request(taskId)); // 400 spent — below 700
@@ -92,7 +95,7 @@ public class MeteredLlmClientTests : IDisposable
         var taskId = StartTask(budget: 1000);
         _tasks.AddTokensSpent(taskId, 1000);
         var inner = new FakeLlmClient(1, 1);
-        var client = new MeteredLlmClient(inner, _conn);
+        var client = new MeteredLlmClient(inner, _conn, TestPrices.Catalog);
 
         await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(taskId)));
 
@@ -109,10 +112,86 @@ public class MeteredLlmClientTests : IDisposable
     public async Task Project_budget_cap_refuses_even_untasked_calls()
     {
         var client = new MeteredLlmClient(
-            new FakeLlmClient(600, 500), _conn, projectTokenBudget: 1000);
+            new FakeLlmClient(600, 500), _conn, TestPrices.Catalog, projectBudgetUsd: 0.005m);
 
-        await client.CompleteAsync(Request(null)); // 1100 total, over the cap now
+        // One call at sonnet rates: 600 × $2/Mtok + 500 × $10/Mtok = $0.0062, past the cap.
+        await client.CompleteAsync(Request(null));
         await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(null)));
         Assert.Single(new MessageRepository(_conn).Pending("pm"));
+    }
+
+    [Fact]
+    public async Task All_four_token_buckets_and_the_cost_are_ledgered()
+    {
+        var taskId = StartTask(budget: 10_000);
+        var client = new MeteredLlmClient(new FakeLlmClient(1000, 500, 10_000, 2000), _conn, TestPrices.Catalog);
+
+        await client.CompleteAsync(Request(taskId));
+
+        var entry = Assert.Single(new LedgerRepository(_conn).List(taskId));
+        Assert.Equal(1000, entry.TokensIn);
+        Assert.Equal(500, entry.TokensOut);
+        Assert.Equal(10_000, entry.CacheReadTokens);
+        Assert.Equal(2000, entry.CacheWriteTokens);
+
+        // sonnet: 1000×$2/M + 500×$10/M + 10000×$0.20/M + 2000×$2.50/M
+        Assert.Equal(0.014m, entry.CostUsd);
+        Assert.False(string.IsNullOrWhiteSpace(entry.PricedWith));
+    }
+
+    [Fact]
+    public async Task Task_budget_still_counts_tokens_and_ignores_the_cache_buckets()
+    {
+        // Deliberate: the task budget is an approximate runaway guard, not a spend
+        // control. Money safety is the project budget's job, in dollars.
+        var taskId = StartTask(budget: 10_000);
+        var client = new MeteredLlmClient(new FakeLlmClient(100, 50, 500_000, 90_000), _conn, TestPrices.Catalog);
+
+        await client.CompleteAsync(Request(taskId));
+
+        Assert.Equal(150, _tasks.Get(taskId).TokensSpent);
+    }
+
+    [Fact]
+    public async Task Spend_is_attributed_per_role()
+    {
+        var client = new MeteredLlmClient(new FakeLlmClient(1000, 1000), _conn, TestPrices.Catalog);
+
+        await client.CompleteAsync(Request(null) with
+        {
+            Attribution = new LlmAttribution("pm-1", AgentRole.Pm, null),
+        });
+        await client.CompleteAsync(Request(null) with
+        {
+            Attribution = new LlmAttribution("eng-1", AgentRole.Engineer, null),
+        });
+        await client.CompleteAsync(Request(null) with
+        {
+            Attribution = new LlmAttribution("eng-2", AgentRole.Engineer, null),
+        });
+
+        var spend = new LedgerRepository(_conn).SpendByRole().ToDictionary(r => r.Role);
+        Assert.Equal(2, spend[AgentRole.Engineer].Calls);
+        Assert.Equal(1, spend[AgentRole.Pm].Calls);
+        Assert.Equal(spend[AgentRole.Pm].CostUsd * 2, spend[AgentRole.Engineer].CostUsd);
+    }
+
+    [Fact]
+    public async Task An_unpriced_model_refuses_rather_than_recording_a_free_call()
+    {
+        var taskId = StartTask(budget: 10_000);
+        var client = new MeteredLlmClient(new FakeLlmClient(10, 10), _conn, TestPrices.Catalog);
+
+        await Assert.ThrowsAsync<ModelNotPricedException>(() =>
+            client.CompleteAsync(Request(taskId) with { Model = "some-unknown-model" }));
+    }
+
+    [Fact]
+    public void The_supervisor_forwards_tier_resolution_to_the_provider()
+    {
+        var client = new MeteredLlmClient(new FakeLlmClient(1, 1), _conn, TestPrices.Catalog);
+
+        Assert.Equal("claude-opus-4-8", client.ModelFor(ModelTier.Reasoning));
+        Assert.Equal("claude-sonnet-5", client.ModelFor(ModelTier.Coding));
     }
 }
