@@ -21,3 +21,17 @@ public enum ModelTier
     /// <summary>The strongest available. Design, review, and rescuing stuck work.</summary>
     Reasoning,
 }
+
+/// <summary>
+/// Builds an adapter's tier → model-id map, letting llm.json override any entry.
+/// Shared so every provider resolves configuration identically; a provider that
+/// rolled its own would be the one place an override silently did nothing.
+/// </summary>
+internal static class TierMap
+{
+    public static IReadOnlyDictionary<ModelTier, string> Resolve(
+        LlmConfig? config, IReadOnlyDictionary<ModelTier, string> defaults) =>
+        Enum.GetValues<ModelTier>().ToDictionary(
+            tier => tier,
+            tier => config?.Override(tier) ?? defaults[tier]);
+}

@@ -14,10 +14,13 @@ public static class LlmClientFactory
     public static ILlmClient Create(LlmConfig config) => config.Provider.ToLowerInvariant() switch
     {
         AnthropicLlmClient.ProviderName or "claude" => new AnthropicLlmClient(config: config),
+        OpenAiLlmClient.ProviderName or "gpt" => new OpenAiLlmClient(config: config),
+        GeminiLlmClient.ProviderName or "google" => new GeminiLlmClient(config: config),
         var unknown => throw new NotSupportedException(
             $"Unknown LLM provider '{unknown}'. Supported: {string.Join(", ", Supported)}."),
     };
 
     /// <summary>Provider names Create accepts — also what `forge prices show` reports.</summary>
-    public static IReadOnlyList<string> Supported => [AnthropicLlmClient.ProviderName];
+    public static IReadOnlyList<string> Supported =>
+        [AnthropicLlmClient.ProviderName, OpenAiLlmClient.ProviderName, GeminiLlmClient.ProviderName];
 }

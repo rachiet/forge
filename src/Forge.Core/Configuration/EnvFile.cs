@@ -90,10 +90,18 @@ public static class EnvFile
             # This file is read at startup and is never exposed to agents: the tool
             # executor builds a scrubbed environment for every command it runs.
             #
-            # Forge authenticates to the Anthropic Messages API with your Claude API
-            # key (sk-ant-api...), sent as the x-api-key header.
+            # Set the key for whichever provider llm.json selects — you only need one.
+            # The provider defaults to anthropic; change it in <data root>/llm.json or
+            # with FORGE_LLM_PROVIDER.
 
+            # Claude API key (sk-ant-api...), sent as the x-api-key header.
             ANTHROPIC_API_KEY=
+
+            # OpenAI API key (sk-...), sent as an Authorization: Bearer header.
+            OPENAI_API_KEY=
+
+            # Google AI Studio key, sent as the x-goog-api-key header.
+            GEMINI_API_KEY=
 
             """);
 

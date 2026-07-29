@@ -46,24 +46,41 @@ and run it like any other project.
 
 ## Setup
 
-### 1. Your Claude API key (required)
+### 1. An API key (required)
 
-Forge authenticates its calls to **Anthropic's Messages API** with your **Claude API
-key** — a value that looks like `sk-ant-api…`. Create one in the
-[Anthropic Console](https://console.anthropic.com/) under *API Keys*, then put it in
-a credentials file at **`~/forge_env`**:
+Forge runs on **Claude, OpenAI, or Gemini** — you need a key for one of them, in a
+credentials file at **`~/forge_env`**:
 
 ```sh
-# ~/forge_env  — Forge's own credential, never shown to the agents it runs
-ANTHROPIC_API_KEY=sk-ant-api-your-key-here
+# ~/forge_env  — Forge's own credentials, never shown to the agents it runs
+ANTHROPIC_API_KEY=sk-ant-api-your-key-here   # default provider
+# OPENAI_API_KEY=sk-...
+# GEMINI_API_KEY=...
 ```
 
 Then lock it down: `chmod 600 ~/forge_env`.
 
-This is the key Forge sends on every model call (as the `x-api-key` header). It
-stays Forge's own: the tool executor builds a scrubbed environment for any command
-an agent runs, so a generated project never sees it. Point Forge at a different file
-with the `FORGE_ENV` environment variable.
+These stay Forge's own: the tool executor builds a scrubbed environment for any
+command an agent runs, so a generated project never sees them. Point Forge at a
+different file with the `FORGE_ENV` environment variable.
+
+Claude is the default. To use another provider, create `<data root>/llm.json`:
+
+```json
+{ "provider": "openai" }
+```
+
+You can also pin a specific model per tier — `fast`, `coding`, `reasoning` — instead
+of taking the provider's defaults:
+
+```json
+{ "provider": "gemini",
+  "models": { "reasoning": "gemini/gemini-2.5-pro", "coding": "gemini/gemini-2.5-flash" } }
+```
+
+`FORGE_LLM_PROVIDER=openai forge run …` overrides the file for one command. Run
+**`forge prices show`** to confirm your provider and see the live rate for every
+model it will use — Forge refuses to run a model it cannot price.
 
 ### 2. Where your projects live (optional)
 

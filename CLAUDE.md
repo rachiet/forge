@@ -224,7 +224,21 @@ movable and shareable, so keys must not ride along in that payload.
   Adding a role remains a record + a prompt file; adding a provider is one adapter class
   with a three-entry tier map plus one case in `LlmClientFactory`. `AgentLoop` resolves
   the model **once per instance**, never per turn — a conversation must not change model
-  underneath itself.
+  underneath itself. Three adapters exist: `AnthropicLlmClient`, `OpenAiLlmClient`,
+  `GeminiLlmClient` (hand-rolled over HttpClient — Forge uses no SDK surface, since tool
+  calls are parsed out of plain text). Each adapter's default tier ids are **price-table
+  keys**, so every default is priceable out of the box.
+- **The adapter normalises usage; the rest of Forge sees one meaning.** `LlmUsage.TokensIn`
+  is always the *uncached prompt remainder*, which each provider reaches differently:
+  Anthropic's `input_tokens` already excludes cached tokens, while OpenAI's `prompt_tokens`
+  and Gemini's `promptTokenCount` include them and must have the cached count subtracted.
+  Two further traps, both settled from the published schemas: OpenAI reports
+  `cache_write_tokens` but prices no cache-write rate (it bills them as ordinary input),
+  so they stay inside `TokensIn` and `CacheWriteTokens` is left at zero — mapping them
+  across would ask the pricer for a nonexistent rate and throw. Gemini reports
+  `thoughtsTokenCount` separately from `candidatesTokenCount` but bills it as output, so
+  output is their **sum**. Gemini ids also carry the price table's `gemini/` prefix and the
+  adapter strips it for the URL, so one canonical id travels through recipe, ledger and pricer.
 - **The provider is configuration, not code.** `<data root>/llm.json` names the provider
   and may pin any tier's model id; `FORGE_LLM_PROVIDER` overrides it (same
   environment-beats-file rule as `EnvFile`). No file at all is valid — the default

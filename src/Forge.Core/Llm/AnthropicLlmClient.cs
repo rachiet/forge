@@ -47,9 +47,7 @@ public sealed class AnthropicLlmClient : ILlmClient
             ? new AnthropicClient()
             : new AnthropicClient { ApiKey = apiKey };
 
-        _models = Enum.GetValues<ModelTier>().ToDictionary(
-            tier => tier,
-            tier => config?.Override(tier) ?? DefaultModels[tier]);
+        _models = TierMap.Resolve(config, DefaultModels);
     }
 
     public string ModelFor(ModelTier tier) => _models[tier];
