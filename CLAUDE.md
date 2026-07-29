@@ -262,6 +262,17 @@ M5 (QA) → M6 (CRs). Anti-pattern: standing up all personas at once.
 ## Non-negotiables to preserve in code
 - Budgets enforced by refusing the next LLM call, never by asking the model.
 - All LLM calls flow through one `MeteredLlmClient` decorator (ledger + caps).
+- **Never hardcode a model price.** Rates come from `PriceCatalog` (LiteLLM's table,
+  cached at `<data root>/prices/` with a 1-day TTL); no provider serves prices over an
+  API, and a hand-maintained constant goes stale silently — the reason the old
+  `ModelPricing` class is gone. An unpriced model **refuses to run**: with a dollar
+  budget, costing $0 is a cap that never trips.
+- **Two budget units, two jobs.** The *project* budget is dollars — real spend, priced
+  from all four token buckets. A *task* budget stays tokens: an approximate guard on one
+  runaway agent, not a spend control. Note it counts the uncached remainder plus output,
+  so it undercounts real volume by ~25x; that is tolerated deliberately, and normalising
+  it is a question for when a second provider lands (Anthropic excludes cached tokens
+  from `input_tokens`; OpenAI and Gemini include them).
 - Merge/CI/test state read from git and process output, never from agent claims.
 - Secrets: agents see `{{secret:NAME}}`; substitution in the tool executor at
   exec time; values never in DB, context, or logs.

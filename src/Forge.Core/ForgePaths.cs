@@ -26,6 +26,13 @@ public sealed class ForgePaths
     public string VaultDir => Path.Combine(DataRoot, "vault");
     public string ProjectsDir => Path.Combine(DataRoot, "projects");
 
+    /// <summary>
+    /// The cached model price table. Machine-wide rather than per project: prices
+    /// are a property of the world, and a copy inside each project.db would drift
+    /// as many ways as there are projects.
+    /// </summary>
+    public string PriceCache => Path.Combine(DataRoot, "prices", "litellm.json");
+
     public string ProjectDir(string project) => Path.Combine(ProjectsDir, ValidName(project));
     public string ProjectDb(string project) => Path.Combine(ProjectDir(project), "project.db");
     public string ProjectBareRepo(string project) => Path.Combine(ProjectDir(project), "repo.git");
