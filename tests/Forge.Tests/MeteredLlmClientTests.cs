@@ -55,14 +55,13 @@ public class MeteredLlmClientTests : IDisposable
     {
         var taskId = StartTask(budget: 10_000);
         var inner = new FakeLlmClient(1000, 500);
-        var client = new MeteredLlmClient(inner, _conn, ModelPricing.Default);
+        var client = new MeteredLlmClient(inner, _conn);
 
         await client.CompleteAsync(Request(taskId));
 
         var entry = Assert.Single(new LedgerRepository(_conn).List(taskId));
         Assert.Equal(1000, entry.TokensIn);
         Assert.Equal(500, entry.TokensOut);
-        Assert.Equal((1000 * 3.0 + 500 * 15.0) / 1_000_000, entry.CostUsd, 10);
         Assert.Equal(1500, _tasks.Get(taskId).TokensSpent);
     }
 
@@ -70,7 +69,7 @@ public class MeteredLlmClientTests : IDisposable
     public async Task Crossing_70_percent_injects_one_system_nudge()
     {
         var taskId = StartTask(budget: 1000);
-        var client = new MeteredLlmClient(new FakeLlmClient(300, 100), _conn, ModelPricing.Default);
+        var client = new MeteredLlmClient(new FakeLlmClient(300, 100), _conn);
         var messages = new MessageRepository(_conn);
 
         await client.CompleteAsync(Request(taskId)); // 400 spent — below 700
@@ -93,7 +92,7 @@ public class MeteredLlmClientTests : IDisposable
         var taskId = StartTask(budget: 1000);
         _tasks.AddTokensSpent(taskId, 1000);
         var inner = new FakeLlmClient(1, 1);
-        var client = new MeteredLlmClient(inner, _conn, ModelPricing.Default);
+        var client = new MeteredLlmClient(inner, _conn);
 
         await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(taskId)));
 
@@ -110,7 +109,7 @@ public class MeteredLlmClientTests : IDisposable
     public async Task Project_budget_cap_refuses_even_untasked_calls()
     {
         var client = new MeteredLlmClient(
-            new FakeLlmClient(600, 500), _conn, ModelPricing.Default, projectTokenBudget: 1000);
+            new FakeLlmClient(600, 500), _conn, projectTokenBudget: 1000);
 
         await client.CompleteAsync(Request(null)); // 1100 total, over the cap now
         await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(null)));

@@ -171,7 +171,7 @@ CREATE TABLE discussions (
 CREATE TABLE token_ledger (
   id INTEGER PRIMARY KEY,
   agent_instance_id TEXT, role TEXT, task_id INTEGER,
-  model TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL,
+  model TEXT, tokens_in INTEGER, tokens_out INTEGER,
   created_at TEXT
 );
 

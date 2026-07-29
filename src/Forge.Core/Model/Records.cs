@@ -10,7 +10,6 @@ public sealed record TokenLedgerEntry
     public required string Model { get; init; }
     public required int TokensIn { get; init; }
     public required int TokensOut { get; init; }
-    public required double CostUsd { get; init; }
     public string? CreatedAt { get; init; }
 }
 

@@ -104,7 +104,6 @@ public static class Schema
           model TEXT NOT NULL,
           tokens_in INTEGER NOT NULL CHECK(tokens_in >= 0),
           tokens_out INTEGER NOT NULL CHECK(tokens_out >= 0),
-          cost_usd REAL NOT NULL CHECK(cost_usd >= 0),
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 

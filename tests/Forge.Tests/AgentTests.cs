@@ -405,7 +405,7 @@ public class AgentLoopTests : IDisposable
     {
         var task = StartTask(budget: 300); // one call costs 150; the second is refused
         var llm = new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("list_dir") };
-        var metered = new MeteredLlmClient(llm, _conn, ModelPricing.Default);
+        var metered = new MeteredLlmClient(llm, _conn);
 
         var result = await Loop(metered).RunAsync(task, _executor);
 
@@ -482,7 +482,7 @@ public class AgentLoopTests : IDisposable
             ScriptedLlmClient.Tool("list_dir"),
             ScriptedLlmClient.Tool("list_dir"),
             ScriptedLlmClient.Tool("done", ("summary", "Wrapped up as instructed.")));
-        var metered = new MeteredLlmClient(llm, _conn, ModelPricing.Default);
+        var metered = new MeteredLlmClient(llm, _conn);
 
         await Loop(metered).RunAsync(task, _executor);
 

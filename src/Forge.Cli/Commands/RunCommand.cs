@@ -53,7 +53,7 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         // The undecorated provider adapter never leaves this line — every call an
         // agent makes goes through the supervisor.
         var llm = new MeteredLlmClient(
-            new AnthropicLlmClient(), conn, ModelPricing.Default, settings.ProjectBudget);
+            new AnthropicLlmClient(), conn, settings.ProjectBudget);
 
         // Default sink: the project's log file. Swap this line to point logs
         // anywhere — a console sink, a composite, a remote service.

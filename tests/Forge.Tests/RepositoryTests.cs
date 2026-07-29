@@ -148,7 +148,6 @@ public class RepositoryTests : IDisposable
             Model = "claude-sonnet-5",
             TokensIn = 1000,
             TokensOut = 500,
-            CostUsd = 0.0105,
         });
         ledger.Append(new TokenLedgerEntry
         {
@@ -158,14 +157,12 @@ public class RepositoryTests : IDisposable
             Model = "claude-fable-5",
             TokensIn = 200,
             TokensOut = 100,
-            CostUsd = 0.0175,
         });
 
-        Assert.Equal((1000, 500, 0.0105), ledger.TaskTotals(task.Id));
+        Assert.Equal((1000, 500), ledger.TaskTotals(task.Id));
         var project = ledger.ProjectTotals();
         Assert.Equal(1200, project.TokensIn);
         Assert.Equal(600, project.TokensOut);
-        Assert.Equal(0.028, project.CostUsd, 6);
         Assert.Equal(2, ledger.List().Count);
         Assert.Single(ledger.List(task.Id));
     }

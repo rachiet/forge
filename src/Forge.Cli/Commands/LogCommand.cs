@@ -68,12 +68,12 @@ public sealed class LogCommand : Command<LogCommand.Settings>
             AnsiConsole.Write(table);
         }
 
-        var (tokensIn, tokensOut, cost) = settings.TaskId is { } taskId
+        var (tokensIn, tokensOut) = settings.TaskId is { } taskId
             ? ledger.TaskTotals(taskId)
             : ledger.ProjectTotals();
         var scope = settings.TaskId is { } t ? $" (task {t})" : "";
         AnsiConsole.MarkupLineInterpolated(
-            $"[grey]Token spend{scope}: {tokensIn:N0} in / {tokensOut:N0} out, ${cost:F4}[/]");
+            $"[grey]Token spend{scope}: {tokensIn:N0} in / {tokensOut:N0} out[/]");
         return 0;
     }
 

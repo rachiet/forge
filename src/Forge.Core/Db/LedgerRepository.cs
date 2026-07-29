@@ -10,8 +10,8 @@ public sealed class LedgerRepository(IDbConnection conn)
     {
         var id = conn.ExecuteScalar<long>("""
             INSERT INTO token_ledger (agent_instance_id, role, task_id, model,
-                                      tokens_in, tokens_out, cost_usd)
-            VALUES (@AgentInstanceId, @Role, @TaskId, @Model, @TokensIn, @TokensOut, @CostUsd)
+                                      tokens_in, tokens_out)
+            VALUES (@AgentInstanceId, @Role, @TaskId, @Model, @TokensIn, @TokensOut)
             RETURNING id
             """,
             new
@@ -22,38 +22,35 @@ public sealed class LedgerRepository(IDbConnection conn)
                 entry.Model,
                 entry.TokensIn,
                 entry.TokensOut,
-                entry.CostUsd,
             });
         return entry with { Id = id };
     }
 
-    public (long TokensIn, long TokensOut, double CostUsd) ProjectTotals() =>
-        conn.QuerySingle<(long, long, double)>("""
-            SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
-                   COALESCE(SUM(cost_usd), 0.0)
+    public (long TokensIn, long TokensOut) ProjectTotals() =>
+        conn.QuerySingle<(long, long)>("""
+            SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
             FROM token_ledger
             """);
 
-    public (long TokensIn, long TokensOut, double CostUsd) TaskTotals(long taskId) =>
-        conn.QuerySingle<(long, long, double)>("""
-            SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
-                   COALESCE(SUM(cost_usd), 0.0)
+    public (long TokensIn, long TokensOut) TaskTotals(long taskId) =>
+        conn.QuerySingle<(long, long)>("""
+            SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
             FROM token_ledger WHERE task_id = @taskId
             """, new { taskId });
 
     public IReadOnlyList<TokenLedgerEntry> List(long? taskId = null)
     {
         var rows = conn.Query<(long Id, string AgentInstanceId, string Role, long? TaskId,
-                string Model, int TokensIn, int TokensOut, double CostUsd, string CreatedAt)>(
+                string Model, int TokensIn, int TokensOut, string CreatedAt)>(
             taskId is null
                 ? """
                   SELECT id, agent_instance_id, role, task_id, model, tokens_in, tokens_out,
-                         cost_usd, created_at
+                         created_at
                   FROM token_ledger ORDER BY id
                   """
                 : """
                   SELECT id, agent_instance_id, role, task_id, model, tokens_in, tokens_out,
-                         cost_usd, created_at
+                         created_at
                   FROM token_ledger WHERE task_id = @taskId ORDER BY id
                   """,
             new { taskId });
@@ -66,7 +63,6 @@ public sealed class LedgerRepository(IDbConnection conn)
             Model = r.Model,
             TokensIn = r.TokensIn,
             TokensOut = r.TokensOut,
-            CostUsd = r.CostUsd,
             CreatedAt = r.CreatedAt,
         }).ToList();
     }

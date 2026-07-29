@@ -51,7 +51,7 @@ public class TaskRunnerTests : IDisposable
     /// <summary>Metered, as in production — an agent never sees an undecorated client.</summary>
     private TaskRunner Runner(ILlmClient llm, Forge.Core.Logging.ForgeLogger? logger = null) => new(
         _paths, Project, _conn,
-        new MeteredLlmClient(llm, _conn, ModelPricing.Default),
+        new MeteredLlmClient(llm, _conn),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger);
 
     /// <summary>Read a file out of the bare repo — the source of truth, not the workspace.</summary>

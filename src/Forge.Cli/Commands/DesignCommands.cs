@@ -44,7 +44,7 @@ public sealed class DesignRunCommand : AsyncCommand<DesignRunCommand.Settings>
         using var sink = new FileLogSink(paths.ProjectLog(settings.Project));
         var design = new DesignPhase(
             paths, settings.Project, conn,
-            new MeteredLlmClient(new AnthropicLlmClient(), conn, ModelPricing.Default, settings.ProjectBudget),
+            new MeteredLlmClient(new AnthropicLlmClient(), conn, settings.ProjectBudget),
             new SecretsVault(paths.VaultDir), PromptLibrary.Resolve(),
             new ForgeLogger(sink, settings.Project));
 

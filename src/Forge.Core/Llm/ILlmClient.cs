@@ -17,11 +17,12 @@ public sealed record LlmRequest
 }
 
 /// <summary>
-/// Cache-aware usage. TokensIn is the *uncached* input remainder (full price);
-/// CacheReadTokens were served from cache (~0.1x) and CacheWriteTokens were
-/// written to it (~1.25x). The whole prompt sent = TokensIn + CacheReadTokens +
-/// CacheWriteTokens. A run with CacheReadTokens sitting at zero across turns
-/// means a prefix invalidator is at work (spec §prompt-caching).
+/// Cache-aware usage, as the provider reported it — these are the counts it bills
+/// on, not an estimate. TokensIn is the *uncached* input remainder; CacheReadTokens
+/// were served from cache and CacheWriteTokens written to it, so the whole prompt
+/// sent = TokensIn + CacheReadTokens + CacheWriteTokens. A run with CacheReadTokens
+/// sitting at zero across turns means a prefix invalidator is at work
+/// (spec §prompt-caching).
 /// </summary>
 public sealed record LlmUsage(int TokensIn, int TokensOut, int CacheReadTokens = 0, int CacheWriteTokens = 0);
 

@@ -42,7 +42,7 @@ public class PmChatTests : IDisposable
 
     private PmChat Chat(ILlmClient llm) => new(
         _paths, Project, _conn,
-        new MeteredLlmClient(llm, _conn, ModelPricing.Default),
+        new MeteredLlmClient(llm, _conn),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve());
 
     private string ShowFromTrunk(string path) =>
