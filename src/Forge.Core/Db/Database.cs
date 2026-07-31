@@ -24,7 +24,6 @@ public static class Database
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         var conn = Open(dbPath);
         conn.Execute(Schema.GlobalDdl);
-        Migrations.ApplyGlobal(conn);
         return conn;
     }
 
@@ -32,9 +31,6 @@ public static class Database
     {
         var conn = Open(dbPath);
         conn.Execute(Schema.ProjectDdl);
-        // The DDL only creates missing tables; reshaping one that already holds a
-        // project's history is Migrations' job. Idempotent, so it runs on every open.
-        Migrations.ApplyProject(conn);
         return conn;
     }
 }

@@ -30,7 +30,7 @@ public enum MessageType
     Question, Answer, Review, Decision, Escalation, Status, ChangeRequest, SystemNudge
 }
 
-public enum MessageStatus { Pending, InProgress, Done }
+public enum MessageStatus { Pending, Received }
 
 public enum EndReason { Done, Budget, Iterations, Crash, Escalated }
 

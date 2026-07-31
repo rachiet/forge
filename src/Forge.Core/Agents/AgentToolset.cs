@@ -556,7 +556,7 @@ public sealed class AgentToolset(
     {
         foreach (var m in _messages.Pending("pm").Concat(_messages.Pending("client")))
             if (m.TaskId == taskId && m is EscalationMessage)
-                _messages.SetStatus(m.Id, MessageStatus.Done);
+                _messages.SetStatus(m.Id, MessageStatus.Received);
     }
 
     private ToolOutcome AddDependency(ToolCall call)

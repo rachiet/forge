@@ -75,7 +75,7 @@ public class RepositoryTests : IDisposable
         Assert.IsType<QuestionMessage>(only);
         Assert.Equal(q.Id, only.Id);
 
-        repo.SetStatus(q.Id, MessageStatus.Done);
+        repo.SetStatus(q.Id, MessageStatus.Received);
         Assert.Empty(repo.Pending("principal"));
 
         Assert.Equal(2, repo.Log().Count);

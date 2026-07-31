@@ -235,7 +235,7 @@ public sealed class AgentLoop(
                 .AppendLine($"[message: {SnakeCaseEnum.ToSnakeCase(message.Type)} from {message.FromAgent}]")
                 .AppendLine(message.Payload)
                 .AppendLine();
-            _messages.SetStatus(message.Id, MessageStatus.Done);
+            _messages.SetStatus(message.Id, MessageStatus.Received);
             if (message.Type == MessageType.SystemNudge)
                 log.Event(EventType.LlmNudge, message.Payload);
         }

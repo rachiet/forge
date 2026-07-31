@@ -33,7 +33,7 @@ public static class Schema
           type TEXT NOT NULL CHECK(type IN ('question','answer','review','decision',
                                    'escalation','status','change_request','system_nudge')),
           payload TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','done')),
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','received')),
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 

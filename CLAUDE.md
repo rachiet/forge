@@ -282,9 +282,6 @@ movable and shareable, so keys must not ride along in that payload.
   `agent_instance_id`, `role` and `task_id` since M0, so "what did the PM cost" is
   `GROUP BY role` (`LedgerRepository.SpendByRole`, shown by `forge log`). Role granularity
   only: design/review/triage/implementation all report as `principal`, which is accepted.
-- **Schema changes to populated tables go in `Db/Migrations.cs`**, run on every
-  `OpenProject`, and must be no-ops the second time. The DDL in `Schema.cs` only ever
-  creates *missing* tables, so it cannot reshape an existing one.
 
 ### Client progress board [DECIDED] (`forge board <project>`)
 
