@@ -27,9 +27,11 @@ public sealed record DesignOutcome(
 ///
 /// It runs the same agent loop as everyone else, seeded with a design brief
 /// instead of a task packet or a chat, on a long-lived clone of trunk (like the
-/// PM's doc work). Two gates follow: the PM coverage gate is checked here
-/// mechanically; the client sign-off gate is separate — tasks are born `created`
-/// and only `Approve` makes them claimable.
+/// PM's doc work). The PM coverage gate is checked here mechanically. The
+/// client's approval is the requirements the PM captured in chat: once the PM
+/// opens a Feature with `create_feature`, the harness runs this phase and
+/// releases the tasks it creates to `ready` on its own
+/// (`TaskRunner.DecomposeFeatureAsync`).
 /// </summary>
 public sealed class DesignPhase(
     ForgePaths paths,
@@ -70,7 +72,9 @@ public sealed class DesignPhase(
             .ConfigureAwait(false);
 
         // The design docs are the Principal's artifacts; they go straight to trunk,
-        // the same way the PM's requirements do. The client reviews via sign-off.
+        // the same way the PM's requirements do. Nothing further waits on a human:
+        // the tasks this run creates are released to `ready` by the caller
+        // (`TaskRunner.DecomposeFeatureAsync`) as soon as this method returns.
         var committed = new WorkspaceManager(paths, project).CommitAndPushTrunk(WorkspacePath,
             isChangeRequest ? "design: change-request impact analysis and delta tasks"
                             : "design: structure, conventions, contracts, task plan");
@@ -92,33 +96,6 @@ public sealed class DesignPhase(
         var summary = result.Reply ?? result.ProgressNote
             ?? $"Design ended ({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns.";
         return new DesignOutcome(result.End, created, coverage, summary, result.ProjectBudgetExhausted);
-    }
-
-    /// <summary>
-    /// The client sign-off gate (spec §7): the design was created as `created`
-    /// tasks, claimable by no one. Approval flips every one of them to `ready`,
-    /// which is the single point where "the client accepted the design" becomes
-    /// mechanically true and engineers can start. Returns how many were released.
-    ///
-    /// Static because sign-off needs only the board and a log — no model, no
-    /// workspace — so the CLI does not have to build a provider adapter to record
-    /// a human decision.
-    /// </summary>
-    public static int Approve(IDbConnection conn, ForgeLogger? logger = null)
-    {
-        var tasks = new TaskRepository(conn);
-        var pending = tasks.List().Where(t => t.Status == TaskStatus.Created).ToList();
-        foreach (var task in pending)
-            tasks.Transition(task.Id, TaskStatus.Ready);
-
-        // Re-arm QA: a signed-off change request is a fresh cycle, so clear any earlier
-        // "did not converge" escalation. The done-count watermark handles the rest — the
-        // new tasks completing lifts it, which re-triggers QA once they are all done.
-        if (pending.Count > 0) new ProjectMetaRepository(conn).Set("qa_escalated", "0");
-
-        (logger ?? ForgeLogger.Null)
-            .Message($"Client signed off on the design — {pending.Count} task(s) released to the board");
-        return pending.Count;
     }
 
     /// <summary>
@@ -168,8 +145,9 @@ public sealed class DesignPhase(
           requirement it implements, with `add_dependency` edges for ordering.
 
         Every requirement section must map to at least one task. Call `done` with a
-        plain-language summary of the design when the plan is complete; it goes to
-        the PM for a coverage check and to the client for sign-off.
+        plain-language summary of the design when the plan is complete; it goes
+        through a mechanical coverage check and then straight to the board —
+        engineers start on it as soon as you finish.
         """;
 
     /// <summary>
@@ -196,8 +174,8 @@ public sealed class DesignPhase(
           larger than it appears, do NOT create tasks — `escalate(reason)` with your
           concern so it goes back to the client to decide.
 
-        Call `done` with a plain-language summary: what is affected, the tasks you created
-        and their total budget (the cost of the change), and any regression risk. The new
-        tasks are born `created` and reach engineers only after the client signs off.
+        Call `done` with a plain-language summary: what is affected, the tasks you
+        created, and any regression risk. The new tasks reach engineers as soon as
+        you finish.
         """;
 }

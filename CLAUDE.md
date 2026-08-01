@@ -110,23 +110,33 @@ movable and shareable, so keys must not ride along in that payload.
   or none filed) never moves the watermark, so QA is not called again → **project
   complete**. A non-converging project escalates to the client after `QaRoundCap` (5).
 
-### Change requests [DECIDED] (M6 — a change to an already-built project)
-- **Same spine, two deltas.** A CR reuses everything: the client talks to the PM
-  (`forge chat`) who updates the affected requirement(s), then `forge design run`,
-  `forge design approve`, `forge run --loop`, CI + review + merge, and QA. Only two
-  things differ.
+### Change requests [DECIDED] (M6 — a change to an already-built project;
+  superseded design-signoff mechanics updated after the Feature rework, below)
+- **Same spine, just the delta.** A CR reuses everything: the client talks to the PM
+  (`forge chat`), who updates the affected requirement(s) and opens a Feature
+  with `create_feature` exactly as it would for the initial build — that single
+  handoff is the only thing the client (or operator) does; `forge run --loop`
+  from there autonomously runs the impact analysis, CI + review + merge, and QA.
 - **Design becomes impact analysis, not greenfield** (`DesignPhase.ChangeRequestBrief`).
   A design run is a CR iff the project already has a `done` task. In that mode the
   Principal reads the existing structure/contracts/MODULE.md, writes an impact note to
   `docs/design/impact/`, and creates **only the delta** tasks (never recreating done
-  work) — or `escalate`s if the change is ill-advised (the pushback path). The cost of
-  the change is the sum of the delta tasks' budgets, which the client sees at sign-off.
+  work) — or `escalate`s if the change is ill-advised (the pushback path). There is
+  no pre-build cost estimate for a CR, and a task's token budget is not one either:
+  it is a per-task cap meant to bound a runaway agent, deliberately approximate
+  (undercounts real usage since cache reads dominate and aren't counted toward it),
+  and set by the Principal based on how much room the work needs — not a prediction
+  of what it will cost. A lower budget does not make the work cheaper or faster, it
+  only makes the task more likely to hit `OutOfBudget` and strike. The only real,
+  dollar-denominated cost signal is the project's live USD spend (`forge log`, the
+  board), read after the fact from the token ledger.
 - **QA re-arms via the generalized watermark.** The QA gate's "new work to verify"
-  signal is now the count of **all done tasks** (`CountDone`), not done bugs — so a
+  signal is the count of **all done tasks** (`CountDone`), not done bugs — so a
   CR's completed tasks re-trigger QA exactly as a bug-fix does, and the full acceptance
-  suite re-runs to catch regressions the change caused. `design approve` clears any
-  `qa_escalated` flag so a CR is a fresh QA cycle. Specs live in the **client** repo
-  (requirements/contracts updated before the change; MODULE.md by the engineer during it).
+  suite re-runs to catch regressions the change caused. `TaskRunner.DecomposeFeatureAsync`
+  clears the `qa_escalated` flag the moment it decomposes a new Feature, so a CR is
+  always a fresh QA cycle. Specs live in the **client** repo (requirements/contracts
+  updated before the change; MODULE.md by the engineer during it).
 
 ### QA/triage hardening [DECIDED] (settled after the first live QA run)
 - **A bug carries machine-captured evidence, not model prose.** `file_bug(title,
@@ -188,11 +198,17 @@ movable and shareable, so keys must not ride along in that payload.
 - **PM coverage gate is mechanical** (`Design/CoverageGate.cs`): every
   `docs/requirements/NN-*.md` must be named by some task's `requirements_ref`, or
   it's reported as uncovered. Ground truth, not an LLM claim.
-- **Client sign-off gate uses status, not a new field.** Design tasks are born
-  `created` (unclaimable); `DesignPhase.Approve` flips them to `ready`. That
-  transition IS "the client accepted the design" — `forge design approve`. Until
-  then `forge run` finds no work.
-- CLI: `forge design run <project>` then `forge design approve <project>`.
+- **Superseded: there is no separate client sign-off on the design.** M3 shipped
+  a `forge design run` / `forge design approve` CLI pair, with tasks born
+  `created` (unclaimable) until a human ran `approve`. Once `create_feature`
+  existed (client progress board era) as the PM's one handoff to engineering,
+  that gate became redundant: `create_feature` births the Feature directly in
+  `triage`, and `TaskRunner.DecomposeFeatureAsync` runs this same `DesignPhase`
+  and releases the tasks it creates (`created` → `ready`) itself, with no human
+  step in between — its own comment calls this out as "autonomous: no client
+  sign-off step." The CLI commands and `DesignPhase.Approve` were dead code by
+  that point and have been removed; the client's one approval is the
+  requirements they confirm with the PM in chat, before it calls `create_feature`.
 
 ### Agent runtime [DECIDED] (settled while building M1/M2)
 - **Recipes declare their tools and file scope.** `AgentRecipe.Tools` is the

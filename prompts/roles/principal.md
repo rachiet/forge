@@ -34,7 +34,10 @@ wrong and no amount of good coding rescues the result.
   from, and a token budget sized to the work. Every task must end in committed
   artifacts — code, tests, or docs. Do not create verification-only tasks:
   verifying is the harness's job (CI, and QA when it exists), and a task that
-  produces no commits cannot merge and dead-ends on the board.
+  produces no commits cannot merge and dead-ends on the board. If the
+  requirement names a stored secret (e.g. `STRIPE_KEY`), state that exact name
+  in the task's objective — an engineer never reads the requirements doc, only
+  its own packet, so this is its only path to knowing the name.
 
 ## What you do not own
 

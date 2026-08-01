@@ -152,7 +152,7 @@ public class DesignPhaseTests : IDisposable
     }
 
     [Fact]
-    public async Task Design_tasks_are_not_claimable_until_the_client_signs_off()
+    public async Task Design_tasks_are_not_claimable_on_their_own()
     {
         SeedRequirements("01-todos.md");
         var llm = new ScriptedLlmClient(
@@ -161,21 +161,16 @@ public class DesignPhaseTests : IDisposable
 
         await Design(llm).RunAsync();
 
-        // Before sign-off, the worker finds nothing — the tasks are `created`, not `ready`.
+        // DesignPhase.RunAsync only authors the plan — the tasks it creates are born
+        // `created`, not `ready`. Releasing them to the board is the caller's job
+        // (TaskRunner.DecomposeFeatureAsync, run autonomously once a Feature reaches
+        // it — there is no separate client sign-off step on the design itself).
         var runner = new Forge.Core.Scheduling.TaskRunner(
             _paths, Project, _conn,
             new MeteredLlmClient(new ScriptedLlmClient(), _conn, TestPrices.Catalog),
             new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve());
         Assert.Null(runner.NextTask(AgentRole.Engineer));
-
-        // Sign-off releases them.
-        var released = DesignPhase.Approve(_conn);
-        Assert.Equal(1, released);
-        Assert.Equal(TaskStatus.Ready, _tasks.List().Single().Status);
-        Assert.NotNull(runner.NextTask(AgentRole.Engineer));
-
-        // A second sign-off is a no-op — nothing left in `created`.
-        Assert.Equal(0, DesignPhase.Approve(_conn));
+        Assert.Equal(TaskStatus.Created, _tasks.List().Single().Status);
     }
 
     [Fact]

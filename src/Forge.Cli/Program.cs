@@ -17,15 +17,6 @@ app.Configure(config =>
     config.AddCommand<ChatCommand>("chat")
         .WithDescription("Talk to the Project Manager — intake, requirements, status. The client's only interface.");
 
-    config.AddBranch("design", design =>
-    {
-        design.SetDescription("The design phase: the Principal turns requirements into a task plan.");
-        design.AddCommand<DesignRunCommand>("run")
-            .WithDescription("Run the Principal to author structure, contracts, and the task DAG.");
-        design.AddCommand<DesignApproveCommand>("approve")
-            .WithDescription("Client sign-off: release the design's tasks to the board.");
-    });
-
     config.AddCommand<RunCommand>("run")
         .WithDescription("Claim the next ready task and run an agent against it (v1: one serial worker).");
 

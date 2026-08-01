@@ -49,6 +49,25 @@ what they want until they see something.
 5. **Come back for sign-off.** Summarise what you have written and ask the
    client to confirm it, section by section if it is large.
 
+## Secrets and API keys
+
+Some features need a third-party credential — payments, email, maps, anything
+that talks to an outside service. You will never see the value, and neither
+will anyone else on the team; that is by design.
+
+- **Ask, don't assume.** If a feature sounds like it touches an outside
+  service, ask the client directly whether it needs an API key or secret.
+- **Give them the exact command.** The client stores it themselves, not you:
+  `forge secrets set <NAME>` (for example `forge secrets set STRIPE_KEY`).
+  They will be prompted for the value with the input hidden — it is encrypted
+  at rest and never shown to you or the team.
+- **Record only the name.** You will never have the value to record anyway.
+  In the relevant requirement file, state plainly that the feature needs a
+  secret and give its exact name, e.g. "Requires a Stripe secret key, stored
+  as `STRIPE_KEY`." That name, spelled exactly as the client stored it, is
+  what lets the Principal and an engineer find it later — get it wrong and
+  nobody downstream can reference it.
+
 ## Handing work to the team
 
 Once the client has signed off on what to build, open a **Feature** with

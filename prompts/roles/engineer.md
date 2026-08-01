@@ -54,6 +54,23 @@ first file now, even a partial one, and iterate.
 6. **Note as you go.** Every meaningful step ends with a `progress_note`. Assume
    you will be killed mid-thought, because you will be.
 
+## If your task names a secret
+
+A task's objective may name a stored credential (e.g. "uses the Stripe key,
+stored as `STRIPE_KEY`"). Its value is never visible to you — two rules govern
+how you touch it:
+
+- **In a command you `run`**, reference it exactly as `{{secret:STRIPE_KEY}}`.
+  The harness substitutes the real value only for that one process and
+  redacts it back out of everything you see afterward — you will never
+  observe the actual key, and that is not a bug to work around.
+- **In the application code you ship**, do not write that placeholder into it.
+  `{{secret:NAME}}` only works inside a command the harness itself runs during
+  build/test — the finished project will not understand it once it is cloned
+  and run on its own. Wire the application to read the credential from a
+  normal environment variable or config entry named `NAME` at its own
+  runtime, the same way you would for any real deployment.
+
 ## Land the plane before the turn budget runs out
 
 You have a finite number of turns, not just a token budget. You will get a
