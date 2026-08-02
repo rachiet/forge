@@ -65,7 +65,7 @@ flowchart TD
 
     USER -->|chat| PM
     PM --> REQ
-    REQ -->|create_feature| PRIN
+    REQ -->|user approves| PRIN
     PRIN --> DAG
     DAG --> ENG
     ENG --> GATE
@@ -76,9 +76,9 @@ flowchart TD
 ```
 
 1. **Intake.** The user talks to the PM, the only role with a human interface.
-   The PM writes requirements to `docs/requirements/` on trunk and, once the
-   user approves them, calls `create_feature` — its single handoff to
-   engineering.
+   The PM writes requirements to `docs/requirements/` on trunk and puts them to
+   the user with `propose_requirements`; the user approving is what opens the
+   Feature — the single handoff to engineering.
 2. **Design.** A Principal instance turns the requirements into project
    structure, contracts, conventions, and a task DAG of database rows with
    dependency edges. A coverage gate checks mechanically that every

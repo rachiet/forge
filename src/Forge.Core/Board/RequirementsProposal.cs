@@ -34,8 +34,8 @@ public sealed record RequirementsProposal(
 
     /// <summary>
     /// Opens the Feature this proposal describes and discards the proposal. Born in
-    /// Triage and owned by the Principal, the same state <c>create_feature</c> produced
-    /// when the PM opened Features directly.
+    /// Triage and owned by the Principal — the Principal's queue, where
+    /// <c>TaskRunner.DecomposeFeatureAsync</c> picks it up and breaks it into tasks.
     /// </summary>
     public TaskRecord Approve(IDbConnection conn)
     {

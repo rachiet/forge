@@ -54,8 +54,9 @@ flowchart TD
 ```
 
 **PM** — the only role you talk to. Understands the idea, asks clarifying
-questions, writes the requirements, and hands the project to engineering by
-calling `create_feature`. Later change requests go through the same chat.
+questions, writes the requirements, and puts them to you for approval with
+`propose_requirements` — approving is what hands the project to engineering.
+Later change requests go through the same chat.
 
 **Principal** — owns technical execution: designs the structure and
 contracts, breaks work into a task graph, reviews every engineer's diff, and

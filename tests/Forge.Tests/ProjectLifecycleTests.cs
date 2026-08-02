@@ -118,7 +118,7 @@ public class ProjectLifecycleTests : IDisposable
         new MilestoneRepository(conn).Insert(new MilestoneRecord { Name = "M1", Ordinal = 1 });
         Assert.False(new BoardQuery(conn, "alpha").Snapshot().SpecReady);
 
-        // create_feature is the PM's handoff, and that is the trigger.
+        // An approved proposal opens the Feature, and that is the trigger.
         tasks.Insert(TaskRecord.Create(
             TaskType.Feature, "Build it", "objective", 10_000, assignedRole: AgentRole.Principal));
 

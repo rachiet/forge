@@ -76,13 +76,7 @@ public sealed partial class AgentToolset(
             ["write_file"] = "write_file(path, content) — create or overwrite a file, whole contents.",
             ["run"] = "run(command, [cwd]) — run one binary.",
             ["add_milestone"] = "add_milestone(name, [description], [ordinal]) — add a milestone to the plan.",
-            ["create_feature"] = "create_feature(title, objective, [acceptance], [requirements_ref], [budget], "
-                            + "[milestone]) — open a Feature for the Principal to decompose: the whole initial "
-                            + "build, or one change request. Returns its id. This is your handoff to engineering — "
-                            + "the Principal breaks the Feature into tasks; you do not create tasks yourself. "
-                            + "Pass milestone (an id from add_milestone) so the client sees the work, and its "
-                            + "cost, under the right milestone.",
-            ["propose_requirements"] = "propose_requirements(title, objective, [acceptance], "
+            ["propose_requirements"] ="propose_requirements(title, objective, [acceptance], "
                             + "[requirements_ref], [budget], [milestone]) — present the finished "
                             + "requirements to the client for approval. They see Approve & start "
                             + "building, or keep talking to you. Approving is what opens the Feature "
@@ -144,7 +138,6 @@ public sealed partial class AgentToolset(
                 "run" => await RunAsync(call, ct).ConfigureAwait(false),
                 "add_milestone" => AddMilestone(call),
                 "propose_requirements" => ProposeRequirements(call),
-                "create_feature" => CreateFeature(call),
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
                 "redirect" => Redirect(call),
@@ -363,16 +356,6 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// The PM's handoff to engineering (M6): open a Feature — the whole initial build,
-    /// or one change request — as a Principal-owned parent for the Principal to decompose.
-    /// Born `triage` (the Principal's queue), assigned to the Principal, top-level (no
-    /// parent). The flow is autonomous — no client sign-off gate — so the Principal picks
-    /// it up, decomposes it into child tasks (which are released to the board directly),
-    /// and the Feature goes `active`. Its id becomes the parent_id of every child task,
-    /// and "all children done" is what closes the Feature and arms QA. The PM opens
-    /// Features; it never creates tasks.
-    /// </summary>
-    /// <summary>
     /// Stages the Feature the client is being asked to approve. The Feature row is
     /// created by <see cref="Board.RequirementsProposal.Approve"/> when they accept.
     /// </summary>
@@ -391,30 +374,6 @@ public sealed partial class AgentToolset(
             $"Proposed to the client for approval: {proposal.Title}. They now see " +
             "Approve & start building, or can keep talking to you. Tell them what you " +
             "have written and ask them to approve it.");
-    }
-
-    private ToolOutcome CreateFeature(ToolCall call)
-    {
-        var requirement = call.Optional("requirements_ref") is { } reqRef
-            ? NormalizeRequirementRef(reqRef)
-            : (RequirementsRef?)null;
-
-        var created = _tasks.Insert(TaskRecord.Create(
-            TaskType.Feature,
-            call.Arg("title"),
-            call.Arg("objective"),
-            call.OptionalInt("budget") ?? 60_000,
-            acceptanceCriteria: call.Optional("acceptance"),
-            requirementsRef: requirement,
-            // The Feature's milestone is what its child tasks inherit when the Principal
-            // decomposes it, so naming one here is how a whole change request lands under
-            // the right heading on the client's progress board.
-            milestoneId: call.OptionalInt("milestone") is { } m ? m : null,
-            assignedRole: AgentRole.Principal,
-            createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role)) with { Status = TaskStatus.Triage });
-
-        return new ToolOutcome($"Feature {created.Id} opened: {created.Title} " +
-            "(handed to the Principal to decompose into tasks).");
     }
 
     /// <summary>

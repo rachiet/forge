@@ -28,9 +28,9 @@ public sealed record DesignOutcome(
 /// It runs the same agent loop as everyone else, seeded with a design brief
 /// instead of a task packet or a chat, on a long-lived clone of trunk (like the
 /// PM's doc work). The PM coverage gate is checked here mechanically. The
-/// client's approval is the requirements the PM captured in chat: once the PM
-/// opens a Feature with `create_feature`, the harness runs this phase and
-/// releases the tasks it creates to `ready` on its own
+/// client's approval is the requirements the PM put to them with
+/// `propose_requirements`: approving opens the Feature, and the harness runs
+/// this phase and releases the tasks it creates to `ready` on its own
 /// (`TaskRunner.DecomposeFeatureAsync`).
 /// </summary>
 public sealed class DesignPhase(

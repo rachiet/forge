@@ -118,9 +118,9 @@ movable and shareable, so keys must not ride along in that payload.
 ### Change requests [DECIDED] (M6 — a change to an already-built project;
   superseded design-signoff mechanics updated after the Feature rework, below)
 - **Same spine, just the delta.** A CR reuses everything: the client talks to the PM
-  (`forge chat`), who updates the affected requirement(s) and opens a Feature
-  with `create_feature` exactly as it would for the initial build — that single
-  handoff is the only thing the client (or operator) does; `forge run --loop`
+  (`forge chat`), who updates the affected requirement(s) and puts them to the client
+  with `propose_requirements` exactly as it would for the initial build — approving
+  is the only thing the client (or operator) does; `forge run --loop`
   from there autonomously runs the impact analysis, CI + review + merge, and QA.
 - **Design becomes impact analysis, not greenfield** (`DesignPhase.ChangeRequestBrief`).
   A design run is a CR iff the project already has a `done` task. In that mode the
@@ -205,15 +205,15 @@ movable and shareable, so keys must not ride along in that payload.
   it's reported as uncovered. Ground truth, not an LLM claim.
 - **Superseded: there is no separate client sign-off on the design.** M3 shipped
   a `forge design run` / `forge design approve` CLI pair, with tasks born
-  `created` (unclaimable) until a human ran `approve`. Once `create_feature`
-  existed (client progress board era) as the PM's one handoff to engineering,
-  that gate became redundant: `create_feature` births the Feature directly in
-  `triage`, and `TaskRunner.DecomposeFeatureAsync` runs this same `DesignPhase`
-  and releases the tasks it creates (`created` → `ready`) itself, with no human
-  step in between — its own comment calls this out as "autonomous: no client
-  sign-off step." The CLI commands and `DesignPhase.Approve` were dead code by
-  that point and have been removed; the client's one approval is the
-  requirements they confirm with the PM in chat, before it calls `create_feature`.
+  `created` (unclaimable) until a human ran `approve`. Once the PM had a one-shot
+  handoff to engineering (client progress board era), that gate became redundant:
+  the Feature is born directly in `triage`, and `TaskRunner.DecomposeFeatureAsync`
+  runs this same `DesignPhase` and releases the tasks it creates (`created` →
+  `ready`) itself, with no human step in between — its own comment calls this out
+  as "autonomous: no client sign-off step." The CLI commands and
+  `DesignPhase.Approve` were dead code by that point and have been removed; the
+  client's one approval is the requirements the PM puts to them with
+  `propose_requirements`, which is what opens the Feature.
 
 ### Agent runtime [DECIDED] (settled while building M1/M2)
 - **Recipes declare their tools and file scope.** `AgentRecipe.Tools` is the
@@ -320,7 +320,7 @@ movable and shareable, so keys must not ride along in that payload.
   pending. The same cleanup dropped write-only `messages.thread_id` and the dead
   `projects.token_budget` on the global registry; `project_meta` accessors live on
   `Db/ProjectMetaRepository`, not TaskRepository.
-- **Milestone linkage is the harness's job, not the model's.** `create_task`/`create_feature`
+- **Milestone linkage is the harness's job, not the model's.** `create_task`/`propose_requirements`
   accept `milestone`, the design brief now lists the PM's milestones with their ids
   (`DesignPhase.MilestoneSection`) so the Principal has something to pass, and
   `TaskRunner` makes a child **inherit its Feature's milestone** when it adopts it —
@@ -349,8 +349,9 @@ movable and shareable, so keys must not ride along in that payload.
   The budget is raisable from the page, because hitting the cap otherwise dead-ends a
   client whose only interface is the board.
 - **The spec appears when the PM hands work over**, not while it is being drafted:
-  `SpecReady` is "a Feature exists", since `create_feature` is the PM's handoff to the
-  Principal. Read from **trunk via `git show`** (`Board/SpecReader.cs`), never from the
+  `SpecReady` is "a proposal is pending or a Feature exists", since the client approving
+  a proposal is the handoff to the Principal. Read from **trunk via `git show`**
+  (`Board/SpecReader.cs`), never from the
   PM's working clone, which can sit mid-edit. Rendered inline and collapsed.
 - **One build at a time, machine-wide** (`Scheduling/WorkerLease.cs`) — a decision, not a
   limitation. A JSON lease at `<data root>/worker.json` carrying a heartbeat; both the
