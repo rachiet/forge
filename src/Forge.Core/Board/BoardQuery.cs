@@ -31,7 +31,8 @@ public sealed record BoardSnapshot(
     decimal ProjectLevelCostUsd,
     decimal UnparentedTaskCostUsd,
     IReadOnlyList<AgentSpend> Agents,
-    IReadOnlyList<ChatLine> Chat)
+    IReadOnlyList<ChatLine> Chat,
+    RequirementsProposal? Proposal = null)
 {
     /// <summary>Spend against the cap, for the client's "how much is left" question.</summary>
     public decimal? BudgetRemainingUsd => BudgetUsd is { } cap ? Math.Max(0, cap - TotalCostUsd) : null;
@@ -104,6 +105,7 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             """));
 
         var settings = new ProjectSettings(conn);
+        var proposal = RequirementsProposal.Load(conn);
 
         return new BoardSnapshot(
             project,
@@ -112,19 +114,20 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             settings.BudgetUsd,
             settings.Provider,
             Planned: milestones.Count > 0 || features.Count > 0,
-            // The spec is shown the moment the PM hands work to the Principal — that
-            // handoff is `create_feature`, so the first Feature existing is the trigger.
-            // Before then the requirements are still being drafted and revised in
-            // conversation, and showing a half-written spec would invite the client to
-            // approve something the PM has not committed to.
-            SpecReady: conn.ExecuteScalar<long>(
+            // The spec is shown once the PM puts it to the client — either as a pending
+            // proposal awaiting approval, or as a Feature already approved. Before then
+            // the requirements are still being drafted and revised in conversation, and
+            // showing a half-written spec would invite approval of something the PM has
+            // not committed to.
+            SpecReady: proposal is not null || conn.ExecuteScalar<long>(
                 "SELECT COUNT(*) FROM tasks WHERE type = 'feature'") > 0,
             milestones,
             features,
             projectLevel,
             unparented,
             Agents(),
-            Chat(chatLimit));
+            Chat(chatLimit),
+            proposal);
     }
 
     /// <summary>

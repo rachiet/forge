@@ -44,6 +44,12 @@ public sealed class AgentLoop(
     private const int MaxEmptyTurns = 3;
 
     /// <summary>
+    /// How many consecutive turns may have every tool call refused before the instance
+    /// ends as a crash. A turn with at least one accepted call resets the count.
+    /// </summary>
+    private const int MaxRefusedTurns = 5;
+
+    /// <summary>
     /// The turn-budget analogue of the supervisor's 70% token nudge
     /// (<see cref="MeteredLlmClient"/>): the fraction of the iteration cap at which
     /// the model is first told to wrap up. Kept equal to the token threshold so a
@@ -120,6 +126,7 @@ public sealed class AgentLoop(
         List<LlmMessage> conversation = [.. seed];
         var iterations = 0;
         var emptyTurns = 0;
+        var refusedTurns = 0;
         // The model's most recent output. When an instance dies without writing its
         // own progress note, this becomes the resume note (`ProgressStatus: …`), so
         // the next instance — and we — see exactly what it was thinking when it stopped.
@@ -199,10 +206,12 @@ public sealed class AgentLoop(
             emptyTurns = 0;
             var observations = new StringBuilder();
             EndReason? end = null;
+            var anyAccepted = false;
 
             foreach (var call in calls)
             {
                 var outcome = await toolset.ExecuteAsync(call, ct).ConfigureAwait(false);
+                if (!outcome.Refused) anyAccepted = true;
                 observations.AppendLine($"[{call.Name}]").AppendLine(outcome.Observation).AppendLine();
                 if (outcome.End is not { } reason) continue;
                 end = reason;
@@ -212,6 +221,20 @@ public sealed class AgentLoop(
             if (end is { } finalReason)
                 return Finish(instanceId, finalReason, iterations, toolset, task, log,
                     observations.ToString().Trim(), lastMessage);
+
+            // One accepted call means the model is still acting; only a turn that
+            // achieved nothing at all counts toward the guard.
+            if (anyAccepted) refusedTurns = 0;
+            else if (++refusedTurns >= MaxRefusedTurns)
+            {
+                log.Event(EventType.ErrorInternal,
+                    $"Every tool call refused for {MaxRefusedTurns} consecutive turns on turn {turn}.");
+                var why = $"Every tool call was refused for {MaxRefusedTurns} consecutive turns; the " +
+                          "model is not producing calls the harness accepts. Last refusals: " +
+                          FirstLines(observations.ToString(), 3);
+                return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
+                    why, lastMessage, noteOverride: why);
+            }
 
             AppendPendingMessages(task?.Id, observations, log);
             AppendIterationNudge(turn, observations, log);
@@ -251,6 +274,15 @@ public sealed class AgentLoop(
     /// instead of calling `done`). We fire twice: once on crossing the 70% mark
     /// ("wrap up"), and a hard warning on the final turn ("land the plane now").
     /// </summary>
+    /// <summary>The first <paramref name="count"/> non-blank lines, joined with " / ".</summary>
+    private static string FirstLines(string text, int count)
+    {
+        var lines = text.ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(count);
+        return string.Join(" / ", lines);
+    }
+
     private void AppendIterationNudge(int turn, StringBuilder observations, ForgeLogger log)
     {
         var cap = _recipe.IterationCap;
@@ -284,10 +316,19 @@ public sealed class AgentLoop(
     /// </summary>
     private AgentRunResult Finish(
         string instanceId, EndReason end, int iterations,
-        AgentToolset toolset, TaskRecord? task, ForgeLogger log, string? detail, string? lastMessage = null)
+        AgentToolset toolset, TaskRecord? task, ForgeLogger log, string? detail, string? lastMessage = null,
+        string? noteOverride = null)
     {
         var note = toolset.LastProgressNote;
-        if (note is null && task is not null)
+        if (note is null && noteOverride is not null && task is not null)
+        {
+            // Some failures make the model's last words the worst possible note: a
+            // refusal loop would hand the successor the exact malformed call to copy.
+            // The caller supplies the note instead.
+            note = noteOverride;
+            _tasks.SetProgressNote(task.Id, note);
+        }
+        else if (note is null && task is not null)
         {
             // The instance died without ending its own turn (budget/iteration/crash).
             // If it left any final words, keep them verbatim as the resume note — a

@@ -1,3 +1,4 @@
+using Forge.Core.Configuration;
 using Forge.Core.Model;
 
 namespace Forge.Core.Agents;
@@ -19,7 +20,9 @@ public sealed class PromptLibrary(string root)
             ?? Path.Combine(AppContext.BaseDirectory, "prompts"));
 
     /// <summary>Layer A — role identity.</summary>
-    public string Role(string name) => Read(Path.Combine(Root, "roles", $"{name}.md"));
+    public string Role(string name) =>
+        Read(Path.Combine(Root, "roles", $"{name}.md"))
+            .Replace(ClientFacing.AgentNameToken, ClientFacing.AgentName, StringComparison.Ordinal);
 
     /// <summary>Layer B — task-type instructions.</summary>
     public string TaskType(TaskType type) =>

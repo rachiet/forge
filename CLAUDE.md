@@ -1,9 +1,14 @@
 # Forge — Orchestrator Implementation
 
 You are implementing Forge: a C#/.NET service that builds software from client
-requirements by orchestrating stateless LLM agents (PM, Principal, Engineer, QA,
-Researcher). **Read `ORCHESTRATOR-SPEC.md` in full before writing any code.**
-It is the authoritative design document; this file adds decisions made after it.
+requirements by orchestrating stateless LLM agents (PM, Principal, Engineer, QA).
+**Read `ARCHITECTURE.md` in full before writing any code.** It is the
+authoritative description of how the system works; this file records the
+decisions behind it and is the place to add new ones.
+
+Origin: Forge began from a v1 design specification that has since been folded
+into `ARCHITECTURE.md` and removed. Some source comments still cite it by
+section number (`spec §7`, `spec §11`); read those as historical markers.
 
 ## Terminology
 - **Orchestrator** = the whole service (scheduler, pipeline state machine, roles).
@@ -12,9 +17,9 @@ It is the authoritative design document; this file adds decisions made after it.
   observation loop → budget/iteration enforcement → ledger + progress notes.
   One process, two layers; the orchestrator contains the harness.
 - Everything in the harness is trusted mechanical code; everything from the
-  model is untrusted output under supervision (spec Principle 6).
+  model is untrusted output under supervision.
 
-## Post-spec decisions (settled in design discussion — treat as [DECIDED])
+## Decisions (treat as [DECIDED])
 
 ### Prompt layering (do NOT store prompts in the tasks table)
 Agent instructions are assembled at spin-up from three layers:
@@ -65,7 +70,6 @@ Two roots. Client project data NEVER lives inside the Forge source repo.
     generated code + full docs tree (PROJECT.md, requirements, MODULE.md) live in it
   - `projects/<name>/workspaces/task-<id>/` — per-task working clone; this exact
     path is the tool executor's jail; created on claim, deleted after merge
-Jail + DB locations are M0 concerns — build the path logic in M0.
 
 ### Credentials file [DECIDED] — the one deliberate exception
 `~/forge_env` (override: env `FORGE_ENV`) holds **Forge's own** credentials,
@@ -85,8 +89,9 @@ movable and shareable, so keys must not ride along in that payload.
 
 ### QA [DECIDED] (M5a — project-level acceptance gate)
 - **QA is project-level, not per-task.** A scaffold or a half-built feature has no
-  observable behaviour to black-box; acceptance is a feature/requirement concern. So
-  the per-task `Qa` hop is gone (a task goes `merging → done`), and QA runs only when
+  observable behaviour to black-box; acceptance is a feature/requirement concern. The
+  per-task `Qa` status survives as an auto-passing hop in `IntegrateAsync`
+  (`merging → qa → done`) but decides nothing; real QA runs only when
   the **whole board is complete** — `RunNextByPriorityAsync` calls `MaybeRunQaAsync`
   once no task/triage work remains. Same trigger for the first build and for a later
   change request.
@@ -166,7 +171,7 @@ movable and shareable, so keys must not ride along in that payload.
   skip, not a failure (docs-only or not-yet-scaffolded). Injectable into
   `TaskRunner` (`Func<string,CiResult>`) so orchestration tests don't need a
   toolchain; production uses `CiRunner.Run`.
-- **The gate order is CI, then review** (spec §7): the Principal never reviews code
+- **The gate order is CI, then review**: the Principal never reviews code
   that fails CI. `TaskRunner.IntegrateAsync`: commit → commits-ahead check → push →
   CI → review → merge. QA still auto-passes (M5).
 - **Review is a fresh Principal instance** (`Review/ReviewPhase.cs`,
@@ -179,7 +184,7 @@ movable and shareable, so keys must not ride along in that payload.
   the next `forge run` resumes the engineer with the feedback in its packet — same
   resume mechanism as a kill. Bounded: `RevisionCap` (5 engineer attempts) →
   block + escalate to PM, counted from `agent_instances`.
-- **Self-improving write-back** (spec §7): `request_changes(reason, convention?)`
+- **Self-improving write-back**: `request_changes(reason, convention?)`
   — the reason goes to the engineer; an optional `convention` is appended to
   CONVENTIONS.md on trunk (`WorkspaceManager.AppendToTrunkFile`), so a recurring
   mistake is ruled out once for every future engineer.
@@ -233,7 +238,7 @@ movable and shareable, so keys must not ride along in that payload.
 ### Models, providers and cost [DECIDED] (settled while adding multi-provider support)
 
 - **No code names a model — recipes name a *tier*.** `ModelTier` is `Fast | Coding |
-  Reasoning` (the vocabulary spec §3 already used), and `AgentRecipe.Tier` replaced the
+  Reasoning` (the vocabulary the original design used), and `AgentRecipe.Tier` replaced the
   old `Model` string. The configured `ILlmClient` resolves tier → model id via
   `ModelFor(tier)`, so orchestration policy ("an engineer needs the coding tier") stays
   separate from provider knowledge ("what that tier is called at Anthropic today").
@@ -401,12 +406,12 @@ movable and shareable, so keys must not ride along in that payload.
   runner (task transitions, git branch/push/merge), PM chat (message.sent,
   git.commit). Read back with `forge log <project> --events [--task N]`.
 
-## Build order (spec §12 — follow strictly, do not skip ahead)
-M0 first: SQLite schemas, MeteredLlmClient (ledger + budget refusal as a
-decorator), tool executor with working-dir jail + secret substitution,
-`forge log`. No agents until M0 is done. Then M1 (single agent, single task,
-kill-and-resume proof) → M2 (PM chat) → M3 (design) → M4 (review+CI) →
-M5 (QA) → M6 (CRs). Anti-pattern: standing up all personas at once.
+## Build order (all shipped — M-numbers survive as labels in this file)
+Forge was built one pillar at a time, and the milestone labels are still how
+the sections above are dated: M0 harness (schemas, `MeteredLlmClient`, jailed
+tool executor, `forge log`) → M1 single agent with kill-and-resume → M2 PM
+chat → M3 design → M4 review + CI → M5 QA → M6 change requests. Later work
+(the board, multi-provider support, logging) landed outside that numbering.
 
 ## Non-negotiables to preserve in code
 - Budgets enforced by refusing the next LLM call, never by asking the model.

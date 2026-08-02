@@ -27,17 +27,32 @@
          line-height:1.5; -webkit-font-smoothing:antialiased; }
   .page { max-width:1240px; margin:0 auto; padding:24px 20px 40px; }
 
-  .topbar { display:flex; flex-wrap:wrap; align-items:baseline; gap:12px 20px;
+  /* Three stacked rows: brand, then the project and what you can do to it,
+     then what it is doing right now. */
+  .topbar { display:flex; flex-direction:column; gap:10px;
             padding-bottom:18px; border-bottom:2px solid var(--line); margin-bottom:22px; }
   .brand { font-family:var(--mono); font-size:.68rem; letter-spacing:.18em;
-           text-transform:uppercase; color:var(--faint); flex-basis:100%; }
+           text-transform:uppercase; color:var(--faint); }
+  .titlerow { display:flex; flex-wrap:wrap; align-items:baseline; gap:12px 16px; }
+  .titlerow .grandtotal { margin-left:auto; }
+  .statusrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .project { font-size:1.9rem; font-weight:640; letter-spacing:-.02em; margin:0; }
+  /* The title and the switcher are one control: the <select> sits invisibly over the
+     name, so there is exactly one place the project is named. */
+  .projwrap { position:relative; display:inline-flex; align-items:baseline; gap:6px; }
+  .projwrap .caret { font-size:.8rem; color:var(--faint); }
+  .projwrap select { position:absolute; inset:0; width:100%; height:100%;
+                     opacity:0; cursor:pointer; font-size:1rem; }
+  .projwrap:hover .project { text-decoration:underline; text-decoration-color:var(--line);
+                             text-underline-offset:5px; }
+  .projwrap.single .caret, .projwrap.single select { display:none; }
   .runpill { font-family:var(--mono); font-size:.7rem; letter-spacing:.06em; padding:3px 10px;
              border-radius:999px; background:color-mix(in srgb, var(--active) 16%, transparent);
              color:var(--active); border:1px solid color-mix(in srgb, var(--active) 40%, transparent); }
-  .runpill[data-state="planning"] { background:color-mix(in srgb, var(--pending) 16%, transparent);
+  .runpill[data-state="planning"], .runpill[data-state="paused"] {
+             background:color-mix(in srgb, var(--pending) 16%, transparent);
              color:var(--pending); border-color:color-mix(in srgb, var(--pending) 40%, transparent); }
-  .grandtotal { margin-left:auto; text-align:right; }
+  .grandtotal { text-align:right; }
   .grandtotal .n { font-family:var(--mono); font-size:1.9rem; font-weight:600;
                    font-variant-numeric:tabular-nums; letter-spacing:-.02em; display:block; }
   .grandtotal .l { font-family:var(--mono); font-size:.62rem; letter-spacing:.16em;
@@ -108,6 +123,10 @@
   .thinking { font-family:var(--mono); font-size:.72rem; color:var(--faint); padding:0 16px 10px; }
   .thinking span { animation:blink 1.4s infinite; }
   @keyframes blink { 0%,100%{opacity:.3} 50%{opacity:1} }
+  .approve { border-top:1px solid var(--line); padding:12px 16px 14px;
+             background:color-mix(in srgb, var(--active) 8%, var(--sunken)); }
+  .approve .ask { margin:0 0 10px; font-size:.9rem; }
+  .approve .row { display:flex; gap:8px; flex-wrap:wrap; }
   .composer { border-top:1px solid var(--line); padding:12px; display:flex; gap:8px; background:var(--sunken); }
   .composer input { flex:1; min-width:0; font:inherit; font-size:.9rem; color:var(--ink);
                     background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 12px; }
@@ -132,7 +151,6 @@
   .btn.primary { background:var(--accent); color:#fff; border-color:transparent; }
   .btn.stop { background:var(--pending); color:#fff; border-color:transparent; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
-  .topbar .actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 
   /* budget strip */
   .budget { display:flex; align-items:baseline; gap:8px; justify-content:flex-end;
@@ -140,13 +158,24 @@
   .budget b { color:var(--ink); font-weight:600; }
   .budget.over b { color:var(--pending); }
 
-  /* spec panel */
-  details.spec { border-bottom:1px solid var(--line); }
-  details.spec:last-of-type { border-bottom:0; }
-  details.spec > summary { padding:11px 16px; cursor:pointer; font-size:.92rem; list-style:none; }
+  /* spec panel — the whole card folds, and so does each section inside it */
+  details.speccard > summary { list-style:none; cursor:pointer; }
+  details.speccard > summary::-webkit-details-marker { display:none; }
+  details.speccard > summary .chev { font-size:1rem; line-height:1; color:var(--muted);
+                                     transition:transform .15s; display:inline-block; }
+  details.speccard[open] > summary .chev { transform:rotate(90deg); }
+  details.speccard > summary:hover h2, details.speccard > summary:hover .chev { color:var(--active); }
+
+  details.spec { border-top:1px solid var(--line); }
+  details.spec > summary { padding:11px 16px; cursor:pointer; font-size:.92rem; list-style:none;
+                           display:flex; align-items:center; gap:10px; }
   details.spec > summary::-webkit-details-marker { display:none; }
-  details.spec > summary::before { content:"▸ "; color:var(--faint); }
-  details.spec[open] > summary::before { content:"▾ "; }
+  details.spec > summary:hover { background:var(--sunken); }
+  /* Big enough to read as a control: at .72rem it looked like a bullet, and the
+     sections read as plain text nobody would think to click. */
+  details.spec > summary .chev { font-size:1.05rem; line-height:1; width:14px; text-align:center;
+                                 color:var(--accent); transition:transform .15s; display:inline-block; }
+  details.spec[open] > summary .chev { transform:rotate(90deg); }
   .specbody { padding:4px 20px 18px; font-size:.88rem; max-width:70ch; }
   .specbody h1,.specbody h2,.specbody h3 { font-size:1rem; margin:16px 0 6px; }
   .specbody h1 { font-size:1.1rem; }
@@ -175,22 +204,28 @@
 <body>
 <div class="page">
   <header class="topbar">
-    <span class="brand">Forge · client progress board</span>
-    <h1 class="project" id="projName">…</h1>
-    <span class="runpill" id="runPill">● …</span>
-    <div class="actions">
-      <select id="projPicker" aria-label="Switch project"></select>
-      <button class="btn" id="newProject">+ New project</button>
-      <button class="btn primary hidden" id="startBtn">Start building</button>
-      <button class="btn stop hidden" id="stopBtn">Stop</button>
-    </div>
-    <div class="grandtotal">
-      <span class="n" id="grandTotal">$0.00</span>
-      <span class="l">total spend</span>
-      <div class="budget hidden" id="budgetStrip">
-        <span id="budgetText"></span>
-        <button class="btn" id="raiseBudget">Raise</button>
+    <span class="brand">Forge</span>
+    <div class="titlerow">
+      <!-- The project name IS the switcher: one place shows which project you are on. -->
+      <div class="projwrap">
+        <h1 class="project" id="projName">…</h1>
+        <span class="caret" id="projCaret" aria-hidden="true">▾</span>
+        <select id="projPicker" aria-label="Switch project"></select>
       </div>
+      <button class="btn" id="newProject">+ New project</button>
+      <div class="grandtotal">
+        <span class="n" id="grandTotal">$0.00</span>
+        <span class="l">total spend</span>
+        <div class="budget hidden" id="budgetStrip">
+          <span id="budgetText"></span>
+          <button class="btn" id="raiseBudget">Raise</button>
+        </div>
+      </div>
+    </div>
+    <div class="statusrow">
+      <span class="runpill" id="runPill">● …</span>
+      <button class="btn primary hidden" id="resumeBtn">Resume build</button>
+      <button class="btn stop hidden" id="stopBtn">Pause build</button>
     </div>
   </header>
 
@@ -199,15 +234,21 @@
 
     <aside class="card chat">
       <div class="card-head">
-        <h2>Project manager</h2>
-        <span class="sub">your only interface</span>
+        <h2 id="agentHead">…</h2>
       </div>
       <div class="thread" id="thread"></div>
-      <p class="thinking hidden" id="thinking">the project manager is replying<span>…</span></p>
+      <p class="thinking hidden" id="thinking"><span id="thinkingWho">…</span> is replying<span>…</span></p>
+      <!-- The client's one approval: it opens the Feature and starts the build. -->
+      <div class="approve hidden" id="approveBar">
+        <p class="ask"><b id="approveTitle"></b> is ready for your approval.</p>
+        <div class="row">
+          <button class="btn primary" id="approveBtn">Approve &amp; start building</button>
+          <button class="btn" id="declineBtn">Keep chatting</button>
+        </div>
+      </div>
       <p class="err hidden" id="chatErr"></p>
       <form class="composer" id="composer">
-        <input type="text" id="msg" placeholder="Message the project manager…"
-               aria-label="Message the project manager" autocomplete="off">
+        <input type="text" id="msg" placeholder="Message…" aria-label="Message" autocomplete="off">
         <button type="submit" id="send">Send</button>
       </form>
     </aside>
@@ -245,12 +286,20 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
 // The ledger stores roles snake_case; "Pm" and "Qa" are not how anyone writes them.
-const ROLE = { pm:'PM', qa:'QA', principal:'Principal', engineer:'Engineer', researcher:'Researcher' };
-const roleName = r => ROLE[r] || r;
+// pm resolves to the client-facing name instead: they are told who Iris is, never
+// what the role behind her is called.
+const ROLE = { qa:'QA', principal:'Principal', engineer:'Engineer', researcher:'Researcher' };
+const roleName = r => (r === 'pm' ? (agentName || 'PM') : ROLE[r] || r);
 
 let lastChatId = 0, sending = false;
 let project = decodeURIComponent(location.hash.slice(1)) || null;
 let providers = [];
+// The rail is re-rendered every poll; without these the spec — the card and each
+// section inside it — would snap shut every 3s while the client was reading it.
+let specOpen = false;
+const openSections = new Set();
+// Whatever the server says the client-facing agent is called. One constant, server-side.
+let agentName = '';
 
 function selectProject(name) {
   project = name;
@@ -307,13 +356,30 @@ function renderRail(d) {
       <div class="placeholder">
         <div class="bar" style="width:62%"></div><div class="bar" style="width:44%"></div>
         <div class="bar" style="width:53%"></div>
-        <p>Milestones and features appear here once you and the project manager agree
+        <p>Milestones and features appear here once you and ${esc(agentName)} agree
            the plan. Until then, the conversation is the whole page.</p>
       </div></section>`;
     return;
   }
 
   let html = '';
+
+  if (d.specReady && d.spec.length) {
+    // Open while it is waiting to be approved — you cannot approve what you cannot
+    // read — and folded away once the build is under way.
+    const open = d.proposal ? ' open' : (specOpen ? ' open' : '');
+    html += `<section class="card">
+      <details class="speccard" id="specCard"${open}>
+        <summary><div class="card-head"><h2><span class="chev">▸</span> Specification</h2>
+          <span class="sub">${d.spec.length} section${d.spec.length === 1 ? '' : 's'}</span></div></summary>
+        ${d.spec.map(sec => `<details class="spec" data-title="${esc(sec.title)}"${
+            openSections.has(sec.title) ? ' open' : ''}><summary><span class="chev">▸</span>
+          ${esc(sec.title)}</summary>
+          <div class="specbody">${markdown(sec.markdown)}</div></details>`).join('')}
+      </details>
+    </section>`;
+  }
+
   if (d.milestones.length) {
     const done = d.milestones.filter(m => m.state === 'done').length;
     html += section('Milestones', `${done} of ${d.milestones.length} complete`,
@@ -339,15 +405,6 @@ function renderRail(d) {
         <span class="cost">${usd(d.unparentedTaskCostUsd)}</span></div>`);
   }
 
-  if (d.specReady && d.spec.length) {
-    html += `<section class="card">
-      <div class="card-head"><h2>Specification</h2>
-        <span class="sub">${d.spec.length} section${d.spec.length === 1 ? '' : 's'}</span></div>
-      ${d.spec.map(sec => `<details class="spec"><summary>${esc(sec.title)}</summary>
-        <div class="specbody">${markdown(sec.markdown)}</div></details>`).join('')}
-    </section>`;
-  }
-
   if (d.agents.length) {
     const max = Math.max(...d.agents.map(a => a.costUsd), 0.0001);
     const calls = d.agents.reduce((a, x) => a + x.calls, 0);
@@ -361,6 +418,14 @@ function renderRail(d) {
       { label: 'All agents', value: d.totalCostUsd });
   }
   $('rail').innerHTML = html;
+  const card = $('specCard');
+  if (card) card.addEventListener('toggle', () => { specOpen = card.open; });
+  for (const sec of document.querySelectorAll('details.spec')) {
+    sec.addEventListener('toggle', () => {
+      const title = sec.dataset.title;
+      sec.open ? openSections.add(title) : openSections.delete(title);
+    });
+  }
 }
 
 function renderChat(chat) {
@@ -371,7 +436,7 @@ function renderChat(chat) {
   const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 60;
   thread.innerHTML = chat.map(m => `
     <div class="msg ${m.from === 'client' ? 'you' : ''}">
-      <span class="who">${m.from === 'client' ? 'You' : 'PM'}</span>
+      <span class="who">${m.from === 'client' ? 'You' : esc(agentName)}</span>
       <div class="bubble">${esc(m.text)}</div>
     </div>`).join('');
   if (atBottom) thread.scrollTop = thread.scrollHeight;
@@ -383,15 +448,17 @@ async function refreshProjects() {
   const d = await r.json();
   providers = d.providers;
   const picker = $('projPicker');
+  // Name only: the status pill already says what this project is doing, and the
+  // name must read the same here as it does in the title it sits on top of.
   const html = d.projects.map(p =>
-    `<option value="${esc(p.name)}">${esc(p.name)} — ${esc(p.state)}</option>`).join('');
+    `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
   // Rebuilding the options collapses an open dropdown mid-choice; only touch the
   // DOM when the list really changed, and never while the user is in it.
   if (html !== lastPickerHtml && document.activeElement !== picker) {
     picker.innerHTML = html;
     lastPickerHtml = html;
   }
-  picker.classList.toggle('hidden', d.projects.length === 0);
+  document.querySelector('.projwrap').classList.toggle('single', d.projects.length < 2);
 
   if (!d.projects.length) { showEmptyState(); return; }
   if (!project || !d.projects.some(p => p.name === project)) selectProject(d.projects[0].name);
@@ -403,10 +470,11 @@ function showEmptyState() {
   $('projName').textContent = 'no projects yet';
   $('runPill').classList.add('hidden');
   $('rail').innerHTML = `<section class="card"><div class="placeholder">
-      <p>Nothing here yet. Create a project to start talking to the project manager.</p>
+      <p>Nothing here yet. Create a project to start talking to ${esc(agentName || 'your project lead')}.</p>
     </div></section>`;
   $('thread').innerHTML = '';
   $('composer').classList.add('hidden');
+  $('approveBar').classList.add('hidden');
 }
 
 async function poll() {
@@ -421,20 +489,39 @@ async function poll() {
     $('grandTotal').textContent = usd(d.totalCostUsd);
     $('composer').classList.remove('hidden');
 
-    // Two different facts, deliberately not merged: `state` is how far the plan has
-    // got, `building` is whether anything is executing this second. A project can sit
-    // at "building" with no worker alive, and the client must be able to see that.
+    // One word for what the project is doing. Approved work that nobody is executing
+    // is PAUSED, not "building · idle" — the client needs to know a build has stopped.
+    const approved = d.features.length > 0;
+    const status = d.building ? 'building'
+                 : d.state === 'complete' ? 'complete'
+                 : approved ? 'paused' : 'planning';
     const pill = $('runPill');
     pill.classList.remove('hidden');
-    pill.textContent = d.building ? '● working' : '● ' + d.state + ' · idle';
-    pill.dataset.state = d.building ? 'building' : d.state;
+    pill.textContent = '● ' + status;
+    pill.dataset.state = status;
 
+    // No Start: a build begins by approving the requirements. What is left is
+    // pausing one that is running, and resuming one that stopped.
     const otherBusy = d.worker && d.worker.project !== d.project;
-    $('startBtn').classList.toggle('hidden', d.building);
-    $('startBtn').disabled = otherBusy || d.budgetExhausted;
-    $('startBtn').title = otherBusy ? `${d.worker.project} is building — one at a time`
-                        : d.budgetExhausted ? 'Budget exhausted — raise it to continue' : '';
+    const resume = $('resumeBtn');
+    resume.classList.toggle('hidden', d.building || status !== 'paused');
+    resume.disabled = otherBusy || d.budgetExhausted;
+    resume.title = otherBusy ? `${d.worker.project} is building — one at a time`
+                 : d.budgetExhausted ? 'Budget exhausted — raise it to continue' : '';
     $('stopBtn').classList.toggle('hidden', !d.building);
+
+    // Client-facing agent name, from the server so it lives in exactly one constant.
+    if (d.agentName && d.agentName !== agentName) {
+      agentName = d.agentName;
+      $('agentHead').textContent = agentName;
+      $('thinkingWho').textContent = agentName;
+      $('msg').placeholder = `Message ${agentName}…`;
+      $('msg').setAttribute('aria-label', `Message ${agentName}`);
+    }
+
+    const bar = $('approveBar');
+    bar.classList.toggle('hidden', !d.proposal);
+    if (d.proposal) $('approveTitle').textContent = d.proposal.title;
 
     const strip = $('budgetStrip');
     strip.classList.toggle('hidden', d.budgetUsd == null);
@@ -525,7 +612,7 @@ $('raiseBudget').addEventListener('click', async () => {
   poll();
 });
 
-for (const [id, action] of [['startBtn', 'start'], ['stopBtn', 'stop']]) {
+for (const [id, action] of [['resumeBtn', 'start'], ['stopBtn', 'stop']]) {
   $(id).addEventListener('click', async () => {
     const r = await fetch('/api/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -536,6 +623,25 @@ for (const [id, action] of [['startBtn', 'start'], ['stopBtn', 'stop']]) {
       $('chatErr').textContent = err.error || 'Could not change the build state.';
       $('chatErr').classList.remove('hidden');
     }
+    poll();
+  });
+}
+
+// Approving opens the Feature and starts the build in one step, so this is the only
+// place a build begins. Declining just clears the proposal and the client keeps talking.
+for (const [id, decision] of [['approveBtn', 'approve'], ['declineBtn', 'decline']]) {
+  $(id).addEventListener('click', async () => {
+    $('approveBtn').disabled = $('declineBtn').disabled = true;
+    const r = await fetch('/api/proposal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, decision }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.error) {
+      $('chatErr').textContent = body.error || 'Could not record your decision.';
+      $('chatErr').classList.remove('hidden');
+    }
+    $('approveBtn').disabled = $('declineBtn').disabled = false;
     poll();
   });
 }

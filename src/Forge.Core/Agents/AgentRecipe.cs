@@ -85,11 +85,12 @@ public sealed record AgentRecipe
         RolePrompt = "pm",
         InstancePrefix = "pm",
         AlwaysInContext = ["PROJECT.md", "STATUS.md", "docs/requirements/INDEX.md"],
-        // create_feature is the PM's handoff to engineering: it opens a Feature (the initial
-        // build, or one change request) for the Principal to decompose — the PM never creates
-        // tasks itself. reject_bug / retriage_bug let the PM close out a bug the client
-        // reviewed in chat — reject it, or send it back to the Principal with the client's guidance.
-        Tools = ["read_file", "list_dir", "grep", "write_file", "add_milestone", "create_feature",
+        // propose_requirements presents the finished requirements for the client to approve;
+        // approving is what opens the Feature, so the PM hands nothing to engineering on its
+        // own and never creates tasks itself. reject_bug / retriage_bug let the PM close out a
+        // bug the client reviewed in chat — reject it, or send it back to the Principal with
+        // the client's guidance.
+        Tools = ["read_file", "list_dir", "grep", "write_file", "add_milestone", "propose_requirements",
                  "reject_bug", "retriage_bug", "reply", "escalate"],
         Scope = new PathScope(["PROJECT.md", "STATUS.md", "docs/"]),
         ToolAllowlist = [],

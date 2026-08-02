@@ -4,6 +4,7 @@ using Forge.Core;
 using Forge.Core.Agents;
 using Forge.Core.Board;
 using Forge.Core.Chat;
+using Forge.Core.Configuration;
 using Forge.Core.Db;
 using Forge.Core.Llm;
 using Forge.Core.Logging;
@@ -134,8 +135,9 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             {
                 snapshot.Project, snapshot.State, snapshot.TotalCostUsd,
                 snapshot.BudgetUsd, snapshot.BudgetRemainingUsd, snapshot.BudgetExhausted,
-                snapshot.Provider, snapshot.Planned, snapshot.SpecReady,
+                snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
                 snapshot.Milestones, snapshot.Features,
+                AgentName = ClientFacing.AgentName,
                 snapshot.ProjectLevelCostUsd, snapshot.UnparentedTaskCostUsd,
                 snapshot.Agents, snapshot.Chat,
                 // Only read once the PM has handed work over; before that it is a draft.
@@ -160,6 +162,29 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             // client needs a way to continue that does not involve a terminal.
             settings.BudgetUsd = request.BudgetUsd;
             return Results.Ok(new { budgetUsd = request.BudgetUsd });
+        });
+
+        // The client's one approval. Approving is what opens the Feature and starts the
+        // build, so the PM hands nothing to engineering until the person paying says so.
+        app.MapPost("/api/proposal", (ProposalDecision request) =>
+        {
+            if (Resolve(request.Project) is not { } dbPath) return Results.NotFound();
+            using var conn = Database.OpenProject(dbPath);
+
+            if (RequirementsProposal.Load(conn) is not { } proposal)
+                return Results.Conflict(new { error = "There is nothing waiting for approval." });
+
+            if (request.Decision == "decline")
+            {
+                RequirementsProposal.Clear(conn);
+                return Results.Ok(new { approved = false });
+            }
+            if (request.Decision != "approve")
+                return Results.BadRequest(new { error = $"Unknown decision '{request.Decision}'." });
+
+            var feature = proposal.Approve(conn);
+            var started = StartWorker(request.Project, dbPath, out var error);
+            return Results.Ok(new { approved = true, feature = feature.Id, started, error });
         });
 
         app.MapPost("/api/chat", (ChatRequest request) =>
@@ -189,21 +214,9 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             if (request.Action != "start")
                 return Results.BadRequest(new { error = $"Unknown action '{request.Action}' — start or stop." });
 
-            if (_worker is { IsCompleted: false })
-                return Results.Conflict(new { error = $"Already building {_workerProject}." });
-
-            if (WorkerLease.Current(_paths) is { } held)
-                return Results.Conflict(new
-                {
-                    error = $"'{held.Project}' is already building (pid {held.Pid}). " +
-                            "Only one project builds at a time.",
-                });
-
-            _runError.TryRemove(request.Project, out _);
-            _workerCancel = new CancellationTokenSource();
-            _workerProject = request.Project;
-            _worker = Task.Run(() => RunWorkerAsync(dbPath, request.Project, _workerCancel.Token));
-            return Results.Accepted();
+            return StartWorker(request.Project, dbPath, out var error)
+                ? Results.Accepted()
+                : Results.Conflict(new { error });
         });
 
         var url = $"http://localhost:{settings.Port}";
@@ -289,6 +302,33 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     /// the machine-wide lease for its whole life and beats on every tick, so the page
     /// can tell "working" from "idle" and a second worker cannot start.
     /// </summary>
+    /// <summary>
+    /// Takes the machine-wide lease and starts the build loop, or reports why it could
+    /// not. Shared by the Resume control and by approving a proposal, so both paths get
+    /// the same one-build-at-a-time guarantee.
+    /// </summary>
+    private bool StartWorker(string project, string dbPath, out string? error)
+    {
+        if (_worker is { IsCompleted: false })
+        {
+            error = $"Already building {_workerProject}.";
+            return false;
+        }
+        if (WorkerLease.Current(_paths) is { } held)
+        {
+            error = $"'{held.Project}' is already building (pid {held.Pid}). " +
+                    "Only one project builds at a time.";
+            return false;
+        }
+
+        _runError.TryRemove(project, out _);
+        _workerCancel = new CancellationTokenSource();
+        _workerProject = project;
+        _worker = Task.Run(() => RunWorkerAsync(dbPath, project, _workerCancel.Token));
+        error = null;
+        return true;
+    }
+
     private async Task RunWorkerAsync(string dbPath, string project, CancellationToken ct)
     {
         using var lease = WorkerLease.TryAcquire(_paths, project);
@@ -337,4 +377,5 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     public sealed record ChatRequest(string Project, string Message);
     public sealed record BudgetChange(string Project, decimal? BudgetUsd);
     public sealed record RunRequest(string Project, string Action);
+    public sealed record ProposalDecision(string Project, string Decision);
 }

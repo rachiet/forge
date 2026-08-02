@@ -25,6 +25,48 @@ public class BoardQueryTests : IDisposable
 
     public void Dispose() => _conn.Dispose();
 
+    [Fact]
+    public void A_proposal_shows_the_spec_and_survives_until_it_is_decided()
+    {
+        Assert.Null(Board().Proposal);
+        Assert.False(Board().SpecReady);
+
+        new RequirementsProposal("Initial build", "Ship the thing").Save(_conn);
+
+        // The client cannot approve requirements they cannot read, so the spec panel
+        // opens at proposal time rather than waiting for the Feature to exist.
+        Assert.Equal("Initial build", Board().Proposal!.Title);
+        Assert.True(Board().SpecReady);
+    }
+
+    [Fact]
+    public void Approving_opens_the_feature_and_clears_the_proposal()
+    {
+        new RequirementsProposal("Initial build", "Ship the thing", Budget: 90_000).Save(_conn);
+
+        var feature = RequirementsProposal.Load(_conn)!.Approve(_conn);
+
+        Assert.Equal(TaskType.Feature, feature.Type);
+        Assert.Equal(TaskStatus.Triage, feature.Status);       // the Principal decomposes it
+        Assert.Equal(AgentRole.Principal, feature.AssignedRole);
+        Assert.Equal(90_000, feature.TokenBudget);
+        // Cleared, so the buttons cannot be clicked twice into two Features.
+        Assert.Null(Board().Proposal);
+        Assert.True(Board().SpecReady);
+    }
+
+    [Fact]
+    public void Declining_leaves_no_feature_behind()
+    {
+        new RequirementsProposal("Initial build", "Ship the thing").Save(_conn);
+
+        RequirementsProposal.Clear(_conn);
+
+        Assert.Null(Board().Proposal);
+        Assert.False(Board().SpecReady);
+        Assert.Empty(Board().Features);
+    }
+
     private BoardSnapshot Board() => new BoardQuery(_conn, "demo").Snapshot();
 
     private long Milestone(string name, int ordinal) =>

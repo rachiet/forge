@@ -10,7 +10,18 @@ using TaskStatus = Forge.Core.Model.TaskStatus;
 namespace Forge.Core.Agents;
 
 /// <summary>What executing one tool produced, and whether it ends the loop.</summary>
-public sealed record ToolOutcome(string Observation, EndReason? End = null);
+public sealed record ToolOutcome(string Observation, EndReason? End = null)
+{
+    /// <summary>
+    /// Whether the call was rejected rather than performed: an unavailable tool, a
+    /// jail or scope violation, or a malformed argument. A tool that ran and
+    /// reported failure — a non-zero `run` exit — is not refused.
+    /// </summary>
+    public bool Refused =>
+        Observation.AsSpan().TrimStart() is var text
+        && (text.StartsWith("REFUSED:", StringComparison.Ordinal)
+         || text.StartsWith("ERROR:", StringComparison.Ordinal));
+}
 
 /// <summary>
 /// The v1 tool surface (spec §4.1), bound to one agent's workspace. Which tools
@@ -20,7 +31,7 @@ public sealed record ToolOutcome(string Observation, EndReason? End = null);
 /// asks for something out of bounds gets a refusal as an observation rather than
 /// an effect.
 /// </summary>
-public sealed class AgentToolset(
+public sealed partial class AgentToolset(
     ToolExecutor executor,
     IDbConnection connection,
     AgentRecipe recipe,
@@ -71,6 +82,13 @@ public sealed class AgentToolset(
                             + "the Principal breaks the Feature into tasks; you do not create tasks yourself. "
                             + "Pass milestone (an id from add_milestone) so the client sees the work, and its "
                             + "cost, under the right milestone.",
+            ["propose_requirements"] = "propose_requirements(title, objective, [acceptance], "
+                            + "[requirements_ref], [budget], [milestone]) — present the finished "
+                            + "requirements to the client for approval. They see Approve & start "
+                            + "building, or keep talking to you. Approving is what opens the Feature "
+                            + "and starts the build; nothing is handed to engineering until then. "
+                            + "Pass milestone (an id from add_milestone) for a change request; pass "
+                            + "none for the initial build, which spans the whole plan.",
             ["create_task"] = "create_task(title, objective, [type], [acceptance], [requirements_ref], "
                             + "[context_paths], [budget], [milestone]) — put a task on the board. Returns its id. "
                             + "type is task (default), bug, or chore. requirements_ref names the requirement "
@@ -125,6 +143,7 @@ public sealed class AgentToolset(
                 "write_file" => WriteFile(call),
                 "run" => await RunAsync(call, ct).ConfigureAwait(false),
                 "add_milestone" => AddMilestone(call),
+                "propose_requirements" => ProposeRequirements(call),
                 "create_feature" => CreateFeature(call),
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
@@ -162,11 +181,30 @@ public sealed class AgentToolset(
     private void LogOutcome(ToolCall call, ToolOutcome outcome)
     {
         var summary = FirstLine(outcome.Observation);
-        var refused = summary.StartsWith("REFUSED:", StringComparison.Ordinal)
-                   || summary.StartsWith("ERROR:", StringComparison.Ordinal);
-        var type = refused ? EventType.ToolRefused : EventTypes.ForTool(call.Name);
-        if (type is { } eventType) _log.Event(eventType, summary);
+        if (!outcome.Refused)
+        {
+            if (EventTypes.ForTool(call.Name) is { } toolEvent) _log.Event(toolEvent, summary);
+            return;
+        }
+
+        // A refusal without the text that caused it is undiagnosable: the reason
+        // names the argument the harness wanted, never the shape the model actually
+        // emitted. Carry a collapsed snippet of the original block so a malformed
+        // call can be read straight out of the log.
+        var call_ = Collapse(call.Raw);
+        _log.Event(EventType.ToolRefused,
+            call_.Length == 0 ? summary : $"{summary} | emitted: {call_}");
     }
+
+    /// <summary>One line, whitespace-collapsed, capped at <see cref="LogSummaryChars"/>.</summary>
+    private static string Collapse(string raw)
+    {
+        var text = WhitespaceRun().Replace(raw, " ").Trim();
+        return text.Length <= LogSummaryChars ? text : text[..LogSummaryChars] + "…";
+    }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRun();
 
     private static string FirstLine(string text)
     {
@@ -334,6 +372,27 @@ public sealed class AgentToolset(
     /// and "all children done" is what closes the Feature and arms QA. The PM opens
     /// Features; it never creates tasks.
     /// </summary>
+    /// <summary>
+    /// Stages the Feature the client is being asked to approve. The Feature row is
+    /// created by <see cref="Board.RequirementsProposal.Approve"/> when they accept.
+    /// </summary>
+    private ToolOutcome ProposeRequirements(ToolCall call)
+    {
+        var proposal = new Board.RequirementsProposal(
+            call.Arg("title"),
+            call.Arg("objective"),
+            call.Optional("acceptance"),
+            call.Optional("requirements_ref") is { } reqRef ? NormalizeRequirementRef(reqRef).ToString() : null,
+            call.OptionalInt("budget"),
+            call.OptionalInt("milestone"));
+        proposal.Save(connection);
+
+        return new ToolOutcome(
+            $"Proposed to the client for approval: {proposal.Title}. They now see " +
+            "Approve & start building, or can keep talking to you. Tell them what you " +
+            "have written and ask them to approve it.");
+    }
+
     private ToolOutcome CreateFeature(ToolCall call)
     {
         var requirement = call.Optional("requirements_ref") is { } reqRef

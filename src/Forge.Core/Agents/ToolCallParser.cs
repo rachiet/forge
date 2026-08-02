@@ -4,8 +4,11 @@ namespace Forge.Core.Agents;
 
 public sealed class ToolCallException(string message) : Exception(message);
 
-/// <summary>One parsed tool invocation from a model turn. Arguments are raw strings.</summary>
-public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> Args)
+/// <summary>
+/// One parsed tool invocation from a model turn. Arguments are raw strings;
+/// <paramref name="Raw"/> is the original block the call was parsed from.
+/// </summary>
+public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> Args, string Raw = "")
 {
     public string Arg(string name) =>
         Args.TryGetValue(name, out var v) && !string.IsNullOrWhiteSpace(v)
@@ -56,7 +59,7 @@ public static partial class ToolCallParser
             var args = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (Match arg in ArgBlock().Matches(tool.Groups[2].Value))
                 args[arg.Groups[1].Value] = Normalize(arg.Groups[2].Value);
-            calls.Add(new ToolCall(tool.Groups[1].Value, args));
+            calls.Add(new ToolCall(tool.Groups[1].Value, args, tool.Value));
         }
         return calls;
     }

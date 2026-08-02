@@ -1,6 +1,7 @@
 using Forge.Core.Agents;
 using Forge.Core.Db;
 using Forge.Core.Llm;
+using Forge.Core.Logging;
 using Forge.Core.Model;
 using Forge.Core.Secrets;
 using Forge.Core.Tools;
@@ -398,6 +399,64 @@ public class AgentLoopTests : IDisposable
         Assert.Equal(EndReason.Crash, result.End);
         Assert.Equal(3, llm.Calls); // three strikes, not the full 40-turn cap
         Assert.Contains("No tool call found", llm.Requests[1].Messages[^1].Content);
+    }
+
+    [Fact]
+    public async Task An_agent_whose_every_call_is_refused_is_cut_off_long_before_the_iteration_cap()
+    {
+        var task = StartTask();
+        // A tool block with no <arg> wrapper at all: it parses as a call with zero
+        // arguments, so the tool refuses it. A model that keeps re-emitting this shape
+        // would otherwise burn all 40 turns achieving nothing.
+        var llm = new ScriptedLlmClient { Fallback = "<tool name=\"run\">dotnet build</tool>" };
+
+        var result = await Loop(llm).RunAsync(task, _executor);
+
+        Assert.Equal(EndReason.Crash, result.End);
+        Assert.Equal(5, llm.Calls); // MaxRefusedTurns, not the 40-turn cap
+        // The note says the model could not act, so triage sees a formatting failure
+        // rather than a task that merely ran out of room.
+        Assert.Contains("refused", _tasks.Get(task.Id).ProgressNote!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task One_accepted_call_clears_the_refusal_count()
+    {
+        var task = StartTask();
+        // Four refusals, then real work, then four more: neither streak reaches the cap,
+        // so the run continues — a boundary hit mid-task must not end the instance.
+        var bad = "<tool name=\"run\">dotnet build</tool>";
+        var llm = new ScriptedLlmClient(
+            bad, bad, bad, bad,
+            ScriptedLlmClient.Tool("list_dir"),
+            bad, bad, bad, bad,
+            ScriptedLlmClient.Tool("done", ("summary", "finished")));
+
+        var result = await Loop(llm).RunAsync(task, _executor);
+
+        Assert.Equal(EndReason.Done, result.End);
+        Assert.Equal(10, llm.Calls);
+    }
+
+    [Fact]
+    public async Task A_refusal_logs_what_the_model_actually_emitted()
+    {
+        var task = StartTask();
+        var sink = new MemoryLogSink();
+        var llm = new ScriptedLlmClient(
+            "<tool name=\"read_file\">src/Whatever.cs</tool>",
+            ScriptedLlmClient.Tool("done", ("summary", "done")));
+        var loop = new AgentLoop(llm, _conn, new PromptAssembler(PromptLibrary.Resolve()),
+            AgentRecipe.Engineer, new ForgeLogger(sink, "proj"));
+
+        await loop.RunAsync(task, _executor);
+
+        var refusal = Assert.Single(sink.Entries, e => e.Type == EventType.ToolRefused);
+        Assert.Contains("requires a non-empty", refusal.Message);
+        // Without the emitted text a refusal names only what was missing, never the
+        // shape that caused it — which is what makes a malformed-call loop diagnosable.
+        Assert.Contains("emitted:", refusal.Message);
+        Assert.Contains("src/Whatever.cs", refusal.Message);
     }
 
     [Fact]
