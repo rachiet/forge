@@ -71,10 +71,12 @@ public sealed class PmChat(
         var items = string.Join("\n", waiting.Select(t =>
             $"  • task {t.Id} — {t.Title}: {t.ProgressNote ?? "(no note)"}"));
         var brief =
-            "[The build has stopped on work the Principal could not resolve. Explain the "
-            + "situation to the client in plain language and ask how they want to proceed: "
-            + "give guidance so it can be tried again, or drop it. Do not call resolve_task "
-            + "or cancel_task yet — you have not heard from them. End with `reply`.]\n"
+            "[The build has stopped on work the engineering team could not resolve. The "
+            + "engineering notes below are for you, not for the client — do not repeat them. "
+            + "Write a SHORT message (a few sentences) saying what is stuck, and be specific "
+            + "about the decision you need from them: guidance so it can be tried again, or "
+            + "drop it. No task ids, token budgets, file names or tooling. Do not call "
+            + "resolve_task or cancel_task yet — you have not heard from them. End with `reply`.]\n"
             + items;
 
         var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);

@@ -580,8 +580,8 @@ async function poll() {
     bar.classList.toggle('hidden', !d.proposal);
     if (d.proposal) $('approveTitle').textContent = d.proposal.title;
 
-    // One card however many tasks are stuck: the client answers in the chat, and
-    // the agent sorts out which task each answer belongs to.
+    // A flag, not an explanation: it names what is stuck and points at the chat,
+    // where the agent has put what it actually needs in the client's own terms.
     const waiting = d.awaitingClient || [];
     $('needsBar').classList.toggle('hidden', waiting.length === 0);
     if (waiting.length) {

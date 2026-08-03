@@ -449,9 +449,9 @@ public sealed partial class AgentToolset(
         var guidance = call.Arg("guidance");
 
         var current = _tasks.Get(task.Id).Status;
-        if (current is not (TaskStatus.OutOfBudget or TaskStatus.Blocked))
+        if (current is not (TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage))
             return new ToolOutcome(
-                $"ERROR: redirect only applies to a blocked/out-of-budget task; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
+                $"ERROR: redirect only applies to a task being triaged; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
 
         var budget = call.OptionalInt("budget");
         if (budget is { } b) _tasks.SetBudget(task.Id, b);

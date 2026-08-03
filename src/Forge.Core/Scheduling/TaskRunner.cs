@@ -364,6 +364,10 @@ public sealed class TaskRunner(
         var current = _tasks.Get(taskId).Status;
         if (current != TaskStatus.NeedsHuman && TaskTransitions.IsLegal(current, TaskStatus.NeedsHuman))
             Transition(taskId, TaskStatus.NeedsHuman, log);
+
+        // A task arriving here is something new to raise, even if the client was asked
+        // about this same id before — clearing the watermark makes the PM ask again.
+        _meta.Set(AskedKey, "");
         return new TaskRunOutcome(taskId, EndReason.Escalated, _tasks.Get(taskId).Status, note);
     }
 
