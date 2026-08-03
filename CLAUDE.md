@@ -164,41 +164,36 @@ movable and shareable, so keys must not ride along in that payload.
   guidance) — no more tasks stranded behind a message nobody reads, no DB surgery to
   resume. The autonomous loop never blocks on a human: an escalated task is skipped.
 
-### Work parked on the client [DECIDED] (settled after the weatherboard deadlock)
-- **`needs_human` is a status, not a message.** When the Principal is out of options
-  (`GiveUp`, or its own `escalate` during triage) the task moves to `NeedsHuman` and
-  `RoleFor` maps it to the PM. `NextPrincipalOwned` used to exclude tasks by "has a
-  pending pm/client message", which made a *message row* load-bearing for routing:
-  raising the budget never cleared the escalation it generated, so the task was
-  invisible to the queue forever while the board just said "paused". Routing is now
-  purely status-driven and the message is only a notification.
-- **`assigned_role` still never changes.** It says what kind of work this is
-  (engineer), not who acts next — that stays derived from status. A task parked on the
-  client is still an engineering task; only its status says a human owes an answer.
-- **The loop never blocks on a human.** `needs_human` is simply absent from every
-  queue, so the loop drains the rest of the board and stops. Real blocking is already
-  in the right two places: `task_deps` (dependents are unclaimable) and
-  `BoardQuiescent` (QA cannot run, so the project is never called complete).
-- **The PM asks unprompted.** `AskClientAboutStuckWorkAsync` runs one PM turn that
-  writes a client-facing question into the chat, keyed on the set of waiting task ids
-  in `project_meta` so it asks once per distinct set. Before this, escalations only
-  surfaced if the client happened to type something first.
-- **The client's answer resolves it, both ways.** `resolve_task(task, note)` records
-  their guidance, **resets `out_of_budget_count`** (without which the Principal returns
-  at its strike ceiling and gives up immediately) and sends it to `triage`;
-  `cancel_task(task, reason)` cancels it **plus every transitive dependent**, because a
-  dependency edge is only satisfied by a `done` task — cancelling one alone strands
-  everything downstream silently. Branches are deleted by `DiscardCancelledWork`.
-- **Triage dispatch is three-way now** (Feature → decompose, Bug → triage bug,
-  else → `TriageAsync`). It was a two-way branch that only worked because nothing but
-  Features and Bugs ever reached `triage`; a plain task landed in *bug* triage.
-- **A project-cap pause rolls back the claim.** `PauseForProjectBudget` restores the
-  pre-claim status instead of freezing `in_progress`. Freezing it discarded who owned
-  the task — a Principal takeover read back as ordinary engineer work, and the next run
-  handed the Principal's half-finished workspace to an engineer.
-- **Schema changes need `Db/Migrations.cs`.** `CREATE TABLE IF NOT EXISTS` leaves an
-  existing table alone and SQLite cannot ALTER a CHECK, so a new status value means
-  rebuilding the tasks table. Applied from `Database.OpenProject`.
+### Work parked on the client [DECIDED]
+- **`needs_human` is where a task waits for the client.** It is entered from `GiveUp`
+  (the Principal is out of options) and from the Principal's own `escalate` during
+  triage. `RoleFor(NeedsHuman)` is the PM.
+- **Routing reads status only.** A queue must never filter on the existence of a
+  message row: messages notify, statuses route. If a task should leave a queue, give
+  it a status that says so.
+- **`assigned_role` never changes.** It says what kind of work a task is (engineer),
+  not who acts next. A task parked on the client is still an engineering task.
+- **The loop never blocks on a human.** `needs_human` appears in no queue, so the loop
+  drains the rest of the board and stops. The blocking that matters is already
+  structural: `task_deps` keeps dependents unclaimable, and `BoardQuiescent` keeps QA
+  from running, so the project is never called complete.
+- **The PM asks the client unprompted.** `AskClientAboutStuckWorkAsync` runs one PM
+  turn that writes a client-facing question into the chat, keyed on the set of waiting
+  task ids in `project_meta` so each distinct set is asked about once.
+- **The client's answer goes back through the PM.** `resolve_task(task, note)` records
+  the guidance, resets `out_of_budget_count` and sends the task to `triage` — the reset
+  is required, or the Principal arrives at its strike ceiling and gives up at once.
+  `cancel_task(task, reason)` cancels the task and every transitive dependent, since a
+  dependency edge is satisfied only by a `done` task; `DiscardCancelledWork` then
+  deletes their workspaces and branches.
+- **Triage dispatches on type**: Feature → decompose, Bug → triage bug, anything else
+  → `TriageAsync`.
+- **A project-cap pause rolls the claim back.** `PauseForProjectBudget` restores the
+  status the task held before it was claimed. Leaving it `in_progress` would erase who
+  owned it, and the next run would hand a Principal's workspace to an engineer.
+- **Schema changes go through `Db/Migrations.cs`,** applied from
+  `Database.OpenProject`. `CREATE TABLE IF NOT EXISTS` leaves an existing table alone
+  and SQLite cannot ALTER a CHECK, so changing a constraint means rebuilding the table.
 
 ### Review + CI [DECIDED] (settled while building M4)
 - **CI is harness-run, zero tokens** (`Ci/CiRunner.cs`): the harness runs
