@@ -146,21 +146,17 @@ public sealed class TaskRepository(IDbConnection conn)
             UPDATE tasks SET tokens_spent = 0, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId });
 
-    /// <summary>
-    /// The Principal's queue: the lowest-id blocked or out-of-budget task, highest
-    /// priority because a stuck task usually gates the DAG. Tasks already escalated
-    /// to a human (a pending message to pm/client) are skipped — they are waiting on
-    /// a decision, so the autonomous loop must not keep re-triaging them.
-    /// </summary>
+    /// <summary>The lowest-id task in a Principal-owned status, or null if there is none.</summary>
+    /// <remarks>
+    /// A stuck task usually gates the DAG, so this queue is served before the engineer's.
+    /// needs_human is deliberately absent: only the client can clear it.
+    /// </remarks>
     public TaskRecord? NextPrincipalOwned()
     {
         var id = conn.QueryFirstOrDefault<long?>("""
-            SELECT t.id FROM tasks t
-            WHERE t.status IN ('out_of_budget','blocked','triage')
-              AND NOT EXISTS (
-                SELECT 1 FROM messages m
-                WHERE m.task_id = t.id AND m.to_agent IN ('pm','client') AND m.status = 'pending')
-            ORDER BY t.id LIMIT 1
+            SELECT id FROM tasks
+            WHERE status IN ('out_of_budget','blocked','triage')
+            ORDER BY id LIMIT 1
             """);
         return id is { } i ? Get(i) : null;
     }
@@ -210,6 +206,54 @@ public sealed class TaskRepository(IDbConnection conn)
         conn.Execute("""
             UPDATE tasks SET milestone_id = @milestoneId, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId, milestoneId });
+
+    /// <summary>Sets a task's strike count back to zero.</summary>
+    /// <remarks>
+    /// Called when the client sends a task back for another attempt: without it the task
+    /// returns to the Principal already at its strike ceiling and is given up on at once.
+    /// </remarks>
+    public void ResetOutOfBudgetCount(long taskId) =>
+        conn.Execute("""
+            UPDATE tasks SET out_of_budget_count = 0, updated_at = datetime('now') WHERE id = @taskId
+            """, new { taskId });
+
+    /// <summary>Every task in <see cref="TaskStatus.NeedsHuman"/>, lowest id first.</summary>
+    public IReadOnlyList<TaskRecord> AwaitingClient() =>
+        conn.Query<Row>($"{SelectColumns} WHERE status = 'needs_human' ORDER BY id")
+            .Select(r => r.ToRecord()).ToList();
+
+    /// <summary>Cancelled tasks that still have a branch recorded, lowest id first.</summary>
+    public IReadOnlyList<TaskRecord> CancelledWithBranch() =>
+        conn.Query<Row>($"""
+            {SelectColumns} WHERE status = 'cancelled' AND branch_name IS NOT NULL ORDER BY id
+            """).Select(r => r.ToRecord()).ToList();
+
+    /// <summary>Forgets the task's branch, marking its working copy as already cleaned up.</summary>
+    public void ClearBranch(long taskId) =>
+        conn.Execute("""
+            UPDATE tasks SET branch_name = NULL, updated_at = datetime('now') WHERE id = @taskId
+            """, new { taskId });
+
+    /// <summary>
+    /// The tasks that transitively depend on <paramref name="taskId"/> and are not yet
+    /// terminal, lowest id first.
+    /// </summary>
+    /// <remarks>
+    /// A dependency edge is only satisfied by a `done` task, so cancelling one strands
+    /// everything downstream. Callers cancel these together rather than leave them
+    /// permanently unclaimable.
+    /// </remarks>
+    public IReadOnlyList<TaskRecord> UnfinishedDependents(long taskId) =>
+        conn.Query<Row>($"""
+            WITH RECURSIVE downstream(id) AS (
+              SELECT task_id FROM task_deps WHERE depends_on = @taskId
+              UNION
+              SELECT d.task_id FROM task_deps d JOIN downstream ON d.depends_on = downstream.id
+            )
+            {SelectColumns} WHERE id IN (SELECT id FROM downstream)
+              AND status NOT IN ('done','rejected','cancelled')
+            ORDER BY id
+            """, new { taskId }).Select(r => r.ToRecord()).ToList();
 
     /// <summary>
     /// Features in `active` whose children are all terminal (done/rejected/cancelled) —

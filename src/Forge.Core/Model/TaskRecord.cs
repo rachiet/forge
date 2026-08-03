@@ -106,14 +106,20 @@ public static class TaskTransitions
             // human reviewed: re-triage it (back to the Principal) or reject it outright.
             [TaskStatus.Blocked] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Triage,
-                 TaskStatus.Rejected, TaskStatus.Cancelled],
+                 TaskStatus.Rejected, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.OutOfBudget] =
-                [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Cancelled],
+                [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked,
+                 TaskStatus.NeedsHuman, TaskStatus.Cancelled],
+            // The Principal is out of options and the PM has put the task to the client.
+            // Their answer either sends it back for another triage or drops it.
+            [TaskStatus.NeedsHuman] = [TaskStatus.Triage, TaskStatus.Cancelled],
             // Triage is entered by two kinds of task. A QA-filed bug: the Principal
             // accepts it (→ Ready, an engineer fixes it) or rejects it (→ Rejected).
             // A PM-opened Feature: the Principal decomposes it (→ Active) once its
             // child tasks exist.
-            [TaskStatus.Triage] = [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Active, TaskStatus.Cancelled],
+            [TaskStatus.Triage] =
+                [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Active, TaskStatus.Claimed,
+                 TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.Rejected] = [],
             // A Feature sits Active while its children build. The harness closes it
             // (→ Done) when every child is terminal; a decomposition failure can block
@@ -144,6 +150,9 @@ public static class TaskTransitions
         TaskStatus.OutOfBudget => AgentRole.Principal,
         // A filed bug is the Principal's to accept or reject before any engineer touches it.
         TaskStatus.Triage => AgentRole.Principal,
+        // The one status the autonomous loop cannot clear: only the client can, and the
+        // PM is the rung that talks to them.
+        TaskStatus.NeedsHuman => AgentRole.Pm,
         TaskStatus.Created => AgentRole.Pm,
         _ => null,
     };

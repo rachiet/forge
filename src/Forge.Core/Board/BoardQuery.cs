@@ -13,6 +13,9 @@ public sealed record AgentSpend(string Role, long Calls, decimal CostUsd);
 
 public sealed record ChatLine(long Id, string From, string Text, string? At);
 
+/// <summary>A task the build has stopped on until the client answers.</summary>
+public sealed record StuckTask(long Id, string Title, string? Note);
+
 /// <summary>
 /// Everything the progress page renders, in one snapshot. Assembled per poll — the
 /// board is a read model over the same tables the orchestrator writes, never a
@@ -32,8 +35,12 @@ public sealed record BoardSnapshot(
     decimal UnparentedTaskCostUsd,
     IReadOnlyList<AgentSpend> Agents,
     IReadOnlyList<ChatLine> Chat,
-    RequirementsProposal? Proposal = null)
+    RequirementsProposal? Proposal = null,
+    IReadOnlyList<StuckTask>? AwaitingClient = null)
 {
+    /// <summary>Whether the client has to answer something before the build can go on.</summary>
+    public bool NeedsClient => AwaitingClient is { Count: > 0 };
+
     /// <summary>Spend against the cap, for the client's "how much is left" question.</summary>
     public decimal? BudgetRemainingUsd => BudgetUsd is { } cap ? Math.Max(0, cap - TotalCostUsd) : null;
 
@@ -127,8 +134,16 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             unparented,
             Agents(),
             Chat(chatLimit),
-            proposal);
+            proposal,
+            AwaitingClient());
     }
+
+    /// <summary>The tasks parked on the client, lowest id first.</summary>
+    private IReadOnlyList<StuckTask> AwaitingClient() =>
+        conn.Query<StuckTask>("""
+            SELECT id AS Id, title AS Title, progress_note AS Note FROM tasks
+            WHERE status = 'needs_human' ORDER BY id
+            """).ToList();
 
     /// <summary>
     /// Milestone state is DERIVED from the tasks attached to it, never read from

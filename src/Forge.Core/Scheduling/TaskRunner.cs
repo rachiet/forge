@@ -1,6 +1,7 @@
 using System.Data;
 using Dapper;
 using Forge.Core.Agents;
+using Forge.Core.Chat;
 using Forge.Core.Ci;
 using Forge.Core.Db;
 using Forge.Core.Design;
@@ -50,6 +51,9 @@ public sealed class TaskRunner(
     /// <summary>Strikes at OutOfBudget before the Principal stops redirecting and implements the task directly.</summary>
     private const int DirectImplementStrike = 2;
 
+    /// <summary>project_meta key holding the task ids the client was last asked about.</summary>
+    private const string AskedKey = "client_asked_about";
+
     private readonly TaskRepository _tasks = new(conn);
     private readonly MessageRepository _messages = new(conn);
     private readonly ProjectMetaRepository _meta = new(conn);
@@ -98,8 +102,11 @@ public sealed class TaskRunner(
     /// </summary>
     public async Task<TaskRunOutcome?> RunNextByPriorityAsync(CancellationToken ct = default)
     {
+        DiscardCancelledWork();
         if (_tasks.NextPrincipalOwned() is { } stuck)
             return await TriageOrImplementAsync(stuck, ct).ConfigureAwait(false);
+        if (await AskClientAboutStuckWorkAsync(ct).ConfigureAwait(false) is { } asked)
+            return asked;
         if (NextTask(AgentRole.Engineer) is { } next)
             return await RunAsync(next, ct).ConfigureAwait(false);
         // No task work left. First close any Feature whose children have all finished —
@@ -121,9 +128,13 @@ public sealed class TaskRunner(
         // Triage is entered by two kinds of task, routed by type: a PM-opened Feature is
         // decomposed into child tasks; a QA-filed bug is accepted or rejected.
         if (task.Status == TaskStatus.Triage)
-            return task.Type == TaskType.Feature
-                ? await DecomposeFeatureAsync(task, ct).ConfigureAwait(false)
-                : await TriageBugAsync(task, ct).ConfigureAwait(false);
+            return task.Type switch
+            {
+                TaskType.Feature => await DecomposeFeatureAsync(task, ct).ConfigureAwait(false),
+                TaskType.Bug => await TriageBugAsync(task, ct).ConfigureAwait(false),
+                // A plain task reaches triage when the client sent it back with guidance.
+                _ => await TriageAsync(task, ct).ConfigureAwait(false),
+            };
         if (task.Status == TaskStatus.OutOfBudget)
         {
             if (task.OutOfBudgetCount > DirectImplementStrike)
@@ -194,6 +205,46 @@ public sealed class TaskRunner(
         return new TaskRunOutcome(feature.Id, outcome.End, TaskStatus.Active, summary);
     }
 
+    /// <summary>Deletes the workspace and branch of every cancelled task that still has one.</summary>
+    private void DiscardCancelledWork()
+    {
+        foreach (var task in _tasks.CancelledWithBranch())
+        {
+            _workspaces.DiscardWithBranch(task.Id, task.BranchName);
+            _tasks.ClearBranch(task.Id);
+            _log.For(task.Id).Event(EventType.GitBranch, $"discarded branch {task.BranchName} (cancelled)");
+        }
+    }
+
+    /// <summary>
+    /// Runs one PM turn to put the tasks waiting on the client into the chat, and returns
+    /// its outcome. Null when nothing is waiting or the client has already been asked.
+    /// </summary>
+    /// <remarks>
+    /// The question is composed once per distinct set of waiting tasks, tracked in
+    /// project_meta, so a loop that runs repeatedly does not re-ask the same thing.
+    /// </remarks>
+    private async Task<TaskRunOutcome?> AskClientAboutStuckWorkAsync(CancellationToken ct)
+    {
+        var waiting = _tasks.AwaitingClient();
+        if (waiting.Count == 0)
+        {
+            _meta.Set(AskedKey, "");
+            return null;
+        }
+
+        var ids = string.Join(",", waiting.Select(t => t.Id));
+        if (_meta.Get(AskedKey) == ids) return null;
+
+        var chat = new PmChat(paths, project, conn, llm, vault, prompts, _log);
+        var turn = await chat.AskAboutStuckWorkAsync(waiting, ct).ConfigureAwait(false);
+        _meta.Set(AskedKey, ids);
+
+        var summary = $"Asked the client about task(s) {ids}.";
+        _log.Message(summary);
+        return new TaskRunOutcome(waiting[0].Id, turn.End, TaskStatus.NeedsHuman, summary);
+    }
+
     /// <summary>
     /// Harness-owned Feature completion (spec Principle 6 — never an agent's claim): a
     /// Feature in `active` whose children have all reached a terminal state is closed to
@@ -245,9 +296,11 @@ public sealed class TaskRunner(
         if (result.ProjectBudgetExhausted)
             return new TaskRunOutcome(task.Id, result.End, status,
                 $"Triage of task {task.Id} paused — project budget exhausted.", ProjectBudgetExhausted: true);
-        // redirect → Ready (resolved); escalate → still owned but a pending pm message
-        // parks it on a human. Anything else means triage itself failed to resolve it.
-        if (status is TaskStatus.OutOfBudget or TaskStatus.Blocked && result.End != EndReason.Escalated)
+        // redirect → Ready (resolved). escalate → the Principal wants the client, so the
+        // task parks on them. Anything else means triage itself failed to resolve it.
+        if (result.End == EndReason.Escalated)
+            return ParkOnClient(task.Id, result.ProgressNote ?? "Escalated to the client.", log);
+        if (status is TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage)
             return GiveUp(task, log);
 
         return new TaskRunOutcome(task.Id, result.End, status,
@@ -295,13 +348,23 @@ public sealed class TaskRunner(
     private TaskRunOutcome GiveUp(TaskRecord task, ForgeLogger log)
     {
         var note = $"Task {task.Id} still unresolved after Principal triage/implementation — needs a human decision.";
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
-            Transition(task.Id, TaskStatus.Blocked, log);
         _tasks.SetProgressNote(task.Id, note);
         log.Event(EventType.ErrorInternal, note);
         Notify(task.Id, MessageType.Escalation, "pm", note);
-        return new TaskRunOutcome(task.Id, EndReason.Escalated, TaskStatus.Blocked, note);
+        return ParkOnClient(task.Id, note, log);
+    }
+
+    /// <summary>Moves a task to needs_human and reports it as escalated.</summary>
+    /// <remarks>
+    /// The status is what takes the task out of the autonomous queue, so the loop drains
+    /// the rest of the board instead of re-triaging something only the client can answer.
+    /// </remarks>
+    private TaskRunOutcome ParkOnClient(long taskId, string note, ForgeLogger log)
+    {
+        var current = _tasks.Get(taskId).Status;
+        if (current != TaskStatus.NeedsHuman && TaskTransitions.IsLegal(current, TaskStatus.NeedsHuman))
+            Transition(taskId, TaskStatus.NeedsHuman, log);
+        return new TaskRunOutcome(taskId, EndReason.Escalated, _tasks.Get(taskId).Status, note);
     }
 
     /// <summary>
@@ -555,6 +618,7 @@ public sealed class TaskRunner(
         }
 
         log.Message($"Starting task {task.Id}: {task.Title}");
+        var statusBeforeClaim = task.Status;
         task = Claim(task, log);
         var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
         if (task.BranchName is null) SetBranch(task.Id, branch);
@@ -568,7 +632,7 @@ public sealed class TaskRunner(
 
         return result.End == EndReason.Done
             ? await IntegrateAsync(task, branch, result, log, ct).ConfigureAwait(false)
-            : Park(task, result, log);
+            : Park(task, result, log, statusBeforeClaim);
     }
 
     /// <summary>
@@ -751,7 +815,8 @@ public sealed class TaskRunner(
     ///   - budget/iteration (out of resources): OutOfBudget → the Principal's queue;
     ///   - escalate (needs a decision): Blocked → the Principal's queue.
     /// </summary>
-    private TaskRunOutcome Park(TaskRecord task, AgentRunResult result, ForgeLogger log)
+    private TaskRunOutcome Park(
+        TaskRecord task, AgentRunResult result, ForgeLogger log, TaskStatus statusBeforeClaim)
     {
         _workspaces.CommitAll(task.Id, $"wip(task {task.Id}): {result.End} after {result.Iterations} turns");
 
@@ -759,7 +824,7 @@ public sealed class TaskRunner(
         {
             // The PROJECT cap, not this task's budget: the task did nothing wrong, so it
             // is neither struck nor transitioned — the whole build pauses instead.
-            { ProjectBudgetExhausted: true } => PauseForProjectBudget(task, result, log),
+            { ProjectBudgetExhausted: true } => PauseForProjectBudget(task, result, log, statusBeforeClaim),
             { End: EndReason.Crash } when CrashCount(task.Id) <= CrashRetryCap => ResumeAfterCrash(task, result, log),
             { End: EndReason.Budget or EndReason.Iterations or EndReason.Crash } => ParkOutOfBudget(task, result, log),
             _ => ParkBlocked(task, result, log),
@@ -767,14 +832,22 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// The project's dollar cap is spent. Leave the task exactly as it stands —
-    /// claimable, workspace and note intact, no strike — so raising the budget and
-    /// pressing Start resumes it through the normal kill-and-resume path. Striking here
-    /// was the old failure: one exhausted cap marched every remaining task through the
-    /// strike ladder to blocked, and raising the budget found a wrecked board.
+    /// Rolls the task back to the status it held before this run claimed it, and reports
+    /// the run as paused rather than failed.
     /// </summary>
-    private TaskRunOutcome PauseForProjectBudget(TaskRecord task, AgentRunResult result, ForgeLogger log)
+    /// <remarks>
+    /// The cap being spent is a money decision, not the task's fault, so nothing is
+    /// struck. Rolling back matters because claiming already moved the task to
+    /// in_progress: leaving it there discards who owned it — a Principal takeover reads
+    /// back as ordinary engineer work and the next run hands it to the wrong role.
+    /// </remarks>
+    private TaskRunOutcome PauseForProjectBudget(
+        TaskRecord task, AgentRunResult result, ForgeLogger log, TaskStatus statusBeforeClaim)
     {
+        var current = _tasks.Get(task.Id).Status;
+        if (current != statusBeforeClaim && TaskTransitions.IsLegal(current, statusBeforeClaim))
+            Transition(task.Id, statusBeforeClaim, log);
+
         var summary = $"Project budget exhausted — task {task.Id} left as-is to resume once the cap is raised.";
         log.Event(EventType.LlmRefused, summary);
         return new TaskRunOutcome(task.Id, result.End, _tasks.Get(task.Id).Status, summary,

@@ -57,6 +57,43 @@ public sealed class PmChat(
     public IReadOnlyList<Message> OpenEscalations() =>
         _messages.Pending("pm").Where(m => m is EscalationMessage).ToList();
 
+    /// <summary>
+    /// Runs one PM turn that asks the client about the tasks waiting on them, and
+    /// returns what it said.
+    /// </summary>
+    /// <remarks>
+    /// Started by the harness rather than by the client typing, so the question is
+    /// already in the thread when they next look at the board.
+    /// </remarks>
+    public async Task<ChatTurn> AskAboutStuckWorkAsync(
+        IReadOnlyList<TaskRecord> waiting, CancellationToken ct = default)
+    {
+        var items = string.Join("\n", waiting.Select(t =>
+            $"  • task {t.Id} — {t.Title}: {t.ProgressNote ?? "(no note)"}"));
+        var brief =
+            "[The build has stopped on work the Principal could not resolve. Explain the "
+            + "situation to the client in plain language and ask how they want to proceed: "
+            + "give guidance so it can be tried again, or drop it. Do not call resolve_task "
+            + "or cancel_task yet — you have not heard from them. End with `reply`.]\n"
+            + items;
+
+        var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);
+        var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
+        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
+
+        var conversation = PromptAssembler.Conversation(History()).ToList();
+        conversation.Add(new Llm.LlmMessage("user", brief));
+        var result = await loop.RunChatAsync(conversation, executor, ct).ConfigureAwait(false);
+
+        // The `reply` tool writes its own message; only a turn that ended without one
+        // needs the harness to say something, or the client is left with silence.
+        var reply = result.Reply ?? Fallback(result);
+        if (result.Reply is null)
+            _messages.Insert(Message.Create(MessageType.Status, "pm", "client", reply, waiting[0].Id));
+        _log.Message($"pm → client (unprompted): {Summarise(reply)}");
+        return new ChatTurn(reply, result.End, DocumentsChanged: false, result.Detail);
+    }
+
     public async Task<ChatTurn> SendAsync(string clientMessage, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(clientMessage))

@@ -23,22 +23,8 @@ public static class Schema
         );
         """;
 
-    /// <summary>Per-project project.db: queue + board + ledger + audit log in one file.</summary>
-    public const string ProjectDdl = """
-        CREATE TABLE IF NOT EXISTS messages (
-          id INTEGER PRIMARY KEY,
-          from_agent TEXT NOT NULL,
-          to_agent   TEXT NOT NULL,
-          task_id INTEGER REFERENCES tasks(id),
-          type TEXT NOT NULL CHECK(type IN ('question','answer','review','decision',
-                                   'escalation','status','change_request','system_nudge')),
-          payload TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','received')),
-          created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE INDEX IF NOT EXISTS ix_messages_queue ON messages(to_agent, status, created_at);
-
+    /// <summary>The tasks table alone, so <see cref="Migrations"/> can rebuild it.</summary>
+    public const string TasksDdl = """
         CREATE TABLE IF NOT EXISTS tasks (
           id INTEGER PRIMARY KEY,
           milestone_id INTEGER REFERENCES milestones(id),
@@ -56,7 +42,8 @@ public static class Schema
             ('pm','principal','engineer','qa','researcher')),
           status TEXT NOT NULL DEFAULT 'created' CHECK(status IN
             ('created','ready','claimed','in_progress','in_review','merging',
-             'qa','done','blocked','out_of_budget','triage','rejected','active','cancelled')),
+             'qa','done','blocked','out_of_budget','triage','rejected','active',
+             'needs_human','cancelled')),
           token_budget INTEGER NOT NULL CHECK(token_budget > 0),
           tokens_spent INTEGER NOT NULL DEFAULT 0 CHECK(tokens_spent >= 0),
           -- How many times this task ran out of resources (budget/iteration) after
@@ -69,6 +56,25 @@ public static class Schema
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        """;
+
+    /// <summary>Per-project project.db: queue + board + ledger + audit log in one file.</summary>
+    public const string ProjectDdl = $"""
+        CREATE TABLE IF NOT EXISTS messages (
+          id INTEGER PRIMARY KEY,
+          from_agent TEXT NOT NULL,
+          to_agent   TEXT NOT NULL,
+          task_id INTEGER REFERENCES tasks(id),
+          type TEXT NOT NULL CHECK(type IN ('question','answer','review','decision',
+                                   'escalation','status','change_request','system_nudge')),
+          payload TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','received')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_messages_queue ON messages(to_agent, status, created_at);
+
+        {TasksDdl}
 
         CREATE TABLE IF NOT EXISTS task_deps (
           task_id INTEGER NOT NULL REFERENCES tasks(id),

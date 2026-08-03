@@ -20,6 +20,9 @@ public enum TaskStatus
     // building; no queue re-claims it" — and Done when the harness sees every child
     // reach a terminal state, which is what arms QA.
     Active,
+    // Parked on the client: the Principal exhausted its options, so the PM asks the
+    // client what to do and resolves it back to Triage (guidance) or Cancelled (drop).
+    NeedsHuman,
     Cancelled
 }
 

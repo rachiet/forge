@@ -181,6 +181,14 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }
 
+    /// <summary>Deletes the task's workspace and its branch in the bare repo.</summary>
+    /// <remarks>Used when work is abandoned, so the commits are deliberately not kept.</remarks>
+    public void DiscardWithBranch(long taskId, string? branch)
+    {
+        Discard(taskId);
+        if (branch is { Length: > 0 }) Git.Run(BareRepo, "branch", "-D", branch);
+    }
+
     private static string Slug(string title)
     {
         var slug = new string(title.ToLowerInvariant()

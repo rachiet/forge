@@ -102,6 +102,12 @@ public sealed partial class AgentToolset(
             ["retriage_bug"] = "retriage_bug(task, note) — send a bug back to the Principal for another triage with "
                              + "the client's guidance attached. The PM uses this when the client says a flagged bug "
                              + "needs more investigation rather than rejection.",
+            ["resolve_task"] = "resolve_task(task, note) — send a task the client answered back to the "
+                             + "Principal, with their guidance attached and the attempt counter reset. "
+                             + "Use this when the client tells you how they want it handled.",
+            ["cancel_task"] = "cancel_task(task, reason) — drop a task the client does not want done. "
+                            + "Its branch is deleted and anything depending on it is cancelled too, so "
+                            + "tell them what else goes with it BEFORE you call this.",
             ["approve"] = "approve([note]) — the diff is good; approve it for merge and end your review.",
             ["request_changes"] = "request_changes(reason, [convention]) — send the work back with a reason. "
                                 + "Set convention to add a permanent rule to CONVENTIONS.md for a recurring mistake.",
@@ -145,6 +151,8 @@ public sealed partial class AgentToolset(
                 "accept_bug" => AcceptBug(call),
                 "reject_bug" => RejectBug(call),
                 "retriage_bug" => RetriageBug(call),
+                "resolve_task" => ResolveTask(call),
+                "cancel_task" => CancelTask(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
                 "reply" => Reply(call),
@@ -568,6 +576,53 @@ public sealed partial class AgentToolset(
         new DiscussionRepository(connection).Open(bugId, "pm", $"[re-triage: client guidance] {note}");
         return new ToolOutcome($"Bug {bugId} sent back to the Principal for triage with the client's guidance.");
     }
+
+    /// <summary>Sends a task awaiting the client back to the Principal with their guidance.</summary>
+    private ToolOutcome ResolveTask(ToolCall call)
+    {
+        if (AwaitingClient(call) is not { } task) return NotAwaitingClient("resolve_task");
+
+        var note = call.Arg("note");
+        _tasks.SetProgressNote(task.Id, $"FROM THE CLIENT (via the PM): {note}");
+        _tasks.ResetOutOfBudgetCount(task.Id);
+        _tasks.Transition(task.Id, TaskStatus.Triage);
+        ResolveEscalations(task.Id);
+        new DiscussionRepository(connection).Open(task.Id, "pm", $"[client guidance] {note}");
+        return new ToolOutcome(
+            $"Task {task.Id} sent back to the Principal with the client's guidance. " +
+            "The build picks it up on the next run.");
+    }
+
+    /// <summary>Cancels a task the client dropped, along with everything depending on it.</summary>
+    private ToolOutcome CancelTask(ToolCall call)
+    {
+        if (AwaitingClient(call) is not { } task) return NotAwaitingClient("cancel_task");
+
+        var reason = call.Arg("reason");
+        var cancelled = new List<long>();
+        foreach (var affected in _tasks.UnfinishedDependents(task.Id).Append(task))
+        {
+            if (!TaskTransitions.IsLegal(affected.Status, TaskStatus.Cancelled)) continue;
+            _tasks.Transition(affected.Id, TaskStatus.Cancelled);
+            _tasks.SetProgressNote(affected.Id, $"CANCELLED by the client: {reason}");
+            ResolveEscalations(affected.Id);
+            cancelled.Add(affected.Id);
+        }
+
+        new DiscussionRepository(connection).Open(task.Id, "pm", $"[cancelled by the client] {reason}");
+        return new ToolOutcome(
+            $"Cancelled task(s) {string.Join(", ", cancelled)}. Their branches are dropped and the " +
+            "build moves on without them.");
+    }
+
+    /// <summary>The task named by the call's `task` argument, if it is waiting on the client.</summary>
+    private TaskRecord? AwaitingClient(ToolCall call) =>
+        call.OptionalInt("task") is { } id
+        && _tasks.Find(id) is { Status: TaskStatus.NeedsHuman } task ? task : null;
+
+    private ToolOutcome NotAwaitingClient(string tool) =>
+        new($"ERROR: {tool} needs the id of a task waiting on the client. Waiting now: " +
+            $"{string.Join(", ", _tasks.AwaitingClient().Select(t => t.Id))}.");
 
     /// <summary>Mark any pending human-facing escalation for a task resolved, so it stops surfacing.</summary>
     private void ResolveEscalations(long taskId)

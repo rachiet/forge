@@ -8,6 +8,7 @@ using Forge.Core.Configuration;
 using Forge.Core.Db;
 using Forge.Core.Llm;
 using Forge.Core.Logging;
+using Forge.Core.Model;
 using Forge.Core.Scheduling;
 using Forge.Core.Secrets;
 using Microsoft.AspNetCore.Builder;
@@ -136,6 +137,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 snapshot.Project, snapshot.State, snapshot.TotalCostUsd,
                 snapshot.BudgetUsd, snapshot.BudgetRemainingUsd, snapshot.BudgetExhausted,
                 snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
+                snapshot.AwaitingClient, snapshot.NeedsClient,
                 snapshot.Milestones, snapshot.Features,
                 AgentName = ClientFacing.AgentName,
                 snapshot.ProjectLevelCostUsd, snapshot.UnparentedTaskCostUsd,
@@ -161,6 +163,14 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             // Raising it is the whole point: hitting the cap stops the build, and the
             // client needs a way to continue that does not involve a terminal.
             settings.BudgetUsd = request.BudgetUsd;
+
+            // The cap being spent is the only thing that escalation reported, and it no
+            // longer is. Left pending it would keep excluding its task from the queue.
+            var messages = new MessageRepository(conn);
+            foreach (var m in messages.Pending("pm"))
+                if (m is EscalationMessage && m.Payload.StartsWith("Project budget exhausted", StringComparison.Ordinal))
+                    messages.SetStatus(m.Id, MessageStatus.Received);
+
             return Results.Ok(new { budgetUsd = request.BudgetUsd });
         });
 

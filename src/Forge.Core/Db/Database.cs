@@ -31,6 +31,7 @@ public static class Database
     {
         var conn = Open(dbPath);
         conn.Execute(Schema.ProjectDdl);
+        Migrations.Apply(conn);
         return conn;
     }
 }

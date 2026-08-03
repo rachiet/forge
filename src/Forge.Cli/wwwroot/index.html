@@ -49,9 +49,11 @@
   .runpill { font-family:var(--mono); font-size:.7rem; letter-spacing:.06em; padding:3px 10px;
              border-radius:999px; background:color-mix(in srgb, var(--active) 16%, transparent);
              color:var(--active); border:1px solid color-mix(in srgb, var(--active) 40%, transparent); }
-  .runpill[data-state="planning"], .runpill[data-state="paused"] {
+  .runpill[data-state="planning"], .runpill[data-state="paused"],
+  .runpill[data-state="needs your input"] {
              background:color-mix(in srgb, var(--pending) 16%, transparent);
              color:var(--pending); border-color:color-mix(in srgb, var(--pending) 40%, transparent); }
+  .runpill[data-state="needs your input"] { animation:pulse 1.5s ease-in-out infinite; }
   .grandtotal { text-align:right; }
   .grandtotal .n { font-family:var(--mono); font-size:1.9rem; font-weight:600;
                    font-variant-numeric:tabular-nums; letter-spacing:-.02em; display:block; }
@@ -127,6 +129,10 @@
              background:color-mix(in srgb, var(--active) 8%, var(--sunken)); }
   .approve .ask { margin:0 0 10px; font-size:.9rem; }
   .approve .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .approve.needs { background:color-mix(in srgb, var(--pending) 12%, var(--sunken));
+                   box-shadow:inset 3px 0 0 var(--pending); }
+  .approve.needs .ask { margin:0 0 4px; color:var(--pending); }
+  .approve.needs .sub { margin:0; font-size:.8rem; color:var(--faint); }
   .composer { border-top:1px solid var(--line); padding:12px; display:flex; gap:8px; background:var(--sunken); }
   .composer input { flex:1; min-width:0; font:inherit; font-size:.9rem; color:var(--ink);
                     background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 12px; }
@@ -238,6 +244,11 @@
       </div>
       <div class="thread" id="thread"></div>
       <p class="thinking hidden" id="thinking"><span id="thinkingWho">…</span> is replying<span>…</span></p>
+      <!-- The build has stopped on something only the client can decide. -->
+      <div class="approve needs hidden" id="needsBar">
+        <p class="ask"><b id="needsTitle"></b></p>
+        <p class="sub" id="needsDetail"></p>
+      </div>
       <!-- The client's one approval: it opens the Feature and starts the build. -->
       <div class="approve hidden" id="approveBar">
         <p class="ask"><b id="approveTitle"></b> is ready for your approval.</p>
@@ -300,6 +311,38 @@ let specOpen = false;
 const openSections = new Set();
 // Whatever the server says the client-facing agent is called. One constant, server-side.
 let agentName = '';
+
+// A client who wandered off is looking at a tab strip, not at this page. The title
+// and the favicon are the only surfaces that reach them there, so both carry the
+// "you are being waited on" state and both revert the moment it clears.
+const baseTitle = document.title;
+let attentionShown = null;
+
+function flagAttention(needed, projectName) {
+  if (attentionShown === needed) return;
+  attentionShown = needed;
+  document.title = needed ? `● input needed — ${projectName}` : baseTitle;
+  setFavicon(needed);
+}
+
+function setFavicon(needed) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1FA76A';
+  g.beginPath(); g.arc(16, 16, 13, 0, 7); g.fill();
+  if (needed) {
+    g.fillStyle = '#E0913C';
+    g.beginPath(); g.arc(24, 8, 8, 0, 7); g.fill();
+  }
+  let link = document.querySelector("link[rel='icon']");
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'icon';
+    document.head.appendChild(link);
+  }
+  link.href = c.toDataURL('image/png');
+}
 
 function selectProject(name) {
   project = name;
@@ -378,6 +421,17 @@ function renderRail(d) {
           <div class="specbody">${markdown(sec.markdown)}</div></details>`).join('')}
       </details>
     </section>`;
+  }
+
+  // Named here as well as in the chat card, so the client can see WHICH work stopped
+  // and why the spend has flattened out.
+  if ((d.awaitingClient || []).length) {
+    html += `<section class="card"><div class="card-head"><h2>Waiting on you</h2></div>
+      ${d.awaitingClient.map(t => `<div class="row st-pending">
+        <span class="dot"></span>
+        <span class="name" title="${esc(t.note || '')}">${esc(t.title)}</span>
+        <span class="cost none">answer in chat</span>
+      </div>`).join('')}</section>`;
   }
 
   if (d.milestones.length) {
@@ -491,10 +545,13 @@ async function poll() {
 
     // One word for what the project is doing. Approved work that nobody is executing
     // is PAUSED, not "building · idle" — the client needs to know a build has stopped.
+    // Waiting on the client outranks everything: it is the only state they can clear.
     const approved = d.features.length > 0;
-    const status = d.building ? 'building'
+    const status = d.needsClient ? 'needs your input'
+                 : d.building ? 'building'
                  : d.state === 'complete' ? 'complete'
                  : approved ? 'paused' : 'planning';
+    flagAttention(d.needsClient, d.project);
     const pill = $('runPill');
     pill.classList.remove('hidden');
     pill.textContent = '● ' + status;
@@ -522,6 +579,17 @@ async function poll() {
     const bar = $('approveBar');
     bar.classList.toggle('hidden', !d.proposal);
     if (d.proposal) $('approveTitle').textContent = d.proposal.title;
+
+    // One card however many tasks are stuck: the client answers in the chat, and
+    // the agent sorts out which task each answer belongs to.
+    const waiting = d.awaitingClient || [];
+    $('needsBar').classList.toggle('hidden', waiting.length === 0);
+    if (waiting.length) {
+      $('needsTitle').textContent = waiting.length === 1
+        ? `${agentName} needs your input to carry on.`
+        : `${agentName} needs your input on ${waiting.length} things to carry on.`;
+      $('needsDetail').textContent = waiting.map(t => t.title).join(' · ');
+    }
 
     const strip = $('budgetStrip');
     strip.classList.toggle('hidden', d.budgetUsd == null);
