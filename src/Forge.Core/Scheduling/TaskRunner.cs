@@ -107,6 +107,12 @@ public sealed class TaskRunner(
     public async Task<TaskRunOutcome?> RunNextByPriorityAsync(CancellationToken ct = default)
     {
         DiscardCancelledWork();
+        // Work already part-way through the pipeline is finished before anything new is
+        // started, so a task cannot sit one step from done while fresh work piles up.
+        if (_tasks.NextInStatus(TaskStatus.Merging) is { } approved)
+            return MergeTaskAsync(approved);
+        if (_tasks.NextInStatus(TaskStatus.InReview) is { } submitted)
+            return await ReviewAsync(submitted, ct).ConfigureAwait(false);
         if (_tasks.NextPrincipalOwned() is { } stuck)
             return await TriageOrImplementAsync(stuck, ct).ConfigureAwait(false);
         if (await AskClientAboutStuckWorkAsync(ct).ConfigureAwait(false) is { } asked)
@@ -737,14 +743,10 @@ public sealed class TaskRunner(
         _workspaces.PushBranch(task.Id, branch);
         log.Event(EventType.GitPush, $"pushed {branch}");
 
-        // The gates below move the task through in_review and merging — statuses the
-        // claim query never picks up. If one of them throws (a git failure, a review
-        // crash), the catch parks the task as blocked with the workspace intact, so
-        // it can be resumed like any other kill instead of stranding on the board in
-        // a state nothing will ever claim.
         try
         {
-            // --- CI gate: harness-run, zero tokens. The Principal never reviews code that fails CI. ---
+            // CI is harness-run and zero tokens, so it stays attached to the engineer's
+            // turn: the Principal never reviews code that does not build.
             log.Event(EventType.CiRun, "dotnet build/test");
             var ci = _ci(_workspaces.Path(task.Id));
             if (!ci.Passed)
@@ -755,10 +757,33 @@ public sealed class TaskRunner(
             }
             log.Event(EventType.CiPassed, ci.Summary);
 
-            // --- Review gate: a fresh Principal reads the diff (reviewer ≠ author). ---
+            // Hand off and stop. Review is the next tick's work, claimed from the board,
+            // so a worker that dies here resumes instead of stranding the task.
             Transition(task.Id, TaskStatus.InReview, log);
-            var review = new ReviewPhase(conn, llm, vault, prompts, _log);
-            var verdict = await review.RunAsync(_tasks.Get(task.Id), branch, _workspaces, ct).ConfigureAwait(false);
+            var handoff = $"Submitted for review. {result.ProgressNote}".Trim();
+            _tasks.SetProgressNote(task.Id, handoff);
+            return new TaskRunOutcome(task.Id, result.End, TaskStatus.InReview, handoff);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return BlockIntegration(task, log, ex, result.End);
+        }
+    }
+
+    /// <summary>
+    /// Reviews a task waiting in <see cref="TaskStatus.InReview"/> and routes the verdict:
+    /// approved moves to merging, changes requested goes back to the engineer, a rejected
+    /// bug closes.
+    /// </summary>
+    private async Task<TaskRunOutcome> ReviewAsync(TaskRecord task, CancellationToken ct)
+    {
+        var log = _log.For(task.Id);
+        var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
+        try
+        {
+            _workspaces.Prepare(task, branch);
+            var verdict = await new ReviewPhase(conn, llm, vault, prompts, _log)
+                .RunAsync(task, branch, _workspaces, ct).ConfigureAwait(false);
 
             // The reviewer judged the bug not a real defect (already transitioned to
             // Rejected). Nothing to merge or revise — discard the branch and close it.
@@ -777,35 +802,60 @@ public sealed class TaskRunner(
                 return RequestRevision(task, log, "review", verdict.Feedback);
             }
 
-            // --- Approved: merge to trunk. QA auto-passes until M5. ---
             Transition(task.Id, TaskStatus.Merging, log);
-            var sha = _workspaces.MergeToTrunk(task.Id, branch, $"merge {branch} into {WorkspaceManager.TrunkBranch}");
-            log.Event(EventType.GitMerge, $"{branch} → {WorkspaceManager.TrunkBranch} @ {sha[..Math.Min(8, sha.Length)]}");
-
-            Transition(task.Id, TaskStatus.Qa, log);
-            Notify(task.Id, MessageType.Status, "pm",
-                "M4: no QA configured — QA gate auto-passed. Black-box QA lands in M5.");
-
-            Transition(task.Id, TaskStatus.Done, log);
-            _workspaces.Discard(task.Id);
-
-            var summary = $"Reviewed, merged {branch} into {WorkspaceManager.TrunkBranch} at {sha[..Math.Min(8, sha.Length)]}.";
-            log.Message($"Task {task.Id} complete — {summary}");
-            Notify(task.Id, MessageType.Status, "pm", $"{summary} {result.ProgressNote}");
-            return new TaskRunOutcome(task.Id, result.End, TaskStatus.Done, summary);
+            return new TaskRunOutcome(task.Id, verdict.End, TaskStatus.Merging, $"Task {task.Id} approved for merge.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            var note = $"Integration failed after the engineer finished: {ex.Message} " +
-                       "The branch and workspace are intact; unblock the task to retry the gates.";
-            var current = _tasks.Get(task.Id).Status;
-            if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
-                Transition(task.Id, TaskStatus.Blocked, log);
-            _tasks.SetProgressNote(task.Id, note);
-            log.Event(EventType.ErrorInternal, note);
-            Notify(task.Id, MessageType.Escalation, "principal", note);
-            return new TaskRunOutcome(task.Id, result.End, TaskStatus.Blocked, note);
+            return BlockIntegration(task, log, ex, EndReason.Crash);
         }
+    }
+
+    /// <summary>Merges an approved task to trunk and closes it. No agent, no tokens.</summary>
+    /// <remarks>
+    /// Re-running is safe: merging a branch already in trunk is a no-op, so a worker that
+    /// died between the merge and the transition simply repeats it on the next tick.
+    /// </remarks>
+    private TaskRunOutcome MergeTaskAsync(TaskRecord task)
+    {
+        var log = _log.For(task.Id);
+        var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
+        try
+        {
+            _workspaces.Prepare(task, branch);
+            var sha = _workspaces.MergeToTrunk(task.Id, branch, $"merge {branch} into {WorkspaceManager.TrunkBranch}");
+            var shortSha = sha[..Math.Min(8, sha.Length)];
+            log.Event(EventType.GitMerge, $"{branch} → {WorkspaceManager.TrunkBranch} @ {shortSha}");
+
+            // The per-task QA hop decides nothing (real QA is project-level, once the
+            // board is quiescent); it survives as the documented path from merging to done.
+            Transition(task.Id, TaskStatus.Qa, log);
+            Transition(task.Id, TaskStatus.Done, log);
+            _workspaces.Discard(task.Id);
+
+            var summary = $"Reviewed, merged {branch} into {WorkspaceManager.TrunkBranch} at {shortSha}.";
+            log.Message($"Task {task.Id} complete — {summary}");
+            Notify(task.Id, MessageType.Status, "pm", $"{summary} {task.ProgressNote}".Trim());
+            return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.Done, summary);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return BlockIntegration(task, log, ex, EndReason.Crash);
+        }
+    }
+
+    /// <summary>Parks a task whose post-engineer gate threw, keeping the branch to retry from.</summary>
+    private TaskRunOutcome BlockIntegration(TaskRecord task, ForgeLogger log, Exception ex, EndReason end)
+    {
+        var note = $"Integration failed after the engineer finished: {ex.Message} " +
+                   "The branch and workspace are intact; unblock the task to retry the gates.";
+        var current = _tasks.Get(task.Id).Status;
+        if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
+            Transition(task.Id, TaskStatus.Blocked, log);
+        _tasks.SetProgressNote(task.Id, note);
+        log.Event(EventType.ErrorInternal, note);
+        Notify(task.Id, MessageType.Escalation, "principal", note);
+        return new TaskRunOutcome(task.Id, end, TaskStatus.Blocked, note);
     }
 
     /// <summary>

@@ -224,8 +224,16 @@ movable and shareable, so keys must not ride along in that payload.
   `TaskRunner` (`Func<string,CiResult>`) so orchestration tests don't need a
   toolchain; production uses `CiRunner.Run`.
 - **The gate order is CI, then review**: the Principal never reviews code
-  that fails CI. `TaskRunner.IntegrateAsync`: commit → commits-ahead check → push →
-  CI → review → merge. QA still auto-passes (M5).
+  that fails CI. `IntegrateAsync` runs commit → commits-ahead check → push → CI, then
+  hands off at `in_review` and returns.
+- **Review and merge are queue steps, not inline calls.** `RunNextByPriorityAsync`
+  serves `merging` (harness merge, no agent) and `in_review` (`ReviewAsync`) before any
+  new work, so a part-finished task is never left behind fresh work. Running them inline
+  meant a worker killed mid-pipeline left the task in a status no queue selected — resume
+  skipped it and it stranded permanently. The rule this establishes: **every handler does
+  its work first and transitions last**, so a crash either re-runs an idempotent step or
+  leaves the task claimable. Re-running is safe by construction — merging a branch already
+  in trunk is a no-op.
 - **Review is a fresh Principal instance** (`Review/ReviewPhase.cs`,
   `AgentRecipe.PrincipalReview`) — reviewer ≠ author. Seeded with the branch diff
   (`WorkspaceManager.DiffAgainstTrunk`), ends with `approve` or `request_changes`

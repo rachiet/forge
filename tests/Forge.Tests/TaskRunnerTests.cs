@@ -83,7 +83,12 @@ public class TaskRunnerTests : IDisposable
             ScriptedLlmClient.Tool("done", ("summary", "Created greeting.txt.")),
             ScriptedLlmClient.Tool("approve", ("note", "Good.")));
 
-        await Runner(llm, logger).RunAsync(_tasks.Get(task.Id));
+        // Stop at the merge: draining further would run QA, whose lines are project-
+        // scoped and would break the "every line belongs to this task" assertion below.
+        var runner = Runner(llm, logger);
+        await runner.RunAsync(_tasks.Get(task.Id));
+        await runner.RunNextByPriorityAsync();   // review
+        await runner.RunNextByPriorityAsync();   // merge
 
         // The whole story is present, in order: claim → workspace → instance →
         // the model's calls and tool actions → merge → done.
@@ -138,10 +143,12 @@ public class TaskRunnerTests : IDisposable
             // Principal review (CI skips — no .csproj — so review runs, then approves)
             ScriptedLlmClient.Tool("approve", ("note", "Correct and simple.")));
 
-        var outcome = await Runner(llm).RunNextAsync(AgentRole.Engineer);
+        // Engineer, then review, then merge — three ticks since the pipeline became resumable.
+        var runner = Runner(llm);
+        await runner.RunNextAsync(AgentRole.Engineer);
+        await DrainAsync(runner);
 
-        Assert.NotNull(outcome);
-        Assert.Equal(TaskStatus.Done, outcome.Status);
+        Assert.Equal(TaskStatus.Done, _tasks.Get(task.Id).Status);
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
         Assert.False(_workspaces.Exists(task.Id));
 
@@ -212,15 +219,16 @@ public class TaskRunnerTests : IDisposable
             ScriptedLlmClient.Tool("approve", ("note", "Both files present; approved.")));
 
         _tasks.Transition(task.Id, TaskStatus.Ready);
-        var outcome = await Runner(resuming).RunNextAsync(AgentRole.Engineer);
+        var runner = Runner(resuming);
+        await runner.RunNextAsync(AgentRole.Engineer);
+        await DrainAsync(runner);
 
         // It was handed the predecessor's note and nothing else.
         Assert.Contains("Still to do: add farewell.txt", resuming.Requests[0].Messages[0].Content);
         Assert.Single(resuming.Requests[0].Messages); // a fresh conversation, not a continued one
 
         // Both halves of the work are in the bare repo.
-        Assert.NotNull(outcome);
-        Assert.Equal(TaskStatus.Done, outcome.Status);
+        Assert.Equal(TaskStatus.Done, _tasks.Get(task.Id).Status);
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
         Assert.Equal("bye\n", ShowFromTrunk("farewell.txt"));
 
@@ -340,9 +348,10 @@ public class TaskRunnerTests : IDisposable
             ScriptedLlmClient.Tool("done", ("summary", "Implemented directly.")),
             ScriptedLlmClient.Tool("approve", ("note", "Correct.")));
 
-        var outcome = await Runner(llm).RunNextByPriorityAsync();
+        var runner = Runner(llm);
+        await runner.RunNextByPriorityAsync();
+        await DrainAsync(runner);
 
-        Assert.NotNull(outcome);
         Assert.Equal(TaskStatus.Done, _tasks.Get(stuck.Id).Status);
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
         // The instance that did the work was the Principal, not an engineer.
@@ -485,6 +494,34 @@ public class TaskRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_task_stopped_between_the_gates_is_picked_up_again_rather_than_stranded()
+    {
+        // The failure this exists for: review and merge ran inline after the engineer,
+        // so a worker killed between them left the task in a status no queue selected —
+        // pressing resume skipped it and it stayed on the board forever.
+        var task = ReadyTask();
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("write_file", ("path", "greeting.txt"), ("content", "hello")),
+            ScriptedLlmClient.Tool("done", ("summary", "Created greeting.txt.")),
+            ScriptedLlmClient.Tool("approve", ("note", "Correct.")));
+
+        // Tick once: the engineer submits and the task stops at in_review — the worker
+        // dying here is what used to strand it.
+        var runner = Runner(llm);
+        await runner.RunNextAsync(AgentRole.Engineer);
+        Assert.Equal(TaskStatus.InReview, _tasks.Get(task.Id).Status);
+
+        // A fresh runner, as if the process had been restarted, finds and finishes it.
+        var resumed = Runner(llm);
+        Assert.Equal(task.Id, (await resumed.RunNextByPriorityAsync())!.TaskId);   // review
+        Assert.Equal(TaskStatus.Merging, _tasks.Get(task.Id).Status);
+        Assert.Equal(task.Id, (await resumed.RunNextByPriorityAsync())!.TaskId);   // merge
+
+        Assert.Equal(TaskStatus.Done, _tasks.Get(task.Id).Status);
+        Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
+    }
+
+    [Fact]
     public async Task A_reviewer_rejects_an_invalid_bug_instead_of_looping_a_fix()
     {
         // An accepted bug (ready → an engineer works it) that turns out not to be real.
@@ -500,9 +537,11 @@ public class TaskRunnerTests : IDisposable
             // rather than looping request_changes on a fix for a non-bug.
             ScriptedLlmClient.Tool("reject_bug", ("reason", "Not reproducible; code already meets the contract.")));
 
-        var outcome = await Runner(llm).RunAsync(_tasks.Get(bug.Id));
+        var runner = Runner(llm);
+        await runner.RunAsync(_tasks.Get(bug.Id));
+        var outcome = await runner.RunNextByPriorityAsync();
 
-        Assert.Equal(TaskStatus.Rejected, outcome.Status);          // closed, not looped
+        Assert.Equal(TaskStatus.Rejected, outcome!.Status);         // closed, not looped
         Assert.Equal(TaskStatus.Rejected, _tasks.Get(bug.Id).Status);
         Assert.Contains("REJECTED", _tasks.Get(bug.Id).ProgressNote!);
         Assert.False(_workspaces.Exists(bug.Id));                    // nothing merged; branch discarded

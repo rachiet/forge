@@ -74,9 +74,13 @@ public class ReviewAndCiTests : IDisposable
             Engineer("greeting.txt", "hello", "Wrote greeting.txt."),
             ScriptedLlmClient.Tool("approve", ("note", "Correct.")));
 
-        var outcome = await Runner(llm, CiPass).RunAsync(_tasks.Get(task.Id));
+        // Three ticks now: the engineer submits, the Principal reviews, the harness merges.
+        var runner = Runner(llm, CiPass);
+        await runner.RunAsync(_tasks.Get(task.Id));
+        await runner.RunNextByPriorityAsync();
+        var outcome = await runner.RunNextByPriorityAsync();
 
-        Assert.Equal(TaskStatus.Done, outcome.Status);
+        Assert.Equal(TaskStatus.Done, outcome!.Status);
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
 
         // A review discussion records the verdict.
@@ -119,9 +123,11 @@ public class ReviewAndCiTests : IDisposable
                 ("reason", "Todo.cs hardcodes the example ids instead of looking them up."),
                 ("convention", "Never special-case acceptance-test inputs; solve the general case.")));
 
-        var outcome = await Runner(llm, CiPass).RunAsync(_tasks.Get(task.Id));
+        var runner = Runner(llm, CiPass);
+        await runner.RunAsync(_tasks.Get(task.Id));
+        var outcome = await runner.RunNextByPriorityAsync();
 
-        Assert.Equal(TaskStatus.InProgress, outcome.Status);
+        Assert.Equal(TaskStatus.InProgress, outcome!.Status);
         Assert.Contains("CHANGES REQUESTED (review)", _tasks.Get(task.Id).ProgressNote);
         Assert.Contains("hardcodes the example ids", _tasks.Get(task.Id).ProgressNote);
 

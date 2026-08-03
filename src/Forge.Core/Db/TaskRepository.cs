@@ -211,6 +211,20 @@ public sealed class TaskRepository(IDbConnection conn)
             UPDATE tasks SET out_of_budget_count = 0, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId });
 
+    /// <summary>The lowest-id task in <paramref name="status"/>, or null.</summary>
+    /// <remarks>
+    /// How a task mid-pipeline is found again. Review and merge used to run inline after
+    /// the engineer, so a worker that died between them left the task in a status nothing
+    /// queried; making each step a queue entry is what lets it resume.
+    /// </remarks>
+    public TaskRecord? NextInStatus(TaskStatus status)
+    {
+        var id = conn.QueryFirstOrDefault<long?>(
+            "SELECT id FROM tasks WHERE status = @status ORDER BY id LIMIT 1",
+            new { status = SnakeCaseEnum.ToSnakeCase(status) });
+        return id is { } i ? Get(i) : null;
+    }
+
     /// <summary>Every task in <see cref="TaskStatus.NeedsHuman"/>, lowest id first.</summary>
     public IReadOnlyList<TaskRecord> AwaitingClient() =>
         conn.Query<Row>($"{SelectColumns} WHERE status = 'needs_human' ORDER BY id")
