@@ -281,11 +281,8 @@ public sealed class TaskRunner(
         var recipe = AgentRecipe.PrincipalTriage;
         log.Message($"Principal triaging {SnakeCaseEnum.ToSnakeCase(task.Status)} task {task.Id}: {task.Title}");
 
-        // The triage is metered against this task, but an out-of-budget task is already
-        // at its ceiling — which would refuse the Principal's very first call. Give the
-        // Principal diagnosis headroom on top of whatever the engineer already spent.
-        _tasks.SetBudget(task.Id, _tasks.Get(task.Id).TokensSpent + recipe.DefaultBudget);
-
+        // No headroom to arrange: the budget is per instance, so this triage starts at
+        // zero however much the engineer that got stuck had already spent.
         var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
         if (task.BranchName is null) SetBranch(task.Id, branch);
         _workspaces.Prepare(task, branch);
@@ -345,8 +342,9 @@ public sealed class TaskRunner(
         var recipe = AgentRecipe.PrincipalImplementer;
         log.Message($"Principal implementing task {task.Id} directly (strike {task.OutOfBudgetCount}).");
 
+        // The task's own budget may have been set for an engineer; this attempt is the
+        // Principal's and gets the room its recipe asks for.
         if (task.TokenBudget < recipe.DefaultBudget) _tasks.SetBudget(task.Id, recipe.DefaultBudget);
-        _tasks.ResetTokensSpent(task.Id);
         return await RunAsync(_tasks.Get(task.Id), recipe, ct).ConfigureAwait(false);
     }
 

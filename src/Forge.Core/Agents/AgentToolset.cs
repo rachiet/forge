@@ -461,9 +461,9 @@ public sealed partial class AgentToolset(
             return new ToolOutcome(
                 $"ERROR: redirect only applies to a task being triaged; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
 
+        // No spend to reset: the next engineer is a new instance with its own allowance.
         var budget = call.OptionalInt("budget");
         if (budget is { } b) _tasks.SetBudget(task.Id, b);
-        _tasks.ResetTokensSpent(task.Id);
 
         var note = $"PRINCIPAL GUIDANCE (triage): {guidance}";
         _tasks.SetProgressNote(task.Id, note);

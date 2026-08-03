@@ -312,10 +312,12 @@ public class TaskRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task Redirect_resets_the_attempt_and_can_raise_the_budget()
+    public async Task Redirect_makes_the_task_claimable_again_and_can_raise_the_budget()
     {
+        // Nothing to reset: the allowance is per instance, so the next engineer starts
+        // from zero however much the one that got stuck had spent.
         var stuck = OutOfBudgetTask(strikes: 1, budget: 5_000);
-        _tasks.AddTokensSpent(stuck.Id, 5_000);   // spent out
+        _tasks.AddTokensSpent(stuck.Id, 5_000);
 
         var llm = new ScriptedLlmClient(
             ScriptedLlmClient.Tool("redirect", ("guidance", "Try a smaller step."), ("budget", "88888")));
@@ -323,7 +325,6 @@ public class TaskRunnerTests : IDisposable
 
         var record = _tasks.Get(stuck.Id);
         Assert.Equal(TaskStatus.Ready, record.Status);
-        Assert.Equal(0, record.TokensSpent);        // fresh attempt
         Assert.Equal(88_888, record.TokenBudget);   // Principal raised the ceiling
     }
 

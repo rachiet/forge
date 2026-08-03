@@ -334,6 +334,16 @@ movable and shareable, so keys must not ride along in that payload.
   `cost_nanos` (USD × 1e-9, an integer so `SUM()` stays exact) and `priced_with` (the
   snapshot that priced it). Keeping the buckets is what makes a row's cost recomputable
   when a rate is corrected — the property that makes depending on an external feed safe.
+- **The task token budget is per instance and counts every bucket.** Enforcement reads
+  `LedgerRepository.InstanceTotals(agent_instance_id)` — `tokens_in + tokens_out +
+  cache_read + cache_write` — against `tasks.token_budget`. Per instance because the
+  budget bounds one runaway agent, and a task legitimately passes through an engineer, a
+  reviewer and a revision; charging them to one pot starved whichever ran last. Every
+  bucket because counting only the uncached remainder made the same number mean ~25x more
+  work on a provider that caches than on one that does not. `tasks.tokens_spent` is now a
+  reporting total only and gates nothing. Budgets are therefore sized in the hundreds of
+  thousands; `ResetTokensSpent` and the triage/redirect headroom hacks are gone, since a
+  new instance always starts at zero.
 - **Two budget units, two jobs — and two different failure modes.** The **project**
   budget is USD (stored per project; `--project-budget` overrides per invocation),
   enforced by summing `cost_nanos` and re-read **per call** when unset on the CLI, so

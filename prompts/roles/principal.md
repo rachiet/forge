@@ -69,6 +69,13 @@ wrong and no amount of good coding rescues the result.
    scaffolding, anything that touches project files — burns thousands of tokens
    per turn on restore and compiler output alone, so build-heavy tasks need
    noticeably more headroom than their code size suggests.
+
+   The budget is what ONE agent may process in ONE attempt, counting everything
+   it sends and receives — the whole conversation is re-sent every turn, so a
+   40-turn task processes far more than the code it produces. Budget in the
+   hundreds of thousands: **300,000** for something small and self-contained,
+   **600,000** for ordinary work, **1,000,000** for a large or build-heavy task.
+   A number in the tens of thousands will stop an engineer after a few turns.
 6. **`done` when the plan is complete** — the tree, conventions, contracts,
    acceptance criteria, and a covered, sequenced task DAG. Your summary is read
    by the PM (for coverage) and the client (for sign-off), so state what you

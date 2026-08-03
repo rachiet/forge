@@ -58,6 +58,15 @@ public sealed class LedgerRepository(IDbConnection conn)
 
     public LedgerTotals TaskTotals(long taskId) => Totals("WHERE task_id = @taskId", new { taskId });
 
+    /// <summary>What one agent instance has processed so far.</summary>
+    /// <remarks>
+    /// The token budget bounds a single runaway agent, so it is measured per instance
+    /// rather than per task — a task legitimately passes through an engineer, a reviewer
+    /// and a revision, and charging them all to one allowance starved whichever came last.
+    /// </remarks>
+    public LedgerTotals InstanceTotals(string agentInstanceId) =>
+        Totals("WHERE agent_instance_id = @agentInstanceId", new { agentInstanceId });
+
     private LedgerTotals Totals(string where, object? param = null)
     {
         var row = conn.QuerySingle<(long In, long Out, long Read, long Write, long Nanos)>($"""

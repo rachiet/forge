@@ -71,13 +71,18 @@ public sealed class MeteredLlmClient(
 
         if (attribution.TaskId is not { } taskId) return;
 
+        // Measured against this instance, not the task: the budget exists to stop one
+        // agent running away, and a task legitimately passes through several agents.
+        // Counting every bucket keeps the number meaning the same amount of work on a
+        // provider that caches and one that does not.
         var task = _tasks.Get(taskId);
-        if (task.TokensSpent < task.TokenBudget) return;
+        var processed = _ledger.InstanceTotals(attribution.AgentInstanceId).TotalTokens;
+        if (processed < task.TokenBudget) return;
 
         // Enforcement is not making the call. Parking the task — OutOfBudget, a strike,
         // the workspace kept, the Principal notified — is TaskRunner.Park's job, so it
         // isn't split across two owners that could disagree.
-        throw BudgetExhaustedException.Tokens($"Task {taskId}", task.TokensSpent, task.TokenBudget);
+        throw BudgetExhaustedException.Tokens($"Task {taskId}", processed, task.TokenBudget);
     }
 
     private void QueueBudgetEscalation(LlmAttribution attribution, string scope, string spent, string budget) =>
@@ -113,17 +118,22 @@ public sealed class MeteredLlmClient(
 
         if (attribution.TaskId is not { } taskId) return;
 
-        var before = _tasks.Get(taskId);
-        _tasks.AddTokensSpent(taskId, usage.TokensIn + usage.TokensOut);
-        var after = before.TokensSpent + usage.TokensIn + usage.TokensOut;
+        // tasks.tokens_spent is the task's running total, for the board and the ledger's
+        // own reporting. Enforcement reads the ledger per instance; this column no longer
+        // gates anything, so it counts every bucket too and the two agree.
+        var processed = usage.TokensIn + usage.TokensOut + usage.CacheReadTokens + usage.CacheWriteTokens;
+        var task = _tasks.Get(taskId);
+        _tasks.AddTokensSpent(taskId, (int)processed);
 
-        var threshold = before.TokenBudget * NudgeThreshold;
-        if (before.TokensSpent < threshold && after >= threshold)
+        // The nudge is the instance's own 70% mark, matching what the cap will refuse on.
+        var before = _ledger.InstanceTotals(attribution.AgentInstanceId).TotalTokens - processed;
+        var threshold = task.TokenBudget * NudgeThreshold;
+        if (before < threshold && before + processed >= threshold)
         {
             _messages.Insert(Message.Create(
                 MessageType.SystemNudge, "system",
                 SnakeCaseEnum.ToSnakeCase(attribution.Role),
-                $"Task {taskId} has used {after} of {before.TokenBudget} budgeted tokens (≥70%). " +
+                $"Task {taskId} has used {before + processed} of {task.TokenBudget} budgeted tokens (≥70%). " +
                 "Wrap up now, or write a progress note and escalate.",
                 taskId));
         }

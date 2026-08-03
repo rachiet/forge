@@ -68,7 +68,7 @@ public sealed record AgentRecipe
         Tools = ["read_file", "list_dir", "grep", "write_file", "run", "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
-        DefaultBudget = 60_000,
+        DefaultBudget = 600_000,
         IterationCap = 40,
     }).Validate();
 
@@ -95,7 +95,7 @@ public sealed record AgentRecipe
                  "reject_bug", "retriage_bug", "resolve_task", "cancel_task", "reply", "escalate"],
         Scope = new PathScope(["PROJECT.md", "STATUS.md", "docs/"]),
         ToolAllowlist = [],
-        DefaultBudget = 120_000,
+        DefaultBudget = 400_000,
         IterationCap = 20,
     }).Validate();
 
@@ -117,7 +117,7 @@ public sealed record AgentRecipe
         Tools = ["read_file", "list_dir", "grep", "write_file", "create_task", "add_dependency", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
-        DefaultBudget = 200_000,
+        DefaultBudget = 900_000,
         IterationCap = 60,
     }).Validate();
 
@@ -140,7 +140,7 @@ public sealed record AgentRecipe
         Tools = ["read_file", "list_dir", "grep", "write_file", "approve", "request_changes", "reject_bug", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
-        DefaultBudget = 80_000,
+        DefaultBudget = 300_000,
         IterationCap = 30,
     }).Validate();
 
@@ -163,7 +163,7 @@ public sealed record AgentRecipe
                  "accept_bug", "reject_bug", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
-        DefaultBudget = 80_000,
+        DefaultBudget = 300_000,
         IterationCap = 20,
     }).Validate();
 
@@ -186,7 +186,7 @@ public sealed record AgentRecipe
         Tools = ["read_file", "list_dir", "grep", "write_file", "run", "file_bug", "how_to_run", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
-        DefaultBudget = 120_000,
+        DefaultBudget = 500_000,
         IterationCap = 40,
     }).Validate();
 
@@ -207,7 +207,7 @@ public sealed record AgentRecipe
         Tools = ["read_file", "list_dir", "grep", "write_file", "run", "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
-        DefaultBudget = 120_000,
+        DefaultBudget = 900_000,
         IterationCap = 80,
     }).Validate();
 

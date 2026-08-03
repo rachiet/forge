@@ -93,13 +93,15 @@ public class MeteredLlmClientTests : IDisposable
     public async Task Exhausted_task_budget_refuses_the_call_and_leaves_parking_to_the_runner()
     {
         var taskId = StartTask(budget: 1000);
-        _tasks.AddTokensSpent(taskId, 1000);
-        var inner = new FakeLlmClient(1, 1);
+        var inner = new FakeLlmClient(600, 600);
         var client = new MeteredLlmClient(inner, _conn, TestPrices.Catalog);
 
+        // The first call is allowed and takes the instance past its allowance; the
+        // second is refused, because the cap is read back from what this instance ran.
+        await client.CompleteAsync(Request(taskId));
         await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(taskId)));
 
-        Assert.Equal(0, inner.Calls); // enforcement = not making the call
+        Assert.Equal(1, inner.Calls); // enforcement = not making the call
         // The supervisor is a single-purpose meter: it does NOT transition the task or
         // escalate for a task budget — TaskRunner.Park owns that (OutOfBudget → Principal),
         // so the two can't disagree. The task is untouched here.
@@ -140,16 +142,39 @@ public class MeteredLlmClientTests : IDisposable
     }
 
     [Fact]
-    public async Task Task_budget_still_counts_tokens_and_ignores_the_cache_buckets()
+    public async Task A_second_instance_on_the_same_task_gets_its_own_allowance()
     {
-        // Deliberate: the task budget is an approximate runaway guard, not a spend
-        // control. Money safety is the project budget's job, in dollars.
+        // The failure this exists for: an engineer that used its allowance left the
+        // reviewer nothing, so the review was refused on turn 1 and the task was struck
+        // for work that had actually been submitted fine.
+        var taskId = StartTask(budget: 1000);
+        var inner = new FakeLlmClient(600, 600);
+        var client = new MeteredLlmClient(inner, _conn, TestPrices.Catalog);
+
+        await client.CompleteAsync(Request(taskId));
+        await Assert.ThrowsAsync<BudgetExhaustedException>(() => client.CompleteAsync(Request(taskId)));
+
+        // A different instance on the same task is not charged for what the first spent.
+        var reviewer = Request(taskId) with
+        {
+            Attribution = new LlmAttribution("rev-20260719-100500", AgentRole.Principal, taskId),
+        };
+        await client.CompleteAsync(reviewer);
+
+        Assert.Equal(2, inner.Calls);
+    }
+
+    [Fact]
+    public async Task The_budget_counts_every_token_the_call_processed()
+    {
+        // Counting only the uncached remainder made a budget mean wildly different
+        // amounts of work on a provider that caches and one that does not.
         var taskId = StartTask(budget: 10_000);
         var client = new MeteredLlmClient(new FakeLlmClient(100, 50, 500_000, 90_000), _conn, TestPrices.Catalog);
 
         await client.CompleteAsync(Request(taskId));
 
-        Assert.Equal(150, _tasks.Get(taskId).TokensSpent);
+        Assert.Equal(100 + 50 + 500_000 + 90_000, _tasks.Get(taskId).TokensSpent);
     }
 
     [Fact]

@@ -140,12 +140,6 @@ public sealed class TaskRepository(IDbConnection conn)
             """, new { taskId, tokens });
     }
 
-    /// <summary>Zero the spend for a fresh, Principal-directed attempt (redirect / takeover).</summary>
-    public void ResetTokensSpent(long taskId) =>
-        conn.Execute("""
-            UPDATE tasks SET tokens_spent = 0, updated_at = datetime('now') WHERE id = @taskId
-            """, new { taskId });
-
     /// <summary>The lowest-id task in a Principal-owned status, or null if there is none.</summary>
     /// <remarks>
     /// A stuck task usually gates the DAG, so this queue is served before the engineer's.
