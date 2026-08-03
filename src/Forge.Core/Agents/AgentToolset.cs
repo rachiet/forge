@@ -95,6 +95,9 @@ public sealed partial class AgentToolset(
                          + "Principal to triage. You give the title and the expected behaviour (from the contract); "
                          + "the harness attaches the command you just ran and its real output as the evidence. "
                          + "So run the check that shows the failure IMMEDIATELY before calling this. No run = refused.",
+            ["how_to_run"] = "how_to_run(command, [url]) — record the command that starts the app for "
+                           + "the client, and the URL it serves on if it has one. Call it once, after you "
+                           + "have actually started the app. Give the command exactly as you ran it.",
             ["accept_bug"] = "accept_bug([note]) — this filed bug is real; release it to the board for an engineer. Ends your triage.",
             ["reject_bug"] = "reject_bug([task], reason) — this bug is not a real defect; reject it with a reason. "
                            + "Kept on record, never re-filed. At triage/review it acts on the current bug; the PM "
@@ -148,6 +151,7 @@ public sealed partial class AgentToolset(
                 "add_dependency" => AddDependency(call),
                 "redirect" => Redirect(call),
                 "file_bug" => FileBug(call),
+                "how_to_run" => HowToRun(call),
                 "accept_bug" => AcceptBug(call),
                 "reject_bug" => RejectBug(call),
                 "retriage_bug" => RetriageBug(call),
@@ -310,11 +314,15 @@ public sealed partial class AgentToolset(
         // attaches verbatim, so a filed bug carries a trace the harness captured — not a
         // description the model typed (which is how a fabricated "actual" slips in).
         _lastRunTrace = sb.ToString();
+        _ranCommands.Add(command);
         return new ToolOutcome(Truncate(sb.ToString()));
     }
 
     /// <summary>The command + real output of the most recent run() — evidence for file_bug.</summary>
     private string? _lastRunTrace;
+
+    /// <summary>Every command run() has executed this instance — what how_to_run is checked against.</summary>
+    private readonly HashSet<string> _ranCommands = new(StringComparer.Ordinal);
 
     /// <summary>The milestone plan is a real table, not prose in a markdown file the harness can't query.</summary>
     private ToolOutcome AddMilestone(ToolCall call)
@@ -473,6 +481,25 @@ public sealed partial class AgentToolset(
     /// `triage` (not on the engineer's board yet) and carries structured repro /
     /// expected / actual so a triager and, later, a fixer both know exactly what broke.
     /// </summary>
+    /// <summary>Records the command that starts the app, for the client to be told.</summary>
+    /// <remarks>
+    /// Refused unless the command was one QA actually ran, on the same principle as
+    /// <see cref="FileBug"/>: instructions the client will follow must be observed, not
+    /// recalled. The harness falls back to <see cref="Board.DeliveryPlan"/> when unset.
+    /// </remarks>
+    private ToolOutcome HowToRun(ToolCall call)
+    {
+        var command = call.Arg("command");
+        if (!_ranCommands.Contains(command, StringComparer.Ordinal))
+            return new ToolOutcome(
+                $"ERROR: how_to_run only accepts a command you have run. '{command}' is not one of them. "
+                + "Start the app with run() first, then record that exact command.");
+
+        new ProjectMetaRepository(connection).Set("run_command", command);
+        if (call.Optional("url") is { } url) new ProjectMetaRepository(connection).Set("run_url", url);
+        return new ToolOutcome($"Recorded: the client will be told to start the project with `{command}`.");
+    }
+
     private ToolOutcome FileBug(ToolCall call)
     {
         // Evidence is not optional and not the model's to narrate: a bug must be backed

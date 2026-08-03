@@ -1,5 +1,6 @@
 using System.Data;
 using Forge.Core.Agents;
+using Forge.Core.Board;
 using Forge.Core.Db;
 using Forge.Core.Llm;
 using Forge.Core.Logging;
@@ -56,6 +57,40 @@ public sealed class PmChat(
     /// </summary>
     public IReadOnlyList<Message> OpenEscalations() =>
         _messages.Pending("pm").Where(m => m is EscalationMessage).ToList();
+
+    /// <summary>Runs one PM turn telling the client their project is finished and how to run it.</summary>
+    /// <remarks>
+    /// The directory and command come from the harness, so the PM is writing the covering
+    /// note rather than working out — or inventing — the instructions.
+    /// </remarks>
+    public async Task<ChatTurn> AnnounceReadyAsync(Delivery delivery, CancellationToken ct = default)
+    {
+        var brief =
+            "[Everything the client asked for is built and has passed acceptance testing. Tell "
+            + "them it is ready and how to try it, using EXACTLY these details — do not invent "
+            + "or alter them:\n"
+            + $"  folder:  {delivery.Directory}\n"
+            + $"  command: {delivery.Command}\n"
+            + (delivery.Url is { Length: > 0 } url ? $"  opens at: {url}\n" : "")
+            + "Keep it short and warm. Remind them they can ask you for changes at any time. "
+            + "End with `reply`.]";
+
+        var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);
+        var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
+        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
+
+        var conversation = PromptAssembler.Conversation(History()).ToList();
+        conversation.Add(new Llm.LlmMessage("user", brief));
+        var result = await loop.RunChatAsync(conversation, executor, ct).ConfigureAwait(false);
+
+        // The harness says it plainly if the PM's own turn failed, so a finished project
+        // is never announced only in a log file.
+        var reply = result.Reply ?? $"Your project is ready. Open {delivery.Directory} and run: {delivery.Command}";
+        if (result.Reply is null)
+            _messages.Insert(Message.Create(MessageType.Status, "pm", "client", reply));
+        _log.Message($"pm → client (project ready): {Summarise(reply)}");
+        return new ChatTurn(reply, result.End, DocumentsChanged: false, result.Detail);
+    }
 
     /// <summary>
     /// Runs one PM turn that asks the client about the tasks waiting on them, and

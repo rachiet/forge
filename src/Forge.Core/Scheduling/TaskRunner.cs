@@ -1,6 +1,7 @@
 using System.Data;
 using Dapper;
 using Forge.Core.Agents;
+using Forge.Core.Board;
 using Forge.Core.Chat;
 using Forge.Core.Ci;
 using Forge.Core.Db;
@@ -53,6 +54,9 @@ public sealed class TaskRunner(
 
     /// <summary>project_meta key holding the task ids the client was last asked about.</summary>
     private const string AskedKey = "client_asked_about";
+
+    /// <summary>project_meta flag: the finished project has been handed to the client.</summary>
+    private const string DeliveredKey = "project_delivered";
 
     private readonly TaskRepository _tasks = new(conn);
     private readonly MessageRepository _messages = new(conn);
@@ -197,7 +201,9 @@ public sealed class TaskRunner(
 
         // A new Feature is a fresh QA cycle: clear any earlier "did not converge" flag,
         // the same re-arm design approve used to do before the flow became autonomous.
+        // The handover is re-armed too, so the change request is handed over when it lands.
         _meta.Set("qa_escalated", "0");
+        _meta.Set(DeliveredKey, "0");
         Transition(feature.Id, TaskStatus.Active, log);
 
         var summary = $"Feature {feature.Id} decomposed into {outcome.TasksCreated} task(s) and activated.";
@@ -441,7 +447,9 @@ public sealed class TaskRunner(
 
         var rounds = MetaInt("qa_rounds");
         var newWorkToVerify = _tasks.CountDone() > MetaInt("qa_verified_count");
-        if (rounds > 0 && !newWorkToVerify) return null; // verified and nothing new finished since → complete
+        // Verified, and nothing has finished since: the project is complete. Hand it over
+        // once, then this returns null on every later tick and the loop drains.
+        if (rounds > 0 && !newWorkToVerify) return await DeliverAsync(ct).ConfigureAwait(false);
 
         if (rounds >= QaRoundCap)
         {
@@ -453,6 +461,44 @@ public sealed class TaskRunner(
         }
 
         return await RunQaAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Checks the finished project out where the client can run it and has the PM tell them
+    /// how. Returns null when the handover has already been done.
+    /// </summary>
+    /// <remarks>
+    /// A bare repo cannot be run and task workspaces are deleted after merge, so without
+    /// this the finished project has no directory the client could open. Re-armed by
+    /// <see cref="DecomposeFeatureAsync"/>, so a change request is handed over again.
+    /// </remarks>
+    private async Task<TaskRunOutcome?> DeliverAsync(CancellationToken ct)
+    {
+        if (MetaInt(DeliveredKey) == 1) return null;
+
+        var checkout = paths.ProjectBuild(project);
+        _workspaces.PrepareTrunkClone(checkout);
+
+        // QA's command wins when it recorded one: it started the app for real, which the
+        // project files alone cannot tell us (a port, for instance).
+        var delivery = _meta.Get("run_command") is { Length: > 0 } recorded
+            ? new Delivery(checkout, recorded, _meta.Get("run_url"))
+            : DeliveryPlan.For(checkout);
+
+        _meta.Set(DeliveredKey, "1");
+        if (delivery is null)
+        {
+            _log.Message("Project complete; nothing runnable found to hand over.");
+            return null;
+        }
+
+        _meta.Set("run_command", delivery.Command);
+        _meta.Set("run_dir", delivery.Directory);
+        _log.Message($"Project complete — checked out to {checkout}; run with: {delivery.Command}");
+
+        var chat = new PmChat(paths, project, conn, llm, vault, prompts, _log);
+        var turn = await chat.AnnounceReadyAsync(delivery, ct).ConfigureAwait(false);
+        return new TaskRunOutcome(0, turn.End, TaskStatus.Done, "Project handed over to the client.");
     }
 
     /// <summary>

@@ -82,7 +82,21 @@ public sealed class AnthropicLlmClient : ILlmClient
                 },
             };
 
-        var message = await _client.Messages.Create(parameters, cancellationToken: ct).ConfigureAwait(false);
+        // The SDK raises typed exceptions rather than returning a status, so the
+        // translation to Forge's one meaning of "try again" happens here.
+        Message message;
+        try
+        {
+            message = await _client.Messages.Create(parameters, cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (Anthropic.Exceptions.AnthropicApiException e) when (TransientFailure.IsTransient(e.StatusCode))
+        {
+            throw new TransientLlmException($"Anthropic returned {(int)e.StatusCode}: {e.Message}", e);
+        }
+        catch (Anthropic.Exceptions.AnthropicIOException e)
+        {
+            throw new TransientLlmException($"Anthropic connection failed: {e.Message}", e);
+        }
 
         var text = string.Concat(message.Content
             .Select(block => block.Value)

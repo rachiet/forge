@@ -137,7 +137,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 snapshot.Project, snapshot.State, snapshot.TotalCostUsd,
                 snapshot.BudgetUsd, snapshot.BudgetRemainingUsd, snapshot.BudgetExhausted,
                 snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
-                snapshot.AwaitingClient, snapshot.NeedsClient,
+                snapshot.AwaitingClient, snapshot.NeedsClient, snapshot.Delivery,
                 snapshot.Milestones, snapshot.Features,
                 AgentName = ClientFacing.AgentName,
                 snapshot.ProjectLevelCostUsd, snapshot.UnparentedTaskCostUsd,
@@ -193,6 +193,12 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 return Results.BadRequest(new { error = $"Unknown decision '{request.Decision}'." });
 
             var feature = proposal.Approve(conn);
+
+            // Said here rather than by a PM turn so it lands on the next poll: approving
+            // is the client's one commitment and must not be met with silence.
+            new MessageRepository(conn).Insert(Message.Create(
+                MessageType.Status, "pm", "client", ClientFacing.ApprovalAcknowledgement, feature.Id));
+
             var started = StartWorker(request.Project, dbPath, out var error);
             return Results.Ok(new { approved = true, feature = feature.Id, started, error });
         });

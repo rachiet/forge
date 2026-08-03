@@ -133,6 +133,13 @@
                    box-shadow:inset 3px 0 0 var(--pending); }
   .approve.needs .ask { margin:0 0 4px; color:var(--pending); }
   .approve.needs .sub { margin:0; font-size:.8rem; color:var(--faint); }
+  .card.ready { box-shadow:inset 3px 0 0 var(--active); }
+  .readybody { padding:4px 16px 14px; }
+  .readybody .l { margin:10px 0 4px; font-family:var(--mono); font-size:.62rem;
+                  letter-spacing:.16em; text-transform:uppercase; color:var(--faint); }
+  .readybody code { display:block; font-family:var(--mono); font-size:.82rem;
+                    background:var(--sunken); border:1px solid var(--line); border-radius:6px;
+                    padding:8px 10px; overflow-x:auto; white-space:pre; user-select:all; }
   .composer { border-top:1px solid var(--line); padding:12px; display:flex; gap:8px; background:var(--sunken); }
   .composer input { flex:1; min-width:0; font:inherit; font-size:.9rem; color:var(--ink);
                     background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 12px; }
@@ -421,6 +428,16 @@ function renderRail(d) {
           <div class="specbody">${markdown(sec.markdown)}</div></details>`).join('')}
       </details>
     </section>`;
+  }
+
+  // The chat message announcing this scrolls away; the instructions must not.
+  if (d.delivery) {
+    html += `<section class="card ready"><div class="card-head"><h2>Your project is ready</h2></div>
+      <div class="readybody">
+        <p class="l">Folder</p><code>${esc(d.delivery.directory)}</code>
+        <p class="l">Run it with</p><code>${esc(d.delivery.command)}</code>
+        ${d.delivery.url ? `<p class="l">Then open</p><code>${esc(d.delivery.url)}</code>` : ''}
+      </div></section>`;
   }
 
   // Named here as well as in the chat card, so the client can see WHICH work stopped

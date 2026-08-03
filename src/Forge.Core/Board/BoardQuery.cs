@@ -36,7 +36,8 @@ public sealed record BoardSnapshot(
     IReadOnlyList<AgentSpend> Agents,
     IReadOnlyList<ChatLine> Chat,
     RequirementsProposal? Proposal = null,
-    IReadOnlyList<StuckTask>? AwaitingClient = null)
+    IReadOnlyList<StuckTask>? AwaitingClient = null,
+    Delivery? Delivery = null)
 {
     /// <summary>Whether the client has to answer something before the build can go on.</summary>
     public bool NeedsClient => AwaitingClient is { Count: > 0 };
@@ -135,7 +136,18 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             Agents(),
             Chat(chatLimit),
             proposal,
-            AwaitingClient());
+            AwaitingClient(),
+            HandedOver());
+    }
+
+    /// <summary>How to run the finished project, once it has been handed over.</summary>
+    private Delivery? HandedOver()
+    {
+        var meta = new ProjectMetaRepository(conn);
+        return (meta.Get("run_dir"), meta.Get("run_command")) is
+            ({ Length: > 0 } dir, { Length: > 0 } command)
+            ? new Delivery(dir, command, meta.Get("run_url"))
+            : null;
     }
 
     /// <summary>The tasks parked on the client, lowest id first.</summary>

@@ -39,7 +39,12 @@ reading the code that implements it.
    failure, `run` the check that shows it and then `file_bug` immediately — the
    attached trace IS the repro. Never describe a result you did not actually run;
    if you cannot reach the feature to test it, `escalate` — do not invent an outcome.
-5. **One pass, then `done`.** Work through the requirements once, file what fails,
+5. **Record how the project starts.** Once you have the app running, call
+   `how_to_run` with the exact command you used to start it, and the URL it serves
+   on if there is one. This is what the client is told to type, so it must be a
+   command you actually ran — the harness refuses anything else. If the project has
+   no startable app, skip this.
+6. **One pass, then `done`.** Work through the requirements once, file what fails,
    and call `done` with a summary: what you checked, what passed, what you filed.
    If everything meets the requirements, file nothing and say so — that is what
    marks the project accepted.

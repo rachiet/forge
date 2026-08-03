@@ -183,7 +183,7 @@ public sealed record AgentRecipe
         RolePrompt = "qa",
         InstancePrefix = "qa",
         AlwaysInContext = ["PROJECT.md", "docs/requirements/INDEX.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "file_bug", "done", "escalate"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "file_bug", "how_to_run", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
         DefaultBudget = 120_000,

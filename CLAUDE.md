@@ -164,6 +164,27 @@ movable and shareable, so keys must not ride along in that payload.
   guidance) — no more tasks stranded behind a message nobody reads, no DB surgery to
   resume. The autonomous loop never blocks on a human: an escalated task is skipped.
 
+### Handing the finished project over [DECIDED]
+- **A completed project is checked out, not just merged.** `repo.git` is bare and task
+  workspaces are deleted after merge, so `TaskRunner.DeliverAsync` clones trunk to
+  `projects/<name>/build/` — a directory the client can open and run. It sits outside
+  `workspaces/` because that is harness scratch space and this is the deliverable.
+- **The run command is derived from the repo** (`Board/DeliveryPlan.cs`): the runnable
+  `.csproj` is the one with a Web/BlazorWebAssembly SDK, or `OutputType` Exe without a
+  `Microsoft.NET.Test.Sdk` reference. No project that runs is a real answer — the harness
+  says nothing rather than inventing a command.
+- **QA's command wins when it has one.** `how_to_run(command, [url])` records what QA used
+  to start the app, and is refused unless QA actually ran that command — the `file_bug`
+  rule applied to instructions the client will follow. It supplies what project files
+  cannot, such as a port.
+- **The PM writes the covering note, not the instructions.** `PmChat.AnnounceReadyAsync`
+  is handed the directory and command and told to use them exactly.
+- **The board card is the durable copy.** The chat message scrolls away; `BoardSnapshot.
+  Delivery` keeps the folder, command and URL on the page.
+- **Handover happens once per completion,** guarded by `project_delivered` in
+  `project_meta` and cleared by `DecomposeFeatureAsync`, so a change request is handed
+  over again when it lands.
+
 ### Work parked on the client [DECIDED]
 - **`needs_human` is where a task waits for the client.** It is entered from `GiveUp`
   (the Principal is out of options) and from the Principal's own `escalate` during

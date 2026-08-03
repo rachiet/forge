@@ -28,7 +28,9 @@ internal static class LlmSetup
         var config = LlmConfig.Load(paths.DataRoot, settings.Provider);
 
         return new MeteredLlmClient(
-            LlmClientFactory.Create(config),
+            // Retry sits inside metering: the budget is checked once per logical call,
+            // and only the attempt that returns is billed to the ledger.
+            new RetryingLlmClient(LlmClientFactory.Create(config), logger),
             conn,
             Prices(paths, logger),
             // An explicit CLI flag is a fixed cap for this invocation; otherwise the

@@ -31,9 +31,9 @@ public sealed class GeminiLlmClient : ILlmClient
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
         {
-            [ModelTier.Fast] = "gemini/gemini-2.5-flash-lite",
+            [ModelTier.Fast] = "gemini/gemini-3.1-flash-lite",
             [ModelTier.Coding] = "gemini/gemini-2.5-flash",
-            [ModelTier.Reasoning] = "gemini/gemini-2.5-pro",
+            [ModelTier.Reasoning] = "gemini/gemini-pro-latest",
         };
 
     private const string ModelPrefix = "gemini/";
@@ -70,8 +70,12 @@ public sealed class GeminiLlmClient : ILlmClient
         var payload = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"Gemini returned {(int)response.StatusCode}: {Truncate(payload)}", null, response.StatusCode);
+        {
+            var detail = $"Gemini returned {(int)response.StatusCode}: {Truncate(payload)}";
+            throw TransientFailure.IsTransient(response.StatusCode)
+                ? new TransientLlmException(detail, retryAfter: TransientFailure.RetryAfter(response))
+                : new HttpRequestException(detail, null, response.StatusCode);
+        }
 
         return ParseResponse(payload);
     }

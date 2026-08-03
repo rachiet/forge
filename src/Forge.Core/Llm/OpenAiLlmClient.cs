@@ -58,8 +58,12 @@ public sealed class OpenAiLlmClient : ILlmClient
         var payload = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"OpenAI returned {(int)response.StatusCode}: {Truncate(payload)}", null, response.StatusCode);
+        {
+            var detail = $"OpenAI returned {(int)response.StatusCode}: {Truncate(payload)}";
+            throw TransientFailure.IsTransient(response.StatusCode)
+                ? new TransientLlmException(detail, retryAfter: TransientFailure.RetryAfter(response))
+                : new HttpRequestException(detail, null, response.StatusCode);
+        }
 
         return ParseResponse(payload);
     }

@@ -37,6 +37,13 @@ public sealed class ForgePaths
     public string ProjectDb(string project) => Path.Combine(ProjectDir(project), "project.db");
     public string ProjectBareRepo(string project) => Path.Combine(ProjectDir(project), "repo.git");
 
+    /// <summary>The client's working copy of the finished project, checked out from trunk.</summary>
+    /// <remarks>
+    /// Outside <see cref="WorkspacesDir"/> on purpose: workspaces are the harness's scratch
+    /// space and are deleted, while this is the deliverable and the client is told where it is.
+    /// </remarks>
+    public string ProjectBuild(string project) => Path.Combine(ProjectDir(project), "build");
+
     /// <summary>The project's log file — one story per project, the default log sink.</summary>
     public string ProjectLog(string project) => Path.Combine(ProjectDir(project), "forge.log");
     public string WorkspacesDir(string project) => Path.Combine(ProjectDir(project), "workspaces");
