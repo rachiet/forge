@@ -29,12 +29,24 @@ public sealed class TransientLlmException(string message, Exception? inner = nul
 /// condition with a transient-looking status, so the ceiling is what guarantees a
 /// misread costs seconds instead of spinning.
 /// </remarks>
-public sealed class RetryingLlmClient(ILlmClient inner, ForgeLogger? logger = null, int attempts = 3) : ILlmClient
+public sealed class RetryingLlmClient(
+    ILlmClient inner, ForgeLogger? logger = null, int attempts = 3, TimeSpan? attemptTimeout = null) : ILlmClient
 {
     private static readonly TimeSpan FirstDelay = TimeSpan.FromSeconds(2);
 
     /// <summary>Never wait longer than this, however long the provider asks for.</summary>
     private static readonly TimeSpan MaxDelay = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long one attempt may take before it is abandoned and retried.
+    /// </summary>
+    /// <remarks>
+    /// Enforced here rather than left to the adapters' HttpClient.Timeout, which has been
+    /// observed not to fire: a review call once sat blocked for two hours, and a hang is
+    /// worse than a failure — the lease keeps beating on its own timer, so the board reads
+    /// "building" while nothing moves and no exception ever reaches the retry.
+    /// </remarks>
+    private readonly TimeSpan _attemptTimeout = attemptTimeout ?? TimeSpan.FromMinutes(5);
 
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
 
@@ -47,7 +59,7 @@ public sealed class RetryingLlmClient(ILlmClient inner, ForgeLogger? logger = nu
         {
             try
             {
-                return await inner.CompleteAsync(request, ct).ConfigureAwait(false);
+                return await AttemptAsync(request, ct).ConfigureAwait(false);
             }
             catch (TransientLlmException e) when (attempt < attempts && !ct.IsCancellationRequested)
             {
@@ -57,6 +69,23 @@ public sealed class RetryingLlmClient(ILlmClient inner, ForgeLogger? logger = nu
                 await Task.Delay(wait, ct).ConfigureAwait(false);
                 delay = delay * 2 < MaxDelay ? delay * 2 : MaxDelay;
             }
+        }
+    }
+
+    /// <summary>One call, abandoned as transient if it outlives the attempt timeout.</summary>
+    private async Task<LlmResponse> AttemptAsync(LlmRequest request, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_attemptTimeout);
+        try
+        {
+            return await inner.CompleteAsync(request, deadline.Token).ConfigureAwait(false);
+        }
+        // Only our deadline turns into a retry; a caller that cancelled means stop.
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TransientLlmException(
+                $"{request.Model} did not respond within {_attemptTimeout.TotalMinutes:0.#} minutes.");
         }
     }
 }

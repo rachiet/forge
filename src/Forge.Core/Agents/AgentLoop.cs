@@ -70,7 +70,8 @@ public sealed class AgentLoop(
         TaskRecord task, ToolExecutor executor, CancellationToken ct = default) =>
         RunAsync(
             assembler.SystemPrompt(_recipe, task, executor.Jail),
-            [new LlmMessage("user", PromptAssembler.TaskPacket(task))],
+            [new LlmMessage("user", PromptAssembler.TaskPacket(
+                task, new DiscussionRepository(conn).ClientGuidance(task.Id)))],
             executor, task, ct);
 
     /// <summary>

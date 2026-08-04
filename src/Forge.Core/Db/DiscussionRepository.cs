@@ -63,6 +63,21 @@ public sealed class DiscussionRepository(IDbConnection conn)
     public DiscussionRecord Get(long id) =>
         conn.QuerySingle<Row>($"{SelectColumns} WHERE id = @id", new { id }).ToRecord();
 
+    /// <summary>What the client said about this task, oldest first.</summary>
+    /// <remarks>
+    /// Rendered into every task packet. Unlike the progress note — overwritten by each
+    /// redirect and review — this survives, so an instruction given once still reaches
+    /// the engineer three attempts later.
+    /// </remarks>
+    public IReadOnlyList<string> ClientGuidance(long taskId) =>
+        conn.Query<string>("""
+            SELECT body FROM discussions
+            WHERE task_id = @taskId AND author = 'pm' AND body LIKE '[client guidance]%'
+            ORDER BY id
+            """, new { taskId })
+            .Select(b => b["[client guidance]".Length..].Trim())
+            .ToList();
+
     public IReadOnlyList<DiscussionRecord> ForTask(long taskId) =>
         conn.Query<Row>($"{SelectColumns} WHERE task_id = @taskId ORDER BY created_at, id", new { taskId })
             .Select(r => r.ToRecord()).ToList();

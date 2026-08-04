@@ -144,7 +144,8 @@ public class BudgetPauseTests : IDisposable
 
         var llm = new ScriptedLlmClient(
             ScriptedLlmClient.Tool("create_task",
-                ("title", "First half"), ("objective", "Do the first half"), ("budget", "50000")),
+                ("title", "First half"), ("objective", "Do the first half"),
+                ("acceptance", "The first half is done and builds."), ("budget", "50000")),
             ScriptedLlmClient.Tool("redirect", ("guidance", "Do only the second half now.")));
 
         var outcome = await Runner(llm).RunNextByPriorityAsync();

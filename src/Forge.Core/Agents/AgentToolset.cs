@@ -83,8 +83,11 @@ public sealed partial class AgentToolset(
                             + "and starts the build; nothing is handed to engineering until then. "
                             + "Pass milestone (an id from add_milestone) for a change request; pass "
                             + "none for the initial build, which spans the whole plan.",
-            ["create_task"] = "create_task(title, objective, [type], [acceptance], [requirements_ref], "
+            ["create_task"] = "create_task(title, objective, acceptance, [type], [requirements_ref], "
                             + "[context_paths], [budget], [milestone]) — put a task on the board. Returns its id. "
+                            + "acceptance is REQUIRED and states what must be observably true when the task is "
+                            + "done — the reviewer judges the diff against it, so a task without it can never be "
+                            + "finished. If you cannot say what done looks like, the task is not ready to create. "
                             + "type is task (default), bug, or chore. requirements_ref names the requirement "
                             + "file, e.g. `01-todos.md@v1` (version optional).",
             ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done.",
@@ -360,7 +363,7 @@ public sealed partial class AgentToolset(
             call.Arg("title"),
             call.Arg("objective"),
             call.OptionalInt("budget") ?? 60_000,
-            acceptanceCriteria: call.Optional("acceptance"),
+            acceptanceCriteria: call.Arg("acceptance"),
             contextPaths: contexts,
             requirementsRef: requirement,
             milestoneId: call.OptionalInt("milestone") is { } m ? m : null,

@@ -90,7 +90,7 @@ movable and shareable, so keys must not ride along in that payload.
 ### QA [DECIDED] (M5a — project-level acceptance gate)
 - **QA is project-level, not per-task.** A scaffold or a half-built feature has no
   observable behaviour to black-box; acceptance is a feature/requirement concern. The
-  per-task `Qa` status survives as an auto-passing hop in `IntegrateAsync`
+  per-task `Qa` status survives as an auto-passing hop in `MergeApproved`
   (`merging → qa → done`) but decides nothing; real QA runs only when
   the **whole board is complete** — `RunNextByPriorityAsync` calls `MaybeRunQaAsync`
   once no task/triage work remains. Same trigger for the first build and for a later
@@ -224,7 +224,7 @@ movable and shareable, so keys must not ride along in that payload.
   `TaskRunner` (`Func<string,CiResult>`) so orchestration tests don't need a
   toolchain; production uses `CiRunner.Run`.
 - **The gate order is CI, then review**: the Principal never reviews code
-  that fails CI. `IntegrateAsync` runs commit → commits-ahead check → push → CI, then
+  that fails CI. `Submit` runs commit → commits-ahead check → push → CI, then
   hands off at `in_review` and returns.
 - **Review and merge are queue steps, not inline calls.** `RunNextByPriorityAsync`
   serves `merging` (harness merge, no agent) and `in_review` (`ReviewAsync`) before any

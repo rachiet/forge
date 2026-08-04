@@ -83,6 +83,48 @@ public class RetryingLlmClientTests
     }
 
     [Fact]
+    public async Task A_call_that_never_returns_is_abandoned_and_retried()
+    {
+        // A hang is worse than a failure: the worker lease keeps beating on its own timer,
+        // so the board reads "building" while nothing moves. Observed live — a review call
+        // sat blocked for two hours despite HttpClient's own timeout.
+        var inner = new HangingClient(hangs: 1);
+
+        var result = await new RetryingLlmClient(
+                inner, attempts: 3, attemptTimeout: TimeSpan.FromMilliseconds(150))
+            .CompleteAsync(Request());
+
+        Assert.Equal("ok", result.Content);
+        Assert.Equal(2, inner.Calls);
+    }
+
+    [Fact]
+    public async Task A_caller_that_cancels_is_not_mistaken_for_a_timeout()
+    {
+        var inner = new HangingClient(hangs: int.MaxValue);
+        using var cancelled = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new RetryingLlmClient(inner, attempts: 3, attemptTimeout: TimeSpan.FromMinutes(5))
+                .CompleteAsync(Request(), cancelled.Token));
+    }
+
+    /// <summary>Blocks until cancelled for the first <c>hangs</c> calls, then answers.</summary>
+    private sealed class HangingClient(int hangs) : ILlmClient
+    {
+        public int Calls { get; private set; }
+
+        public string ModelFor(ModelTier tier) => "test-model";
+
+        public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
+        {
+            Calls++;
+            if (Calls <= hangs) await Task.Delay(Timeout.Infinite, ct);
+            return new LlmResponse { Content = "ok", Usage = new LlmUsage(1, 1) };
+        }
+    }
+
+    [Fact]
     public void The_tier_map_passes_straight_through()
     {
         var inner = new FlakyClient(0, () => new TransientLlmException("unused"));

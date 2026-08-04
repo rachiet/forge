@@ -63,6 +63,10 @@ wrong and no amount of good coding rescues the result.
 4. **Sequence with dependencies.** If task B needs the module task A creates, add
    the edge. The worker runs the DAG in order; unstated dependencies produce
    engineers building against things that do not exist yet.
+   **Every task must change the code.** Reviewing, merging, running CI, checking
+   the build and verifying another task are the harness's work and happen on their
+   own — never create a task for them. If you cannot name the files a task will
+   write, it is not a task.
 5. **Right-size budgets.** A scaffolding chore is not a feature. Give harder tasks
    more room; do not give every task the same number. Remember that tool output
    is charged against the budget: a task that runs builds repeatedly —

@@ -67,7 +67,8 @@ public class DesignPhaseTests : IDisposable
 
     private static string CreateTask(string title, string objective, string requirement) =>
         ScriptedLlmClient.Tool("create_task",
-            ("title", title), ("objective", objective), ("requirements_ref", requirement));
+            ("title", title), ("objective", objective), ("requirements_ref", requirement),
+            ("acceptance", $"{title} is implemented and its tests pass."));
 
     [Fact]
     public async Task The_principal_authors_structure_and_a_covered_task_dag()
@@ -185,7 +186,11 @@ public class DesignPhaseTests : IDisposable
         var llm = new ScriptedLlmClient(
             ScriptedLlmClient.Tool("create_task", ("title", "Bad"), ("objective", "")),
             ScriptedLlmClient.Tool("create_task",
-                ("title", "Also bad"), ("objective", "Investigate options"), ("type", "feature")),
+                ("title", "Also bad"), ("objective", "Investigate options"),
+                ("acceptance", "Options are documented."), ("type", "feature")),
+            // No acceptance — refused.
+            ScriptedLlmClient.Tool("create_task",
+                ("title", "Review and merge"), ("objective", "Review the router, then merge it")),
             CreateTask("Todo storage", "Add and complete todos", "01-todos.md@v1"),
             ScriptedLlmClient.Tool("done", ("summary", "Recovered and created the task.")));
 

@@ -90,9 +90,16 @@ public static class TaskTransitions
         new Dictionary<TaskStatus, TaskStatus[]>
         {
             [TaskStatus.Created] = [TaskStatus.Ready, TaskStatus.Cancelled],
-            [TaskStatus.Ready] = [TaskStatus.Claimed, TaskStatus.Blocked, TaskStatus.Cancelled],
-            [TaskStatus.Claimed] = [TaskStatus.InProgress, TaskStatus.Ready, TaskStatus.Blocked, TaskStatus.Cancelled],
-            [TaskStatus.InProgress] = [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.OutOfBudget, TaskStatus.Cancelled],
+            // Ready → NeedsHuman is how a task out of engineer attempts leaves the board:
+            // the cap is checked before the claim, so it is still Ready when it gives up.
+            [TaskStatus.Ready] =
+                [TaskStatus.Claimed, TaskStatus.Blocked, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
+            [TaskStatus.Claimed] =
+                [TaskStatus.InProgress, TaskStatus.Ready, TaskStatus.Blocked,
+                 TaskStatus.NeedsHuman, TaskStatus.Cancelled],
+            [TaskStatus.InProgress] =
+                [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.OutOfBudget,
+                 TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             // Rejected is reachable from InReview too: a reviewer of a bug-fix can reject
             // the underlying bug when it turns out not to be a real defect.
             [TaskStatus.InReview] =

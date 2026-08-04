@@ -1,5 +1,6 @@
 using Dapper;
 using Forge.Core;
+using Forge.Core.Agents;
 using Forge.Core.Board;
 using Forge.Core.Db;
 using Forge.Core.Model;
@@ -97,6 +98,29 @@ public class NeedsHumanTests : IDisposable
         Assert.Equal(0, after.OutOfBudgetCount);
         Assert.Equal(TaskStatus.Triage, after.Status);
         Assert.Equal(stuck.Id, tasks.NextPrincipalOwned()?.Id);
+    }
+
+    [Fact]
+    public void Client_guidance_reaches_every_later_attempt_at_the_task()
+    {
+        // The failure this exists for: guidance was recorded only as a discussion row and
+        // the progress note, and the note is overwritten by each redirect and review. The
+        // engineer never saw it and repeated the exact mistake the client had ruled out.
+        using var conn = Open();
+        var tasks = new TaskRepository(conn);
+        var task = Insert(tasks, "add and list commands");
+        var discussions = new DiscussionRepository(conn);
+
+        discussions.Open(task.Id, "pm", "[client guidance] Put all tests in tests/TodoApp.Tests.");
+        discussions.Open(task.Id, "principal", "[review] Duplicate test project created.");
+        tasks.SetProgressNote(task.Id, "CHANGES REQUESTED (review). Remove the duplicate project.");
+
+        var packet = PromptAssembler.TaskPacket(
+            tasks.Get(task.Id), discussions.ClientGuidance(task.Id));
+
+        Assert.Contains("Standing guidance from the client", packet);
+        Assert.Contains("Put all tests in tests/TodoApp.Tests.", packet);
+        Assert.DoesNotContain("[review]", packet);   // reviewer chatter is not client guidance
     }
 
     [Fact]

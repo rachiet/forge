@@ -119,11 +119,26 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     }
 
     /// <summary>Layer C — the task packet, the agent's first user turn.</summary>
-    public static string TaskPacket(TaskRecord task)
+    /// <param name="standingGuidance">
+    /// Instructions that outlive one attempt — the client's answer when a task was put to
+    /// them. Passed separately because <see cref="TaskRecord.ProgressNote"/> is overwritten
+    /// by every redirect and review, so guidance stored only there is lost by the time an
+    /// engineer reads it.
+    /// </param>
+    public static string TaskPacket(TaskRecord task, IReadOnlyList<string>? standingGuidance = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Task {task.Id}: {task.Title}").AppendLine();
         sb.AppendLine("## Objective").AppendLine().AppendLine(task.Objective).AppendLine();
+
+        if (standingGuidance is { Count: > 0 })
+        {
+            sb.AppendLine("## Standing guidance from the client").AppendLine();
+            sb.AppendLine("This came from the person paying for the work. It applies to every " +
+                          "attempt at this task, including yours. Follow it exactly.").AppendLine();
+            foreach (var item in standingGuidance) sb.AppendLine($"- {item}");
+            sb.AppendLine();
+        }
 
         if (task.AcceptanceCriteria is { Length: > 0 } criteria)
             sb.AppendLine("## Acceptance criteria").AppendLine().AppendLine(criteria).AppendLine();

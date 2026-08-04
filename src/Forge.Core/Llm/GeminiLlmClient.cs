@@ -33,7 +33,9 @@ public sealed class GeminiLlmClient : ILlmClient
         {
             [ModelTier.Fast] = "gemini/gemini-3.1-flash-lite",
             [ModelTier.Coding] = "gemini/gemini-2.5-flash",
-            [ModelTier.Reasoning] = "gemini/gemini-pro-latest",
+            // Not a pro model: the pro tier is quota-limited on this account and hangs
+            // often enough to stall a build. Revisit when pro capacity is reliable.
+            [ModelTier.Reasoning] = "gemini/gemini-3.6-flash",
         };
 
     private const string ModelPrefix = "gemini/";

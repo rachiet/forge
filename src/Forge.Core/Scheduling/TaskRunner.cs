@@ -110,7 +110,7 @@ public sealed class TaskRunner(
         // Work already part-way through the pipeline is finished before anything new is
         // started, so a task cannot sit one step from done while fresh work piles up.
         if (_tasks.NextInStatus(TaskStatus.Merging) is { } approved)
-            return MergeTaskAsync(approved);
+            return MergeApproved(approved);
         if (_tasks.NextInStatus(TaskStatus.InReview) is { } submitted)
             return await ReviewAsync(submitted, ct).ConfigureAwait(false);
         if (_tasks.NextPrincipalOwned() is { } stuck)
@@ -665,8 +665,19 @@ public sealed class TaskRunner(
         // directly is the escalation past this cap, so it is exempt.
         if (recipe.Role == AgentRole.Engineer)
         {
-            var attempts = _instances.ForTask(task.Id)
-                .Count(i => i.Role == AgentRole.Engineer && i.EndReason == EndReason.Done);
+            // Counted since the last time someone gave new direction — a Principal triage,
+            // or the client answering — not for the life of the task. All-time counting
+            // made the cap unclearable: new guidance arrived, the next claim re-blocked on
+            // attempts nobody could undo, and the task bounced straight back out.
+            var instances = _instances.ForTask(task.Id);
+            var lastDirection = instances
+                .Where(i => i.Role == AgentRole.Principal)
+                .Select(i => i.StartedAt)
+                .DefaultIfEmpty("")
+                .Max();
+            var attempts = instances.Count(i =>
+                i.Role == AgentRole.Engineer && i.EndReason == EndReason.Done
+                && string.CompareOrdinal(i.StartedAt, lastDirection) > 0);
             if (attempts >= RevisionCap)
                 return BlockExhausted(task, log, attempts);
         }
@@ -685,7 +696,7 @@ public sealed class TaskRunner(
         var result = await loop.RunAsync(_tasks.Get(task.Id), executor, ct).ConfigureAwait(false);
 
         return result.End == EndReason.Done
-            ? await IntegrateAsync(task, branch, result, log, ct).ConfigureAwait(false)
+            ? Submit(task, branch, result, log)
             : Park(task, result, log, statusBeforeClaim);
     }
 
@@ -719,14 +730,15 @@ public sealed class TaskRunner(
         conn.Execute("UPDATE tasks SET branch_name = @branch WHERE id = @taskId", new { taskId, branch });
 
     /// <summary>
-    /// The engineer said done. Whether it merges is decided here from ground truth:
-    /// git says whether there are commits, harness-run CI says whether it builds and
-    /// tests pass, and a fresh Principal says whether it's correct. Only then does it
-    /// reach trunk. CI failure or a rejected review sends it back to the engineer;
-    /// QA stays auto-passed until M5.
+    /// Commits, pushes and CI-checks what the engineer produced, then submits it for
+    /// review. Returns the task to the board rather than reviewing it here.
     /// </summary>
-    private async Task<TaskRunOutcome> IntegrateAsync(
-        TaskRecord task, string branch, AgentRunResult result, ForgeLogger log, CancellationToken ct)
+    /// <remarks>
+    /// Whether the work advances is decided from ground truth, never the agent's claim:
+    /// git says whether there are commits, harness-run CI says whether it builds.
+    /// </remarks>
+    private TaskRunOutcome Submit(
+        TaskRecord task, string branch, AgentRunResult result, ForgeLogger log)
     {
         _workspaces.CommitAll(task.Id, $"task({task.Id}): {task.Title}");
 
@@ -795,6 +807,27 @@ public sealed class TaskRunner(
                 return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.Rejected, $"Bug rejected: {rejectReason}");
             }
 
+            // A review that never reached a verdict says nothing about the code. Leave the
+            // task in in_review so the next tick reviews it again: sending it back to the
+            // engineer would spend a whole implementation run answering feedback that no
+            // reviewer ever gave.
+            if (verdict.End is EndReason.Crash or EndReason.Iterations or EndReason.Budget)
+            {
+                var failed = _instances.ForTask(task.Id).Count(i =>
+                    i.Id.StartsWith(AgentRecipe.PrincipalReview.InstancePrefix, StringComparison.Ordinal)
+                    && i.EndReason is EndReason.Crash or EndReason.Iterations or EndReason.Budget);
+
+                // Bounded, or a reviewer that cannot finish would be retried forever.
+                if (failed > CrashRetryCap)
+                    return BlockIntegration(task, log,
+                        new InvalidOperationException($"review failed {failed} times"), verdict.End);
+
+                var note = $"Review did not finish ({SnakeCaseEnum.ToSnakeCase(verdict.End)}); " +
+                           $"retrying ({failed} of {CrashRetryCap}).";
+                log.Event(EventType.ErrorProvider, note);
+                return new TaskRunOutcome(task.Id, verdict.End, TaskStatus.InReview, note);
+            }
+
             if (!verdict.Approved)
             {
                 if (verdict.Convention is { Length: > 0 } convention) WriteConvention(convention, log);
@@ -816,7 +849,7 @@ public sealed class TaskRunner(
     /// Re-running is safe: merging a branch already in trunk is a no-op, so a worker that
     /// died between the merge and the transition simply repeats it on the next tick.
     /// </remarks>
-    private TaskRunOutcome MergeTaskAsync(TaskRecord task)
+    private TaskRunOutcome MergeApproved(TaskRecord task)
     {
         var log = _log.For(task.Id);
         var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
@@ -891,15 +924,21 @@ public sealed class TaskRunner(
     }
 
     /// <summary>Bounded revision loop tripped: hand the task to the Principal to triage.</summary>
+    /// <summary>Parks a task on the client once the engineer has run out of attempts.</summary>
+    /// <remarks>
+    /// Deliberately not `blocked`: the attempt count only ever rises, so a blocked task the
+    /// Principal redirects is re-blocked by the very next engineer claim, and the loop spends
+    /// a triage instance per cycle forever. Five failed attempts is a scope question, which
+    /// is the client's to answer.
+    /// </remarks>
     private TaskRunOutcome BlockExhausted(TaskRecord task, ForgeLogger log, int attempts)
     {
-        var note = $"Task blocked after {attempts} engineer attempts without passing CI + review.";
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
-            Transition(task.Id, TaskStatus.Blocked, log);
+        var note = $"Task stopped after {attempts} engineer attempts that could not pass CI and review. " +
+                   "It needs a decision on scope or approach.";
+        _tasks.SetProgressNote(task.Id, note);
         log.Event(EventType.ErrorInternal, note);
-        Notify(task.Id, MessageType.Escalation, "principal", note);
-        return new TaskRunOutcome(task.Id, EndReason.Iterations, TaskStatus.Blocked, note);
+        Notify(task.Id, MessageType.Escalation, "pm", note);
+        return ParkOnClient(task.Id, note, log);
     }
 
     private static string Shorten(string text, int max) =>

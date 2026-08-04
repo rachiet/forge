@@ -156,7 +156,7 @@ public class ReviewAndCiTests : IDisposable
     }
 
     [Fact]
-    public async Task A_task_that_keeps_failing_is_blocked_after_the_revision_cap()
+    public async Task A_task_that_keeps_failing_is_put_to_the_client_after_the_revision_cap()
     {
         var task = ReadyTask();
 
@@ -174,14 +174,18 @@ public class ReviewAndCiTests : IDisposable
             var next = runner.NextTask(AgentRole.Engineer);
             if (next is null) break;
             outcome = await runner.RunAsync(next);
-            if (outcome.Status == TaskStatus.Blocked) break;
+            if (outcome.Status == TaskStatus.NeedsHuman) break;
         }
 
-        Assert.Equal(TaskStatus.Blocked, outcome.Status);
+        // Not `blocked`: the attempt count only rises, so a blocked task the Principal
+        // redirects is re-blocked by the next claim and triage loops on it forever.
+        Assert.Equal(TaskStatus.NeedsHuman, outcome.Status);
         Assert.Equal(5, new AgentInstanceRepository(_conn).ForTask(task.Id)
             .Count(i => i.Role == AgentRole.Engineer));
-        Assert.Contains(new MessageRepository(_conn).Pending("principal"),
-            m => m.Payload.Contains("blocked after 5 engineer attempts"));
+        // It goes to the PM, not the Principal: the Principal has already had its say
+        // through five review cycles, and what is left is a scope call for the client.
+        Assert.Contains(new MessageRepository(_conn).Pending("pm"),
+            m => m.Payload.Contains("5 engineer attempts"));
     }
 }
 
