@@ -121,7 +121,11 @@ public sealed class AgentLoop(
         log.Event(EventType.InstanceStart,
             $"{instanceId} ({SnakeCaseEnum.ToSnakeCase(_recipe.Role)}, {model})");
 
-        var toolset = new AgentToolset(executor, conn, _recipe, task, log);
+        // `using`, not a bare new: a toolset may own live processes (QA's serve()), and an
+        // instance that ends for ANY reason — done, budget, crash, iteration cap, or the
+        // cancellation below that never reaches Finish — must not leave one running. An
+        // orphaned server holds its port against every later run on this machine.
+        using var toolset = new AgentToolset(executor, conn, _recipe, task, log);
         var attribution = new LlmAttribution(instanceId, _recipe.Role, task?.Id);
 
         List<LlmMessage> conversation = [.. seed];

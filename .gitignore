@@ -59,3 +59,5 @@ key.bin
 secrets.json
 *.log
 forge.log
+
+CLAUDE.local.md

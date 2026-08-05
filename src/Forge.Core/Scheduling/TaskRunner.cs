@@ -522,7 +522,7 @@ public sealed class TaskRunner(
 
         var bugsBefore = _tasks.List().Count(t => t.Type == TaskType.Bug);
         var result = await RunWithCrashRetryAsync(() =>
-            loop.RunChatAsync([new LlmMessage("user", QaBrief())], executor, ct)).ConfigureAwait(false);
+            loop.RunChatAsync([new LlmMessage("user", QaBrief(workspace))], executor, ct)).ConfigureAwait(false);
 
         // A spent project cap refused QA's calls: the round never really ran, so the
         // watermark must not move (that would falsely mark the project verified) and no
@@ -559,7 +559,7 @@ public sealed class TaskRunner(
         return new TaskRunOutcome(0, result.End, TaskStatus.Qa, summary);
     }
 
-    private string QaBrief()
+    private string QaBrief(string workspace)
     {
         var ledger = _tasks.BugLedger();
         var ledgerText = ledger.Count == 0
@@ -574,6 +574,8 @@ public sealed class TaskRunner(
             its observable side-channel — its HTTP endpoints or CLI, never its source — and
             check each requirement. Build and run it with `run` as needed.
 
+            {StartupSection(workspace)}
+
             File a bug with `file_bug` for every requirement that is NOT met — exact repro
             steps, the expected result, and the actual result. If everything is met, file
             nothing; that is what accepts the project.
@@ -583,6 +585,38 @@ public sealed class TaskRunner(
             {ledgerText}
 
             When you have checked every requirement once, call `done` with a summary.
+            """;
+    }
+
+    /// <summary>
+    /// Tells QA exactly what to start, read out of the checkout by <see cref="AgentToolset.Discover"/>.
+    /// </summary>
+    /// <remarks>
+    /// Handed over rather than left to be worked out, because a guessed project path fails as a
+    /// BUILD error — indistinguishable, to the model, from a broken project — and there is no
+    /// layout convention to fall back on: one project here is `src/BillSplitter.Web`, another is
+    /// `src/Weatherboard`. A round that guessed wrong once filed four bugs it never observed.
+    /// </remarks>
+    private static string StartupSection(string workspace)
+    {
+        if (AgentToolset.Discover(workspace) is not { } target)
+            return "This project has no runnable app; verify it through `run` and the files it writes.";
+
+        var url = target.Url is { } declared
+            ? $"It declares {declared} in launchSettings, so pass port {new Uri(declared).Port} to serve()."
+            : "It does not declare a URL; serve() will report the one it binds.";
+        var other = target.Alternatives.Count == 0
+            ? ""
+            : $"\n(Other runnable projects, if that one is not the app under test: {string.Join(", ", target.Alternatives)}.)";
+
+        return $"""
+            ## Starting the app — use this, do not guess a path
+
+            The startup project, read from the repo just now, is `{target.ProjectPath}`:
+
+                serve(command: "dotnet run --project {target.ProjectPath}")
+
+            {url}{other}
             """;
     }
 

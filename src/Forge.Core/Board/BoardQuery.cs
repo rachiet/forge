@@ -213,10 +213,27 @@ public sealed class BoardQuery(IDbConnection conn, string project)
         _ => "pending",
     };
 
+    /// <summary>
+    /// How far the plan has got, from the data alone — "planning" before there is anything to
+    /// build, "complete" once every planned item is done, "building" in between.
+    /// </summary>
+    /// <remarks>
+    /// Milestones holding no tasks are skipped. An empty milestone is a row in the plan, not
+    /// outstanding work, and treating it as pending kept a finished project reading "paused"
+    /// forever: HabitTracker shipped every task and was delivered while the PM's two duplicate,
+    /// task-less milestones held the whole project short of complete.
+    ///
+    /// Cancelled and rejected tasks need no handling here — the milestone and feature queries
+    /// already leave them out of their totals, so work that was dropped cannot hold a project open.
+    /// </remarks>
     private static string ProjectState(IReadOnlyList<BoardItem> milestones, IReadOnlyList<BoardItem> features)
     {
         if (milestones.Count == 0 && features.Count == 0) return "planning";
-        var items = milestones.Count > 0 ? milestones : features;
+
+        var planned = milestones.Where(m => m.Total > 0).ToList();
+        var items = planned.Count > 0 ? planned : features;
+        if (items.Count == 0) return "planning";
+
         return items.All(i => i.State == "done") ? "complete" : "building";
     }
 

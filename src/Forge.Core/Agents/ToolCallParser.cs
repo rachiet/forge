@@ -65,9 +65,11 @@ public static partial class ToolCallParser
     }
 
     /// <summary>
-    /// Strip only the layout newlines the tag form introduces — the one after the
-    /// opening tag and the indentation before the closing tag — so that file
-    /// content the model wrote on its own lines round-trips byte-for-byte.
+    /// Turns a raw argument into the value the tool receives. Strips the layout newlines
+    /// the tag form introduces — the one after the opening tag and the indentation before
+    /// the closing tag — so content the model wrote on its own lines round-trips
+    /// byte-for-byte, then removes any wrapper the model added around it. Cleanups are
+    /// applied here, in order, so every tool and every provider gets the same value.
     /// </summary>
     private static string Normalize(string raw)
     {
@@ -79,6 +81,52 @@ public static partial class ToolCallParser
         if (lastNewline >= 0 && value[(lastNewline + 1)..].All(c => c is ' ' or '\t'))
             value = value[..lastNewline];
 
-        return value;
+        return UnwrapCdata(value);
+    }
+
+    /// <summary>
+    /// Remove a CDATA section that wraps the WHOLE argument, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// The protocol above is tag-shaped but is not XML — it is a regex over raw text,
+    /// chosen precisely so file content needs no escaping. Some models read the shape
+    /// rather than the rule and apply real XML conventions to it, wrapping content full
+    /// of `&lt;` and `&amp;` in CDATA to protect it. Nothing then consumes the markers, so they
+    /// are written to disk as the first and last characters of the file. That shipped a
+    /// project whose index.html, script.js and style.css each began `&lt;![CDATA[`: the CSS
+    /// would not parse, the JS died on line 1, and the page rendered `]]&gt;` as text — while
+    /// every HTTP check still returned 200, so QA saw nothing wrong.
+    ///
+    /// Here rather than in write_file because the same habit reaches `run` commands and
+    /// bug text; one place covers every tool and every provider.
+    ///
+    /// Only an argument that is ENTIRELY one section is unwrapped. Requiring the trailing
+    /// `]]&gt;` to be the first one in the value is what makes that precise: a legitimate XML
+    /// file holding two sections also starts with the opener and ends with the closer, and
+    /// stripping its outer markers would silently corrupt it.
+    /// </remarks>
+    private static string UnwrapCdata(string value)
+    {
+        const string open = "<![CDATA[";
+        const string close = "]]>";
+
+        var body = value.Trim();
+        if (!body.StartsWith(open, StringComparison.Ordinal) ||
+            !body.EndsWith(close, StringComparison.Ordinal) ||
+            body.Length < open.Length + close.Length)
+            return value;
+
+        var inner = body[open.Length..^close.Length];
+        // A second section means the markers are content, not a wrapper.
+        if (inner.Contains(close, StringComparison.Ordinal)) return value;
+
+        // The markers sit on their own lines, so shed the newline each one introduced —
+        // and only that one, leaving the file's own blank lines and indentation intact.
+        if (inner.StartsWith("\r\n", StringComparison.Ordinal)) inner = inner[2..];
+        else if (inner.StartsWith('\n')) inner = inner[1..];
+        if (inner.EndsWith("\r\n", StringComparison.Ordinal)) inner = inner[..^2];
+        else if (inner.EndsWith('\n')) inner = inner[..^1];
+
+        return inner;
     }
 }

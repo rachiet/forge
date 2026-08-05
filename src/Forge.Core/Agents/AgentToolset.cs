@@ -66,8 +66,12 @@ public sealed partial class AgentToolset(
     /// <summary>Set when a bug was rejected (at triage or in review) — the reason it is not a real defect.</summary>
     public string? RejectedBugReason { get; private set; }
 
-    /// <summary>One line per tool, rendered into the prompt so docs cannot drift from code.</summary>
-    public static readonly IReadOnlyDictionary<string, string> Catalogue =
+    /// <summary>
+    /// One line per tool, rendered into the prompt so docs cannot drift from code. The QA-only
+    /// tools are described next to their implementation in QaTools.cs and merged in here, so
+    /// this stays the single list every recipe is validated against.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> Catalogue = QaCatalogue.Concat(
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["read_file"] = "read_file(path, [start], [end]) — read a file, optionally a line range.",
@@ -96,8 +100,9 @@ public sealed partial class AgentToolset(
                          + "attempt so the engineer starts fresh with your guidance. Ends your triage.",
             ["file_bug"] = "file_bug(title, expected, [requirements_ref]) — record a failure as a bug for the "
                          + "Principal to triage. You give the title and the expected behaviour (from the contract); "
-                         + "the harness attaches the command you just ran and its real output as the evidence. "
-                         + "So run the check that shows the failure IMMEDIATELY before calling this. No run = refused.",
+                         + "the harness attaches whatever you last did to the running project — the run(), serve() "
+                         + "or http() exchange — and its real output as the evidence. So perform the check that "
+                         + "shows the failure IMMEDIATELY before calling this. Nothing checked = refused.",
             ["how_to_run"] = "how_to_run(command, [url]) — record the command that starts the app for "
                            + "the client, and the URL it serves on if it has one. Call it once, after you "
                            + "have actually started the app. Give the command exactly as you ran it.",
@@ -121,7 +126,7 @@ public sealed partial class AgentToolset(
             ["progress_note"] = "progress_note(note) — save state for your successor.",
             ["done"] = "done(summary) — you believe the work is complete.",
             ["escalate"] = "escalate(reason) — you are blocked and need a human decision.",
-        };
+        }).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
 
     public async Task<ToolOutcome> ExecuteAsync(ToolCall call, CancellationToken ct = default)
     {
@@ -166,7 +171,10 @@ public sealed partial class AgentToolset(
                 "progress_note" => ProgressNote(call),
                 "done" => Done(call),
                 "escalate" => Escalate(call),
-                _ => new ToolOutcome($"ERROR: tool '{call.Name}' is not implemented."),
+                // QA's own tools (serve/stop_server/http) dispatch from QaTools.cs, which also
+                // answers for anything unknown. The recipe gate above already refused every name
+                // this role does not have, so nothing reaches here that should not.
+                _ => await QaToolAsync(call, ct).ConfigureAwait(false),
             };
         }
         // Refusals are observations, not crashes: the agent should see the boundary
@@ -505,13 +513,15 @@ public sealed partial class AgentToolset(
 
     private ToolOutcome FileBug(ToolCall call)
     {
-        // Evidence is not optional and not the model's to narrate: a bug must be backed
-        // by a command QA actually ran, whose real output the harness captured. No run,
-        // no bug — this is what makes a fabricated "actual" impossible.
+        // Evidence is not optional and not the model's to narrate: a bug must be backed by
+        // something QA actually did to the project — a command it ran, a server it started, a
+        // request it sent — whose real output the harness captured. No check, no bug; this is
+        // what makes a fabricated "actual" impossible.
         if (_lastRunTrace is null)
             return new ToolOutcome(
-                "ERROR: file_bug needs evidence. Run the check that demonstrates the failure first — its exact "
-                + "command and output are attached automatically as the repro. Do not describe a result you did not run.");
+                "ERROR: file_bug needs evidence. Perform the check that demonstrates the failure first — run() "
+                + "a command, or serve() the app and http() the endpoint — and its exact output is attached "
+                + "automatically as the repro. Do not describe a result you did not observe.");
 
         var requirement = call.Optional("requirements_ref") is { } reqRef
             ? NormalizeRequirementRef(reqRef)

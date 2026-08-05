@@ -103,7 +103,11 @@ public class ProjectLifecycleTests : IDisposable
         Assert.False(board.SpecReady);
         Assert.Empty(board.Milestones);
         Assert.Empty(board.Features);
-        Assert.Empty(board.Chat);
+        // Not empty: a new project opens with Iris's greeting, so the client arrives at a
+        // conversation rather than a blank box. It is fixed text, so it costs nothing.
+        var opening = Assert.Single(board.Chat);
+        Assert.Equal("pm", opening.From);
+        Assert.Equal(ProjectBootstrap.Greeting, opening.Text);
         Assert.Equal(0m, board.TotalCostUsd);
     }
 

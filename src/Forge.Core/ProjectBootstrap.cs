@@ -1,5 +1,6 @@
 using Dapper;
 using Forge.Core.Db;
+using Forge.Core.Model;
 using Forge.Core.Workspaces;
 
 namespace Forge.Core;
@@ -7,6 +8,15 @@ namespace Forge.Core;
 /// <summary>Creates the on-disk layout for a client project under ForgeDataRoot.</summary>
 public static class ProjectBootstrap
 {
+    // One line per paragraph: the chat bubble is pre-wrap, so a hard-wrapped literal would
+    // break mid-sentence in a narrow panel instead of reflowing.
+    public const string Greeting =
+        "Hi, welcome to Forge. I'm Iris. I'm here to turn your idea into reality.\n\n" +
+        "Tell me what you'd like to build and my team will build it for you. I'll ask a few questions along the way to make sure we get it right, and I'll always check with you before anyone starts work.\n\n" +
+        "You'll see progress here as it happens, and you can message me any time to change something or add an idea.\n\n" +
+        "Don't worry about being technical, that's our job. Just describe the idea that's on your mind.\n\n" +
+        "What would you like to forge today?";
+
     public static void Init(ForgePaths paths, string name)
     {
         ForgePaths.ValidName(name);
@@ -28,7 +38,11 @@ public static class ProjectBootstrap
         Directory.CreateDirectory(paths.ProjectDir(name));
         Directory.CreateDirectory(paths.WorkspacesDir(name));
 
-        using (var project = Database.OpenProject(paths.ProjectDb(name))) { }
+        using (var project = Database.OpenProject(paths.ProjectDb(name)))
+        {
+            new MessageRepository(project).Insert(
+                Message.Create(MessageType.Answer, "pm", "client", Greeting));
+        }
 
         InitBareRepo(paths.ProjectBareRepo(name), name);
 

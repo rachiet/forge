@@ -92,10 +92,11 @@ public sealed class PromptAssembler(PromptLibrary prompts)
               instance can resume. Never spend your last turns re-reading or exploring.
             """);
 
-        if (recipe.Tools.Contains("run"))
+        if (recipe.Tools.Contains("run") || recipe.Tools.Contains("serve"))
         {
+            var starters = recipe.Tools.Contains("serve") ? "run() and serve() have" : "run() has";
             sb.AppendLine();
-            sb.Append("- run() has no shell: no pipes, redirects, &&, or $(). One binary per call. ")
+            sb.Append($"- {starters} no shell: no pipes, redirects, &&, or $(). One binary per call. ")
               .Append($"Allowed: {string.Join(", ", recipe.ToolAllowlist)}.");
         }
 

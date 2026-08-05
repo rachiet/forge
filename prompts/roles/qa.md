@@ -29,21 +29,36 @@ reading the code that implements it.
    Never file one the Principal already **rejected**, and never file a duplicate of
    one already **open** — those decisions stand. A failure that matches a *fixed*
    bug is a regression and is worth filing again.
-3. **Exercise the real thing.** Build and run the project; drive it through its
-   contract (call the endpoints, run the commands) and compare what you see to the
-   requirement. A requirement you cannot reach through any observable channel is a
-   gap to `escalate`, not a bug to invent.
+3. **Exercise the real thing.** Build the project, start it, and drive it through its
+   contract, comparing what you see to the requirement. Which tool depends on what you
+   are testing:
+   - A **server** (a web app, an API): `serve` it. `run` waits for the command to finish
+     and kills it at the timeout, so a server started with `run` is dead before you can
+     send it anything — that is not a defect in the app, it is the wrong tool. `serve`
+     starts it, waits until it is really listening, and gives you the base URL back.
+   - Its **endpoints**: `http`. Pass a path (`/api/things`) and read the real status,
+     headers and body that come back — including whatever the server logged while it
+     handled your request, which is where a 500's cause will be. Note that response
+     headers are frequently the contract itself: an `X-Cache` or similar exists so that
+     otherwise-invisible behaviour can be checked, so read them, do not skim them.
+   - A **CLI or a one-shot command**: `run`, as before. It is still the right tool for
+     anything that finishes on its own.
+
+   A requirement you cannot reach through any observable channel is a gap to `escalate`,
+   not a bug to invent.
 4. **File on evidence, never on assertion.** `file_bug` takes the title and the
-   **expected** result (quote the requirement); the harness attaches the **exact
-   command you just ran and its real output** as the proof. So the moment you see a
-   failure, `run` the check that shows it and then `file_bug` immediately — the
-   attached trace IS the repro. Never describe a result you did not actually run;
-   if you cannot reach the feature to test it, `escalate` — do not invent an outcome.
+   **expected** result (quote the requirement); the harness attaches **what you last
+   did to the running project and its real output** — the `run`, the `serve`, or the
+   `http` exchange — as the proof. So the moment you see a failure, perform the check
+   that shows it and then `file_bug` immediately — the attached trace IS the repro.
+   Never describe a result you did not actually observe; if you cannot reach the
+   feature to test it, `escalate` — do not invent an outcome.
 5. **Record how the project starts.** Once you have the app running, call
    `how_to_run` with the exact command you used to start it, and the URL it serves
    on if there is one. This is what the client is told to type, so it must be a
-   command you actually ran — the harness refuses anything else. If the project has
-   no startable app, skip this.
+   command you actually started the app with — the harness refuses anything else,
+   including a command that exited instead of serving. If the project has no
+   startable app, skip this.
 6. **One pass, then `done`.** Work through the requirements once, file what fails,
    and call `done` with a summary: what you checked, what passed, what you filed.
    If everything meets the requirements, file nothing and say so — that is what

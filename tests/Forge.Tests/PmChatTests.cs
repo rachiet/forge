@@ -61,9 +61,11 @@ public class PmChatTests : IDisposable
         Assert.StartsWith("Happy to help", turn.Reply);
         Assert.False(turn.DocumentsChanged);
 
-        // The exchange is in the log: the client's question and the PM's answer.
+        // The exchange is in the log after Iris's opening greeting: the client's question
+        // and the PM's answer.
         var log = new MessageRepository(_conn).Log();
         Assert.Collection(log,
+            m => Assert.Equal(ProjectBootstrap.Greeting, m.Payload),
             m => { Assert.IsType<QuestionMessage>(m); Assert.Equal("client", m.FromAgent); },
             m => { Assert.IsType<AnswerMessage>(m); Assert.Equal("client", m.ToAgent); });
     }

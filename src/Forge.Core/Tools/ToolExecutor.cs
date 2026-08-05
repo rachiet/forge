@@ -10,6 +10,98 @@ public sealed record ToolResult(int ExitCode, string Stdout, string Stderr, bool
 public sealed class ToolJailViolationException(string message) : InvalidOperationException(message);
 
 /// <summary>
+/// A process still running under the harness's supervision — what <see cref="ToolExecutor.Start"/>
+/// returns. Output is captured continuously into a buffer rather than read at the end, because the
+/// interesting part of a server's log (the port it bound, the stack trace behind a 500) is written
+/// while it runs, and a process that never exits would otherwise never surrender a line of it.
+/// </summary>
+public sealed class ServerHandle : IDisposable
+{
+    private readonly Process _process;
+    private readonly Func<string, string> _redact;
+    private readonly StringBuilder _output = new();
+
+    /// <summary>Output arrives on threadpool threads while the agent's turn reads it.</summary>
+    private readonly object _gate = new();
+
+    /// <summary>How much of <see cref="_output"/> has already been shown, so each read is a delta.</summary>
+    private int _shown;
+
+    private ServerHandle(string command, Process process, Func<string, string> redact) =>
+        (Command, _process, _redact) = (command, process, redact);
+
+    internal static ServerHandle Launch(string command, ProcessStartInfo psi, Func<string, string> redact)
+    {
+        var process = new Process { StartInfo = psi };
+        var handle = new ServerHandle(command, process, redact);
+
+        // Event-driven rather than ReadToEnd: those calls only complete at exit, which for a
+        // server is never. This delivers each line as it is written, which is what makes
+        // "wait until it says it is listening" possible.
+        process.OutputDataReceived += (_, e) => handle.Capture(e.Data);
+        process.ErrorDataReceived += (_, e) => handle.Capture(e.Data);
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        return handle;
+    }
+
+    /// <summary>The command as the agent typed it — what how_to_run is checked against.</summary>
+    public string Command { get; }
+
+    public bool HasExited => _process.HasExited;
+
+    /// <summary>Meaningful only once <see cref="HasExited"/>; -1 while it is still running.</summary>
+    public int ExitCode => _process.HasExited ? _process.ExitCode : -1;
+
+    /// <summary>Everything the process has written so far, secrets redacted.</summary>
+    public string Output
+    {
+        get { lock (_gate) return _redact(_output.ToString()); }
+    }
+
+    /// <summary>
+    /// Output written since the last call — the server's side of whatever just happened.
+    /// Consuming it is what keeps a long-lived log from being re-shown on every request.
+    /// </summary>
+    public string OutputSinceLastRead()
+    {
+        lock (_gate)
+        {
+            if (_shown >= _output.Length) return "";
+            var text = _output.ToString(_shown, _output.Length - _shown);
+            _shown = _output.Length;
+            return _redact(text);
+        }
+    }
+
+    private void Capture(string? line)
+    {
+        if (line is null) return;
+        lock (_gate) _output.AppendLine(line);
+    }
+
+    /// <summary>
+    /// Kills the whole tree, not just the process we started: `dotnet run` is a launcher whose
+    /// child holds the port, so killing the parent alone leaves the socket bound and the next
+    /// serve() fails on an address already in use.
+    /// </summary>
+    public void Dispose()
+    {
+        try
+        {
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+                _process.WaitForExit(milliseconds: 5_000);
+            }
+        }
+        catch (InvalidOperationException) { /* already gone — nothing to kill */ }
+        finally { _process.Dispose(); }
+    }
+}
+
+/// <summary>
 /// Executes agent-requested commands under mechanical supervision (spec §11):
 /// no shell, allowlisted binaries only, working directory jailed to the task
 /// workspace, per-command timeout, {{secret:NAME}} substituted at exec time.
@@ -41,6 +133,59 @@ public sealed partial class ToolExecutor(
         TimeSpan? timeout = null,
         CancellationToken ct = default)
     {
+        var (psi, secretsUsed) = Prepare(command, workingSubdir);
+
+        using var process = new Process { StartInfo = psi };
+        process.Start();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+        var timedOut = false;
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(timeout ?? _defaultTimeout);
+            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            timedOut = true;
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+
+        var stdout = Redact(await stdoutTask.ConfigureAwait(false), secretsUsed);
+        var stderr = Redact(await stderrTask.ConfigureAwait(false), secretsUsed);
+        return new ToolResult(timedOut ? -1 : process.ExitCode, stdout, stderr, timedOut);
+    }
+
+    /// <summary>
+    /// Starts a process and hands back a live handle instead of waiting for it to exit —
+    /// the one thing <see cref="RunAsync"/> structurally cannot do, since its timeout kills
+    /// whatever is still alive. A server has to outlive the call that started it to be worth
+    /// starting at all, so testing one through its own port needs this.
+    /// </summary>
+    /// <remarks>
+    /// Every guarantee RunAsync makes still holds: same allowlist, same jail, same scrubbed
+    /// environment, same secret substitution and redaction — because both go through
+    /// <see cref="Prepare"/>. The difference is only who decides when the process dies, and
+    /// that is the caller's job now: an undisposed handle is a leaked process.
+    /// </remarks>
+    public ServerHandle Start(string command, string? workingSubdir = null)
+    {
+        var (psi, secretsUsed) = Prepare(command, workingSubdir);
+        return ServerHandle.Launch(command, psi, text => Redact(text, secretsUsed));
+    }
+
+    /// <summary>
+    /// Everything that has to be true before a child process starts: the binary is on the
+    /// allowlist, no argument points outside the jail, the environment is built rather than
+    /// inherited, and {{secret:NAME}} is resolved at exec time. Shared by both start paths so
+    /// a second one cannot quietly acquire weaker supervision than the first.
+    /// </summary>
+    private (ProcessStartInfo Psi, Dictionary<string, string> SecretsUsed) Prepare(
+        string command, string? workingSubdir)
+    {
         var argv = Tokenize(command);
         if (argv.Count == 0)
             throw new ArgumentException("Empty command.", nameof(command));
@@ -70,29 +215,7 @@ public sealed partial class ToolExecutor(
         };
         foreach (var arg in finalArgv.Skip(1)) psi.ArgumentList.Add(arg);
         ScrubEnvironment(psi);
-
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        var timedOut = false;
-        try
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(timeout ?? _defaultTimeout);
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            timedOut = true;
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-
-        var stdout = Redact(await stdoutTask.ConfigureAwait(false), secretsUsed);
-        var stderr = Redact(await stderrTask.ConfigureAwait(false), secretsUsed);
-        return new ToolResult(timedOut ? -1 : process.ExitCode, stdout, stderr, timedOut);
+        return (psi, secretsUsed);
     }
 
     /// <summary>

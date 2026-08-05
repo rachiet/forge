@@ -72,37 +72,6 @@ files nothing new.
 
 ---
 
-## Example workflow
-
-```sh
-forge project init mynotes
-forge chat mynotes
-```
-
-> Build me a sticky-note app. Users create, edit, delete, and move notes.
-> Notes persist across restarts. The interface should feel elegant and
-> handwritten.
-
-The PM turns the conversation into requirements. Once you approve them:
-
-```sh
-forge run mynotes --loop --project-budget 1000000
-```
-
-Forge designs the app, plans the tasks, writes the code, builds and tests it,
-reviews every change, runs QA, and reports back when the project is accepted.
-`--project-budget` caps total token spend.
-
-The result is an ordinary git repo:
-
-```sh
-git clone "$FORGE_HOME/projects/mynotes/repo.git" mynotes-app
-cd mynotes-app
-dotnet run --project src/<ProjectName>
-```
-
----
-
 ## Why Forge is different
 
 Most AI coding tools generate code. Forge is built to run an autonomous,
@@ -158,50 +127,70 @@ dotnet build -c Release
 alias forge='dotnet /path/to/Forge/src/Forge.Cli/bin/Release/net8.0/Forge.Cli.dll'
 ```
 
-**Other providers** — Claude is the default. To switch, create
-`<data root>/llm.json`:
-
-```json
-{ "provider": "openai" }
-```
-
-or pin a model per tier (`fast`, `coding`, `reasoning`):
-
-```json
-{ "provider": "gemini",
-  "models": { "reasoning": "gemini/gemini-2.5-pro" } }
-```
-
-`FORGE_LLM_PROVIDER=openai forge run …` overrides the file for one command.
-`forge prices show` confirms your provider and the live rate for every model
-it will use — Forge refuses to run a model it can't price.
-
 ---
 
-## Browser dashboard
+## Getting started
+
+### The dashboard
 
 ```sh
 forge board                # http://localhost:5177, every project
 forge board --port 8080
 ```
 
-Create projects, chat with the PM, watch milestones and spend per agent, and
-start or stop the build — no terminal needed after that. Only one build runs
-machine-wide at a time, so the dashboard and a terminal `forge run` can't
-collide on the same database.
+**1 — Create the project.** A name, a hard cap in dollars, and a provider. The
+cap is real: the build pauses when it's reached and asks you, rather than
+spending on.
 
----
+<img src="docs/images/forge-01-new-project.png" alt="Start a new project" width="50%">
 
-## Watching a run
+**2 — Describe what you want.** Iris, the PM, opens the conversation. Plain
+language is enough; she asks about anything ambiguous.
+
+<img src="docs/images/forge-02-chat.png" alt="Chatting with Iris" width="50%">
+
+**3 — Approve the specification.** Iris turns your conversation into a full
+requirements and specification document, then waits for you to review it.
+Once you approve, you sit back and watch: the agents start building.
+
+![Approving the specification](docs/images/forge-03-spec.png)
+
+**4 — Watch the agents work.** Approving starts the build, and from here it
+runs itself. Milestones, features and spend per agent update as work lands,
+every figure read from the token ledger rather than estimated. Check in
+whenever you like, and pause or resume from the same page. When it's done,
+the board tells you where the project is and how to run it.
+
+![The project board](docs/images/forge-04-board.png)
+
+**5 — Run what it built.**
+
+![The finished app](docs/images/forge-05-app.png)
+
+### The CLI
+
+The same pipeline, without the browser:
 
 ```sh
-forge task list mynotes                 # the board: status, budget, progress
-forge log  mynotes                      # conversation + decision trail
-forge log  mynotes --events             # every tool call, git op, transition
-forge log  mynotes --events --task 3    # just one task
+forge project init habittracker           # create it
+forge chat habittracker                   # same PM conversation, in the terminal
+forge run habittracker --loop             # build until the board drains, then QA
+forge task list habittracker              # where everything stands
+forge log habittracker --events           # every tool call, git op, transition
 ```
 
-A run is autonomous but not opaque — every action is one logged line.
+A run is autonomous but not opaque: every action is one logged line, and
+`--task 3` narrows the trail to a single task.
+
+The result is an ordinary git repo:
+
+```sh
+git clone "$FORGE_HOME/projects/habittracker/repo.git" habittracker
+cd habittracker && dotnet run --project src/<ProjectName>
+```
+
+Only one build runs machine-wide at a time, so the dashboard and a terminal
+`forge run` can't collide on the same database.
 
 ---
 
@@ -209,9 +198,6 @@ A run is autonomous but not opaque — every action is one logged line.
 
 Forge builds **.NET projects** — console tools and ASP.NET web apps, because
 everything a project does must be verifiable from the CLI or over HTTP.
-
-- **CLI**: expense splitter, habit tracker, unit converter, markdown formatter.
-- **Web app**: sticky-note board, URL shortener, poll app, kanban board.
 
 In the intake chat: describe the outcome, not the tech; say what you care
 about (look, feel, edge cases); answer the PM's questions up front — that's

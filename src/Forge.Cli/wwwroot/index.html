@@ -10,6 +10,7 @@
     --ground:#EEF1F5; --surface:#FFF; --sunken:#E3E8EF; --line:#D3DAE3;
     --ink:#161B22; --muted:#5C6774; --faint:#8894A3; --accent:#2E6F8E;
     --done:#23815076; --done-ink:#1C6B44; --active:#1FA76A; --pending:#B8690F;
+    --chat-you:#2E8B70; --chat-you-ink:#1F5E4B;
     --shadow:0 1px 2px rgba(22,27,34,.06), 0 8px 24px -12px rgba(22,27,34,.18);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
@@ -19,6 +20,7 @@
       --ground:#0E1218; --surface:#161C25; --sunken:#1D242F; --line:#29323F;
       --ink:#DFE6EF; --muted:#94A1B2; --faint:#6B7889; --accent:#5FA8CC;
       --done:#2E8B5E80; --done-ink:#4FBE87; --active:#34D399; --pending:#E0913C;
+      --chat-you:#5FC2A0; --chat-you-ink:#8FDCC2;
       --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
     }
   }
@@ -116,12 +118,17 @@
   .msg { max-width:88%; font-size:.9rem; }
   .msg .who { font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase;
               color:var(--faint); display:block; margin-bottom:4px; }
-  .msg .bubble { padding:9px 12px; border-radius:10px; border:1px solid var(--line);
-                 background:var(--sunken); white-space:pre-wrap; word-wrap:break-word; }
+  /* Two speakers, two hues: Iris a hint of blue, the client a muted sea green. The panel
+     behind them is --surface, so both are tints mixed toward it rather than flat fills.
+     The green is deliberately muted — the board already spends vivid green on "done", and
+     a bright bubble would read as a status rather than as a person. */
+  .msg .bubble { padding:9px 12px; border-radius:10px; white-space:pre-wrap; word-wrap:break-word;
+                 background:color-mix(in srgb, var(--accent) 10%, var(--surface));
+                 border:1px solid color-mix(in srgb, var(--accent) 24%, transparent); }
   .msg.you { align-self:flex-end; }
-  .msg.you .who { text-align:right; }
-  .msg.you .bubble { background:color-mix(in srgb, var(--accent) 14%, transparent);
-                     border-color:color-mix(in srgb, var(--accent) 34%, transparent); }
+  .msg.you .who { text-align:right; color:var(--chat-you-ink); }
+  .msg.you .bubble { background:color-mix(in srgb, var(--chat-you) 28%, var(--surface));
+                     border-color:color-mix(in srgb, var(--chat-you) 55%, transparent); }
   .thinking { font-family:var(--mono); font-size:.72rem; color:var(--faint); padding:0 16px 10px; }
   .thinking span { animation:blink 1.4s infinite; }
   @keyframes blink { 0%,100%{opacity:.3} 50%{opacity:1} }

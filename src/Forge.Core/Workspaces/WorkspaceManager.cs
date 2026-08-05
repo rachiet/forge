@@ -54,12 +54,26 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
     /// than working tasks. Reused across turns and pulled up to date each time, so
     /// a conversation spanning days doesn't drift from what the team has merged.
     /// </summary>
+    /// <remarks>
+    /// The reuse path also discards untracked files, so what a role sees is trunk and
+    /// nothing else. A pull leaves untracked files alone, so scratch work outlives the
+    /// run that made it: a QA round once wrote a throwaway console project here, and a
+    /// later round found it still sitting there, decided it was the app under test,
+    /// started it instead of the real one, and filed its failure as a product bug.
+    ///
+    /// `clean -fd` rather than `-fdx`: ignored files are left alone, so bin/obj survive
+    /// and a role does not pay a full rebuild every turn. The cost of this is narrow and
+    /// accepted — a turn that writes a file and then dies before committing loses that
+    /// draft, where before it could be committed by the next turn. Every caller commits
+    /// within the turn that writes, so that only bites a crashed turn.
+    /// </remarks>
     public string PrepareTrunkClone(string dir)
     {
         if (Directory.Exists(System.IO.Path.Combine(dir, ".git")))
         {
             Git.Require(dir, "checkout", TrunkBranch);
             Git.Require(dir, "pull", "--ff-only", "origin", TrunkBranch);
+            Git.Require(dir, "clean", "-fd");
             return dir;
         }
 

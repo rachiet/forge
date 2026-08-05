@@ -183,7 +183,11 @@ public sealed record AgentRecipe
         RolePrompt = "qa",
         InstancePrefix = "qa",
         AlwaysInContext = ["PROJECT.md", "docs/requirements/INDEX.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "file_bug", "how_to_run", "done", "escalate"],
+        // serve/stop_server/http are QA's alone: no other role has to watch a program behave
+        // from outside while it runs, and a role that can leave processes running is a role
+        // whose lifetime the harness has to manage.
+        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "serve", "stop_server", "http",
+                 "file_bug", "how_to_run", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
         DefaultBudget = 500_000,
@@ -237,9 +241,10 @@ public sealed record AgentRecipe
             throw new ArgumentException(
                 $"{recipe.Role} lists tool '{unknown}', which the toolset does not implement.");
 
-        // The allowlist only means something alongside run(); an allowlist without
-        // it, or run() without one, is a half-made decision.
-        var canRun = recipe.Tools.Contains("run");
+        // The allowlist only means something alongside a tool that starts a process; an
+        // allowlist without one, or one without an allowlist, is a half-made decision.
+        // serve() counts: it executes a binary under exactly the same allowlist as run().
+        var canRun = recipe.Tools.Contains("run") || recipe.Tools.Contains("serve");
         if (canRun && recipe.ToolAllowlist.Count == 0)
             throw new ArgumentException($"{recipe.Role} has run() but no binaries allowed.");
         if (!canRun && recipe.ToolAllowlist.Count > 0)
