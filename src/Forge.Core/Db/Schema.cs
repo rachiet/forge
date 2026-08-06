@@ -50,6 +50,11 @@ public static class Schema
           -- the forced last-turn message. At the second strike the harness stops
           -- handing it back to an engineer and the Principal implements it directly.
           out_of_budget_count INTEGER NOT NULL DEFAULT 0 CHECK(out_of_budget_count >= 0),
+          -- How many splits deep this task is: 0 if the Principal planned it, 1 if it
+          -- replaced a task that was too big, and so on. `break_and_relink` refuses above
+          -- the cap, which is what bounds splitting — otherwise each replacement could be
+          -- split again and the ladder would never reach a human.
+          split_depth INTEGER NOT NULL DEFAULT 0 CHECK(split_depth >= 0),
           progress_note TEXT,
           branch_name TEXT,
           created_by TEXT,

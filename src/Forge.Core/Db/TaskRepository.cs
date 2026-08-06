@@ -23,6 +23,7 @@ public sealed class TaskRepository(IDbConnection conn)
         public int TokenBudget { get; init; }
         public int TokensSpent { get; init; }
         public int OutOfBudgetCount { get; init; }
+        public int SplitDepth { get; init; }
         public string? ProgressNote { get; init; }
         public string? BranchName { get; init; }
         public string? CreatedBy { get; init; }
@@ -45,6 +46,7 @@ public sealed class TaskRepository(IDbConnection conn)
             TokenBudget = TokenBudget,
             TokensSpent = TokensSpent,
             OutOfBudgetCount = OutOfBudgetCount,
+            SplitDepth = SplitDepth,
             ProgressNote = ProgressNote,
             BranchName = BranchName,
             CreatedBy = CreatedBy,
@@ -59,7 +61,7 @@ public sealed class TaskRepository(IDbConnection conn)
                context_paths AS ContextPaths, requirements_ref AS RequirementsRef,
                assigned_role AS AssignedRole, status AS Status,
                token_budget AS TokenBudget, tokens_spent AS TokensSpent,
-               out_of_budget_count AS OutOfBudgetCount,
+               out_of_budget_count AS OutOfBudgetCount, split_depth AS SplitDepth,
                progress_note AS ProgressNote, branch_name AS BranchName,
                created_by AS CreatedBy, created_at AS CreatedAt, updated_at AS UpdatedAt
         FROM tasks
@@ -70,10 +72,11 @@ public sealed class TaskRepository(IDbConnection conn)
         var id = conn.ExecuteScalar<long>("""
             INSERT INTO tasks (milestone_id, parent_id, type, title, objective, acceptance_criteria,
                                context_paths, requirements_ref, assigned_role, status,
-                               token_budget, tokens_spent, progress_note, branch_name, created_by)
+                               token_budget, tokens_spent, split_depth, progress_note,
+                               branch_name, created_by)
             VALUES (@MilestoneId, @ParentId, @Type, @Title, @Objective, @AcceptanceCriteria,
                     @ContextPaths, @RequirementsRef, @AssignedRole, @Status,
-                    @TokenBudget, @TokensSpent, @ProgressNote, @BranchName, @CreatedBy)
+                    @TokenBudget, @TokensSpent, @SplitDepth, @ProgressNote, @BranchName, @CreatedBy)
             RETURNING id
             """,
             new
@@ -90,6 +93,7 @@ public sealed class TaskRepository(IDbConnection conn)
                 Status = SnakeCaseEnum.ToSnakeCase(task.Status),
                 task.TokenBudget,
                 task.TokensSpent,
+                task.SplitDepth,
                 task.ProgressNote,
                 task.BranchName,
                 task.CreatedBy,
@@ -187,10 +191,20 @@ public sealed class TaskRepository(IDbConnection conn)
     /// Principal decomposes a Feature, so the linkage is computed by trusted code rather
     /// than left to the model to set correctly on every create_task.
     /// </summary>
-    public void SetParent(long childId, long parentId) =>
+    /// <remarks>
+    /// Nullable because a split re-parents the replacement tasks onto the parent OF the task
+    /// being replaced, which is null when that task sat under no Feature.
+    /// </remarks>
+    public void SetParent(long childId, long? parentId) =>
         conn.Execute("""
             UPDATE tasks SET parent_id = @parentId, updated_at = datetime('now') WHERE id = @childId
             """, new { childId, parentId });
+
+    /// <summary>How deep in a chain of splits this task sits. See <see cref="TaskRecord.SplitDepth"/>.</summary>
+    public void SetSplitDepth(long taskId, int depth) =>
+        conn.Execute("""
+            UPDATE tasks SET split_depth = @depth, updated_at = datetime('now') WHERE id = @taskId
+            """, new { taskId, depth });
 
     /// <summary>
     /// Attach a task to a milestone. Set by the harness when a child inherits its
@@ -322,17 +336,101 @@ public sealed class TaskRepository(IDbConnection conn)
     /// An edge of the task DAG (spec §6 task_deps): taskId cannot start until
     /// dependsOn is done. INSERT OR IGNORE so authoring the same edge twice is
     /// harmless; a self-edge is a mistake the Principal shouldn't make and we refuse.
+    /// A cycle is refused for the same reason, one step further out: see
+    /// <see cref="DependencyChain"/>.
     /// </summary>
     public void AddDependency(long taskId, long dependsOn)
     {
         if (taskId == dependsOn)
             throw new ArgumentException($"Task {taskId} cannot depend on itself.");
+        // Refusing the closing edge is what keeps the graph on disk acyclic — there is no
+        // later repair, because nothing rereads the DAG once the design phase has written it.
+        if (DependencyChain(from: dependsOn, to: taskId) is { Count: > 0 } chain)
+            throw new DependencyCycleException(taskId, dependsOn, chain);
         conn.Execute("""
             INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (@taskId, @dependsOn)
             """, new { taskId, dependsOn });
     }
 
+    /// <summary>
+    /// The chain of edges by which <paramref name="from"/> already depends on
+    /// <paramref name="to"/> — ids ordered from one to the other — or empty if it does not.
+    /// A path rather than a bool because the caller's job is to show the Principal the cycle
+    /// it is about to close, and "4 → 3 → 4" is actionable where "cycle detected" is not.
+    /// </summary>
+    /// <remarks>
+    /// Breadth-first over one snapshot of the edges, with a visited set: a graph that
+    /// ALREADY contains a cycle (HabitTracker's did) must terminate here too, or the check
+    /// added to prevent a deadlock becomes one.
+    /// </remarks>
+    public IReadOnlyList<long> DependencyChain(long from, long to)
+    {
+        var edges = conn.Query<(long TaskId, long DependsOn)>(
+                "SELECT task_id, depends_on FROM task_deps")
+            .GroupBy(e => e.TaskId)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.DependsOn).ToList());
+
+        // Each visited node maps to the node it was reached from, so the path can be walked
+        // back out once the target is found. `from` maps to itself to terminate that walk.
+        var cameFrom = new Dictionary<long, long> { [from] = from };
+        var queue = new Queue<long>([from]);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!edges.TryGetValue(current, out var next)) continue;
+            foreach (var dep in next)
+            {
+                if (!cameFrom.TryAdd(dep, current)) continue;
+                if (dep == to)
+                {
+                    var path = new List<long> { to };
+                    for (var step = current; step != from; step = cameFrom[step]) path.Add(step);
+                    path.Add(from);
+                    path.Reverse();
+                    return path;
+                }
+                queue.Enqueue(dep);
+            }
+        }
+        return [];
+    }
+
     public IReadOnlyList<long> DependenciesOf(long taskId) =>
         conn.Query<long>("SELECT depends_on FROM task_deps WHERE task_id = @taskId ORDER BY depends_on",
             new { taskId }).ToList();
+
+    /// <summary>The tasks that wait on this one — the other half of <see cref="DependenciesOf"/>.</summary>
+    public IReadOnlyList<long> DependentsOf(long taskId) =>
+        conn.Query<long>("SELECT task_id FROM task_deps WHERE depends_on = @taskId ORDER BY task_id",
+            new { taskId }).ToList();
+
+    /// <summary>
+    /// Drops every edge into or out of a task. Used when a split replaces it: its dependents
+    /// and dependencies have already been re-pointed at the replacements, and leaving the old
+    /// edges would make the replacements wait on a cancelled task — a wait nothing can end,
+    /// since only a `done` task satisfies a dependency.
+    /// </summary>
+    public void RemoveDependenciesInvolving(long taskId) =>
+        conn.Execute("DELETE FROM task_deps WHERE task_id = @taskId OR depends_on = @taskId",
+            new { taskId });
+}
+
+/// <summary>
+/// The edge was refused because it would close a cycle. The message is written to be read by
+/// the Principal as a tool error — it names the existing path and says what to do about it,
+/// since the agent has no tool to delete an edge and can only revise the plan it is authoring.
+/// </summary>
+public sealed class DependencyCycleException(long taskId, long dependsOn, IReadOnlyList<long> chain)
+    : InvalidOperationException(
+        $"Task {taskId} cannot depend on task {dependsOn}: {dependsOn} already depends on {taskId} "
+        + $"({string.Join(" → ", chain)}). A dependency is satisfied only by a DONE task, so this "
+        + "cycle would leave every task in it permanently unclaimable and stall the board. Order "
+        + "the work so it flows one way — if two tasks genuinely need each other, the shared part "
+        + "belongs in a third task they both depend on.")
+{
+    public long TaskId { get; } = taskId;
+    public long DependsOn { get; } = dependsOn;
+
+    /// <summary>The existing path, from <see cref="DependsOn"/> back to <see cref="TaskId"/>.</summary>
+    public IReadOnlyList<long> Chain { get; } = chain;
 }

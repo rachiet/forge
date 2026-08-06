@@ -28,6 +28,12 @@ public sealed record TaskRecord
     public int TokensSpent { get; init; }
     /// <summary>Times this task exhausted its budget/iterations. At 2 the Principal takes it over.</summary>
     public int OutOfBudgetCount { get; init; }
+    /// <summary>
+    /// How many splits deep this task is: 0 if the Principal planned it, 1 if it replaced a
+    /// task too big to land. `break_and_relink` refuses to split past the cap, which is what
+    /// keeps the ladder finite — without it every replacement could be split again.
+    /// </summary>
+    public int SplitDepth { get; init; }
     public string? ProgressNote { get; init; }
     public string? BranchName { get; init; }
     public string? CreatedBy { get; init; }
@@ -45,7 +51,8 @@ public sealed record TaskRecord
         RequirementsRef? requirementsRef = null,
         AgentRole? assignedRole = null,
         string? createdBy = null,
-        long? parentId = null)
+        long? parentId = null,
+        int splitDepth = 0)
     {
         if (string.IsNullOrWhiteSpace(title))
             throw new ArgumentException("Task title must be non-empty.", nameof(title));
@@ -68,6 +75,7 @@ public sealed record TaskRecord
             RequirementsRef = requirementsRef,
             AssignedRole = assignedRole,
             CreatedBy = createdBy,
+            SplitDepth = splitDepth,
         };
     }
 }

@@ -42,14 +42,13 @@ public class BoardQueryTests : IDisposable
     [Fact]
     public void Approving_opens_the_feature_and_clears_the_proposal()
     {
-        new RequirementsProposal("Initial build", "Ship the thing", Budget: 90_000).Save(_conn);
+        new RequirementsProposal("Initial build", "Ship the thing").Save(_conn);
 
         var feature = RequirementsProposal.Load(_conn)!.Approve(_conn);
 
         Assert.Equal(TaskType.Feature, feature.Type);
         Assert.Equal(TaskStatus.Triage, feature.Status);       // the Principal decomposes it
         Assert.Equal(AgentRole.Principal, feature.AssignedRole);
-        Assert.Equal(90_000, feature.TokenBudget);
         // Cleared, so the buttons cannot be clicked twice into two Features.
         Assert.Null(Board().Proposal);
         Assert.True(Board().SpecReady);

@@ -160,11 +160,25 @@ public sealed record AgentRecipe
         InstancePrefix = "triage",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
         Tools = ["read_file", "list_dir", "grep", "create_task", "add_dependency", "redirect",
-                 "accept_bug", "reject_bug", "escalate"],
+                 "break_and_relink", "accept_bug", "reject_bug", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
         DefaultBudget = 300_000,
         IterationCap = 20,
+    }).Validate();
+
+    /// <summary>
+    /// The last triage, after the engineer AND the Principal have both failed to land the task.
+    /// Identical to <see cref="PrincipalTriage"/> with `redirect` removed: another attempt at the
+    /// same task is the one option already proven not to work, so the only ways out are splitting
+    /// it into smaller tasks or handing the decision to the client. The tool allowlist is enforced
+    /// at dispatch, so this is a mechanical narrowing of the menu, not advice in a prompt.
+    /// </summary>
+    public static AgentRecipe PrincipalFinalTriage => (PrincipalTriage with
+    {
+        InstancePrefix = "final-triage",
+        Tools = ["read_file", "list_dir", "grep", "create_task", "add_dependency",
+                 "break_and_relink", "escalate"],
     }).Validate();
 
     /// <summary>

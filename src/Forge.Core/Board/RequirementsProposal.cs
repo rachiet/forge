@@ -16,10 +16,20 @@ public sealed record RequirementsProposal(
     string Objective,
     string? Acceptance = null,
     string? RequirementsRef = null,
-    int? Budget = null,
     long? MilestoneId = null)
 {
     private const string MetaKey = "requirements_proposal";
+
+    /// <summary>
+    /// SCHEMA SUPPORT ONLY — this number is never inferred as a budget and nothing reads it.
+    /// `tasks.token_budget` is NOT NULL CHECK(> 0) and a Feature shares that table, so a row
+    /// cannot be inserted without one; a Feature is only ever decomposed, and the design
+    /// phase that decomposes it runs project-scoped with no task attached, so
+    /// <see cref="Llm.MeteredLlmClient"/> never enforces against it. Do not read it as a
+    /// cost estimate or a cap. The caps that bite are the Principal's per-task budgets in
+    /// create_task, and the project's USD budget, fixed when the project was created.
+    /// </summary>
+    private const int FeatureBudget = 60_000;
 
     public static RequirementsProposal? Load(IDbConnection conn) =>
         new ProjectMetaRepository(conn).Get(MetaKey) is { Length: > 0 } json
@@ -43,7 +53,7 @@ public sealed record RequirementsProposal(
             TaskType.Feature,
             Title,
             Objective,
-            Budget ?? 60_000,
+            FeatureBudget,
             acceptanceCriteria: Acceptance,
             requirementsRef: RequirementsRef is { Length: > 0 } r ? Model.RequirementsRef.Parse(r) : null,
             milestoneId: MilestoneId,

@@ -147,8 +147,12 @@ public sealed class TaskRunner(
             };
         if (task.Status == TaskStatus.OutOfBudget)
         {
+            // Past the last strike the engineer and the Principal have both failed on this
+            // task, which is the strongest evidence available that it is too big rather than
+            // merely hard. One final triage with `redirect` taken away: split it or give the
+            // client the decision. GiveUp still catches a triage that resolves nothing.
             if (task.OutOfBudgetCount > DirectImplementStrike)
-                return GiveUp(task, log);
+                return await TriageAsync(task, ct, AgentRecipe.PrincipalFinalTriage).ConfigureAwait(false);
             if (task.OutOfBudgetCount >= DirectImplementStrike)
                 return await ImplementDirectlyAsync(task, ct).ConfigureAwait(false);
         }
@@ -276,15 +280,20 @@ public sealed class TaskRunner(
 
     /// <summary>
     /// A fresh Principal reads the stuck task's WIP and note, then resolves it with a
-    /// tool: redirect (back to the engineer with direction), create_task/add_dependency
-    /// (break it up), or escalate (a requirements question for the PM). If it resolves
-    /// nothing — runs out of its own turns — the task is escalated to a human so the
-    /// autonomous loop cannot spin on it.
+    /// tool: redirect (back to the engineer with direction), break_and_relink (replace it
+    /// with the smaller tasks it just created), or escalate (a requirements question for
+    /// the PM). If it resolves nothing — runs out of its own turns — the task is escalated
+    /// to a human so the autonomous loop cannot spin on it.
     /// </summary>
-    private async Task<TaskRunOutcome> TriageAsync(TaskRecord task, CancellationToken ct)
+    /// <param name="recipe">
+    /// <see cref="AgentRecipe.PrincipalFinalTriage"/> on the last strike, which drops
+    /// `redirect` so another attempt at the same task is not on the menu.
+    /// </param>
+    private async Task<TaskRunOutcome> TriageAsync(
+        TaskRecord task, CancellationToken ct, AgentRecipe? finalTriage = null)
     {
         var log = _log.For(task.Id);
-        var recipe = AgentRecipe.PrincipalTriage;
+        var recipe = finalTriage ?? AgentRecipe.PrincipalTriage;
         log.Message($"Principal triaging {SnakeCaseEnum.ToSnakeCase(task.Status)} task {task.Id}: {task.Title}");
 
         // No headroom to arrange: the budget is per instance, so this triage starts at
@@ -297,7 +306,8 @@ public sealed class TaskRunner(
         var before = _tasks.List().Select(t => t.Id).ToHashSet();
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
         var result = await RunWithCrashRetryAsync(() =>
-            loop.RunTriageAsync(TriagePacket(task), _tasks.Get(task.Id), executor, ct)).ConfigureAwait(false);
+            loop.RunTriageAsync(TriagePacket(task, recipe.Tools.Contains("redirect")),
+                _tasks.Get(task.Id), executor, ct)).ConfigureAwait(false);
 
         ReleaseTriageSubtasks(task, before, log);
 
@@ -328,9 +338,17 @@ public sealed class TaskRunner(
     {
         foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
         {
-            _tasks.SetParent(child.Id, triaged.Id);
-            if (triaged.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
-                _tasks.SetMilestone(child.Id, milestone);
+            // A replacement from break_and_relink keeps the parent and milestone that verdict
+            // gave it: it files them under the SPLIT task's own feature, because the split task
+            // is cancelled and a child of a cancelled task drops out of the board's feature view.
+            // It still needs releasing, though — that is this method's real job, and skipping it
+            // is what left "break it down" work unclaimable before.
+            if (_tasks.Get(child.Id).SplitDepth == 0)
+            {
+                _tasks.SetParent(child.Id, triaged.Id);
+                if (triaged.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
+                    _tasks.SetMilestone(child.Id, milestone);
+            }
             if (_tasks.Get(child.Id).Status == TaskStatus.Created)
                 Transition(child.Id, TaskStatus.Ready, log);
             log.Message($"Triage subtask {child.Id} adopted under task {triaged.Id} and released.");
@@ -386,11 +404,25 @@ public sealed class TaskRunner(
     /// baked into the role prompt. Names the concrete block and the allowed resolutions,
     /// mirroring how the last-turn message is injected into the engineer loop.
     /// </summary>
-    private static string TriagePacket(TaskRecord task)
+    /// <param name="canRedirect">
+    /// False on the final triage, whose recipe has no `redirect`. The menu must match the
+    /// tools: offering a verdict the harness will refuse wastes a turn and reads as a bug.
+    /// </param>
+    private static string TriagePacket(TaskRecord task, bool canRedirect = true)
     {
         var situation = task.Status == TaskStatus.OutOfBudget
             ? $"ran out of its token/turn budget (strike {task.OutOfBudgetCount} of {DirectImplementStrike})"
             : "is blocked — an engineer escalated, or the harness could not integrate the work";
+        var redirectOption = canRedirect
+            ? """
+              - Wrong approach, or genuinely needed more room → `redirect(guidance, [budget])` with
+                concrete, specific direction (raise the absolute budget if it ran out of tokens).
+              """
+            : """
+              You do NOT have `redirect` this time: an engineer has failed at this task and so
+              have you, so handing it back unchanged is not on the menu. Either it becomes
+              smaller tasks, or the client decides what to do with it.
+              """;
         return $"""
             # Triage: task {task.Id} is stuck, and it is yours to unblock
             You authored the task plan, so a stalled task is yours to fix — and it is the
@@ -405,13 +437,13 @@ public sealed class TaskRunner(
             {task.ProgressNote ?? "(none left)"}
 
             Diagnose the cause with read_file/list_dir/grep, then end your turn with ONE of:
-            - Too big or under-specified → `create_task` + `add_dependency` to split it, then
-              `redirect` this task with what now remains of it.
-            - Wrong approach, or genuinely needed more room → `redirect(guidance, [budget])` with
-              concrete, specific direction (raise the absolute budget if it ran out of tokens).
+            - Too big to finish as one task → `create_task` for each piece (add_dependency
+              between them if the order matters), then `break_and_relink(new_tasks: "7,8,9")`.
+              That replaces this task with them: whatever was waiting on it waits on them
+              instead, and it is cancelled. Do NOT redirect afterwards — the work is theirs now.
             - A requirements/scope question only the client can answer → `escalate(reason)`.
-
-            Do not write code. Resolve it with redirect, create_task(+redirect), or escalate.
+            {redirectOption}
+            Do not write code. Resolve it with one of the tools above.
             """;
     }
 

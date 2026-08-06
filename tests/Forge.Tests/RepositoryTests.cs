@@ -168,4 +168,86 @@ public class RepositoryTests : IDisposable
         Assert.Equal(2, ledger.List().Count);
         Assert.Single(ledger.List(task.Id));
     }
+
+    // --- The task DAG stays acyclic -----------------------------------------------
+    // A dependency is satisfied only by a `done` task, so a cycle is not a slow build:
+    // every task in it is permanently unclaimable. HabitTracker's Principal wrote 3 → 4
+    // and 4 → 3, the loop drained instantly, and the board looked broken.
+
+    [Fact]
+    public void Direct_cycle_is_refused()
+    {
+        var repo = new TaskRepository(_conn);
+        var a = InsertTask();
+        var b = InsertTask();
+        repo.AddDependency(b.Id, a.Id);
+
+        var ex = Assert.Throws<DependencyCycleException>(() => repo.AddDependency(a.Id, b.Id));
+
+        Assert.Equal([b.Id, a.Id], ex.Chain);
+        Assert.Equal([a.Id], repo.DependenciesOf(b.Id));
+        Assert.Empty(repo.DependenciesOf(a.Id));
+    }
+
+    [Fact]
+    public void Indirect_cycle_is_refused_and_names_the_whole_path()
+    {
+        // The path is what makes the refusal actionable: the Principal has no tool to
+        // delete an edge, so it must be told which existing ones it is fighting.
+        var repo = new TaskRepository(_conn);
+        var a = InsertTask();
+        var b = InsertTask();
+        var c = InsertTask();
+        repo.AddDependency(b.Id, a.Id);
+        repo.AddDependency(c.Id, b.Id);
+
+        var ex = Assert.Throws<DependencyCycleException>(() => repo.AddDependency(a.Id, c.Id));
+
+        Assert.Equal([c.Id, b.Id, a.Id], ex.Chain);
+        Assert.Contains($"{c.Id} → {b.Id} → {a.Id}", ex.Message);
+    }
+
+    [Fact]
+    public void Diamond_is_allowed()
+    {
+        // Two tasks sharing a dependency, and a fourth waiting on both, is an ordinary
+        // plan — the check must reject cycles only, not any second path between two tasks.
+        var repo = new TaskRepository(_conn);
+        var root = InsertTask();
+        var left = InsertTask();
+        var right = InsertTask();
+        var join = InsertTask();
+        repo.AddDependency(left.Id, root.Id);
+        repo.AddDependency(right.Id, root.Id);
+        repo.AddDependency(join.Id, left.Id);
+        repo.AddDependency(join.Id, right.Id);
+
+        Assert.Equal([left.Id, right.Id], repo.DependenciesOf(join.Id));
+    }
+
+    [Fact]
+    public void Cycle_check_terminates_on_a_graph_that_already_has_one()
+    {
+        // Live databases predate this check, so the traversal meets cycles it did not
+        // prevent. A check that hangs on the deadlock it was written to stop is worse
+        // than none: the edges here are inserted behind the repository, as they were.
+        var repo = new TaskRepository(_conn);
+        var a = InsertTask();
+        var b = InsertTask();
+        var outsider = InsertTask();
+        _conn.Execute("INSERT INTO task_deps (task_id, depends_on) VALUES (@a, @b), (@b, @a)",
+            new { a = a.Id, b = b.Id });
+
+        Assert.Empty(repo.DependencyChain(from: a.Id, to: outsider.Id));
+        Assert.Equal([a.Id, b.Id], repo.DependencyChain(from: a.Id, to: b.Id));
+    }
+
+    [Fact]
+    public void Self_dependency_is_still_refused()
+    {
+        var repo = new TaskRepository(_conn);
+        var task = InsertTask();
+
+        Assert.Throws<ArgumentException>(() => repo.AddDependency(task.Id, task.Id));
+    }
 }

@@ -81,7 +81,7 @@ public sealed partial class AgentToolset(
             ["run"] = "run(command, [cwd]) — run one binary.",
             ["add_milestone"] = "add_milestone(name, [description], [ordinal]) — add a milestone to the plan.",
             ["propose_requirements"] ="propose_requirements(title, objective, [acceptance], "
-                            + "[requirements_ref], [budget], [milestone]) — present the finished "
+                            + "[requirements_ref], [milestone]) — present the finished "
                             + "requirements to the client for approval. They see Approve & start "
                             + "building, or keep talking to you. Approving is what opens the Feature "
                             + "and starts the build; nothing is handed to engineering until then. "
@@ -94,7 +94,14 @@ public sealed partial class AgentToolset(
                             + "finished. If you cannot say what done looks like, the task is not ready to create. "
                             + "type is task (default), bug, or chore. requirements_ref names the requirement "
                             + "file, e.g. `01-todos.md@v1` (version optional).",
-            ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done.",
+            ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done. "
+                               + "Dependencies must flow one way: an edge that would close a cycle is refused.",
+            ["break_and_relink"] = "break_and_relink(new_tasks, [reason]) — replace this stuck task with "
+                            + "the smaller tasks you have just created (new_tasks is their ids, "
+                            + "comma-separated, at least two). The harness re-points everything that "
+                            + "waited on this task at all of them, gives them its dependencies, files "
+                            + "them under its feature and milestone, and cancels it. Use when the task "
+                            + "is too big to finish, not when the engineer took a wrong turn.",
             ["redirect"] = "redirect(guidance, [budget]) — hand this stuck task back to the engineer with "
                          + "concrete direction (and optionally a new absolute token budget). Resets the "
                          + "attempt so the engineer starts fresh with your guidance. Ends your triage.",
@@ -157,6 +164,7 @@ public sealed partial class AgentToolset(
                 "propose_requirements" => ProposeRequirements(call),
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
+                "break_and_relink" => BreakAndRelink(call),
                 "redirect" => Redirect(call),
                 "file_bug" => FileBug(call),
                 "how_to_run" => HowToRun(call),
@@ -335,6 +343,14 @@ public sealed partial class AgentToolset(
     /// <summary>Every command run() has executed this instance — what how_to_run is checked against.</summary>
     private readonly HashSet<string> _ranCommands = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Tasks created by create_task in THIS instance — what break_and_relink accepts as
+    /// replacements. Same rule as how_to_run and file_bug: a verdict may only cite work the
+    /// harness watched happen, so a split cannot retire a task in favour of pre-existing ones
+    /// it merely nominated.
+    /// </summary>
+    private readonly HashSet<long> _createdTaskIds = [];
+
     /// <summary>The milestone plan is a real table, not prose in a markdown file the harness can't query.</summary>
     private ToolOutcome AddMilestone(ToolCall call)
     {
@@ -378,6 +394,7 @@ public sealed partial class AgentToolset(
             assignedRole: AgentRole.Engineer,
             createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role)));
 
+        _createdTaskIds.Add(created.Id);
         return new ToolOutcome($"Task {created.Id} created: {created.Title} " +
             $"(created — the client's sign-off makes it ready).");
     }
@@ -393,7 +410,6 @@ public sealed partial class AgentToolset(
             call.Arg("objective"),
             call.Optional("acceptance"),
             call.Optional("requirements_ref") is { } reqRef ? NormalizeRequirementRef(reqRef).ToString() : null,
-            call.OptionalInt("budget"),
             call.OptionalInt("milestone"));
         proposal.Save(connection);
 
@@ -679,6 +695,106 @@ public sealed partial class AgentToolset(
             ?? throw new ToolCallException("add_dependency needs 'depends_on'.");
         _tasks.AddDependency(taskId, dependsOn);
         return new ToolOutcome($"Task {taskId} now depends on task {dependsOn}.");
+    }
+
+    /// <summary>How many splits deep a task may be before break_and_relink refuses to split it.</summary>
+    private const int SplitDepthCap = 2;
+
+    /// <summary>
+    /// The triage verdict for a task that is simply too large: replace it with the tasks the
+    /// Principal has just created, and cancel it.
+    /// </summary>
+    /// <remarks>
+    /// The graph surgery is the harness's, not the model's — that is the whole reason this is
+    /// one tool rather than a run of add_dependency calls. Rewiring is deliberately
+    /// conservative: every dependent of the old task waits on ALL the replacements, and every
+    /// replacement inherits ALL of the old task's dependencies. The harness cannot know whether
+    /// the replacements are sequential or parallel — the Principal expresses that itself with
+    /// add_dependency between them — and the conservative graph is correct either way, at the
+    /// cost of some redundant edges.
+    ///
+    /// The old task is CANCELLED, never deleted: token_ledger, messages, discussions and
+    /// agent_instances all reference tasks(id), and foreign keys are on, so a delete would
+    /// either fail or strand the spend that motivated the split — money the board could no
+    /// longer attribute. Cancelled reads as gone everywhere the client looks, and the ledger
+    /// stays intact.
+    ///
+    /// Every check runs before the first write. The alternative is a half-rewired graph on a
+    /// refusal, which is worse than the deadlock this tool exists to prevent.
+    /// </remarks>
+    private ToolOutcome BreakAndRelink(ToolCall call)
+    {
+        if (task is null) return new ToolOutcome("ERROR: break_and_relink needs a task; this run has none.");
+
+        var current = _tasks.Get(task.Id);
+        if (current.Status is not (TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage))
+            return new ToolOutcome($"ERROR: break_and_relink only applies to a task being triaged; "
+                + $"task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current.Status)}.");
+
+        if (current.SplitDepth >= SplitDepthCap)
+            return new ToolOutcome(
+                $"ERROR: task {task.Id} is already {current.SplitDepth} splits deep, the limit. "
+                + "Splitting it again would keep deferring the problem. Give the client the "
+                + "decision with escalate(reason) instead.");
+
+        var ids = (call.Optional("new_tasks") ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => long.TryParse(part, out var id) ? id : -1)
+            .ToList();
+        if (ids.Contains(-1))
+            return new ToolOutcome("ERROR: new_tasks must be a comma-separated list of task ids, e.g. \"7,8,9\".");
+
+        // Two or more, and created in this turn: a split into one task is a redirect with extra
+        // steps, and a split into none would cancel the work outright.
+        if (ids.Count < 2)
+            return new ToolOutcome(
+                $"ERROR: break_and_relink needs at least two replacement tasks; got {ids.Count}. "
+                + "Create them with create_task first — if the work is really one task, use "
+                + "redirect or escalate instead.");
+
+        var foreign = ids.Where(id => !_createdTaskIds.Contains(id)).ToList();
+        if (foreign.Count > 0)
+            return new ToolOutcome(
+                $"ERROR: task(s) {string.Join(", ", foreign)} were not created in this triage. "
+                + "break_and_relink only accepts replacements you have just created with create_task.");
+
+        // Pre-check the edges the rewire will add. AddDependency refuses a cycle mid-way
+        // through, and a half-rewired graph is worse than no rewire at all.
+        var dependents = _tasks.DependentsOf(task.Id).Where(d => !ids.Contains(d)).ToList();
+        var dependencies = _tasks.DependenciesOf(task.Id).Where(d => !ids.Contains(d)).ToList();
+        foreach (var dependent in dependents)
+            foreach (var replacement in ids)
+                if (_tasks.DependencyChain(from: replacement, to: dependent) is { Count: > 0 } chain)
+                    return new ToolOutcome(
+                        $"ERROR: task {dependent} cannot wait on replacement {replacement} — "
+                        + $"{replacement} already depends on it ({string.Join(" → ", chain)}). "
+                        + "Rework the replacements so the work flows one way.");
+
+        foreach (var replacement in ids)
+        {
+            foreach (var dependent in dependents) _tasks.AddDependency(dependent, replacement);
+            foreach (var dependency in dependencies) _tasks.AddDependency(replacement, dependency);
+
+            // Onto the OLD task's parent, not the old task: it is about to be cancelled, and a
+            // child of a cancelled task falls out of its Feature on the board.
+            _tasks.SetParent(replacement, current.ParentId);
+            if (current.MilestoneId is { } milestone && _tasks.Get(replacement).MilestoneId is null)
+                _tasks.SetMilestone(replacement, milestone);
+            _tasks.SetSplitDepth(replacement, current.SplitDepth + 1);
+        }
+
+        _tasks.RemoveDependenciesInvolving(task.Id);
+        var reason = call.Optional("reason") ?? "too large to finish as one task";
+        _tasks.SetProgressNote(task.Id, $"Split into {string.Join(", ", ids)}: {reason}");
+        _tasks.Transition(task.Id, TaskStatus.Cancelled);
+
+        LastProgressNote = $"Split into tasks {string.Join(", ", ids)}.";
+        return new ToolOutcome(
+            $"Task {task.Id} replaced by {string.Join(", ", ids)} and cancelled. "
+            + (dependents.Count > 0 ? $"Now waiting on all of them: {string.Join(", ", dependents)}. " : "")
+            + (dependencies.Count > 0 ? $"Each inherits its dependencies: {string.Join(", ", dependencies)}. " : "")
+            + "They are on the board and will be released to engineers.",
+            EndReason.Done);
     }
 
     /// <summary>Review verdict: the diff is good. The harness reads the verdict and merges.</summary>
