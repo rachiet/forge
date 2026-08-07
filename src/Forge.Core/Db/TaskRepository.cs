@@ -5,8 +5,10 @@ using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Core.Db;
 
+/// <summary>Reads and writes the tasks table, and is the only path for a status change.</summary>
 public sealed class TaskRepository(IDbConnection conn)
 {
+    /// <summary>One tasks row as the database returns it, converted to a TaskRecord.</summary>
     private sealed record Row
     {
         public long Id { get; init; }
@@ -57,6 +59,7 @@ public sealed class TaskRepository(IDbConnection conn)
         };
     }
 
+    /// <summary>The column list every read shares, aliased to <see cref="Row"/>'s properties.</summary>
     private const string SelectColumns = """
         SELECT id AS Id, milestone_id AS MilestoneId, parent_id AS ParentId, type AS Type, title AS Title,
                objective AS Objective, acceptance_criteria AS AcceptanceCriteria,
@@ -70,6 +73,7 @@ public sealed class TaskRepository(IDbConnection conn)
         FROM tasks
         """;
 
+    /// <summary>Inserts a task and returns it with the id the database assigned.</summary>
     public TaskRecord Insert(TaskRecord task)
     {
         var id = conn.ExecuteScalar<long>("""
@@ -105,19 +109,22 @@ public sealed class TaskRepository(IDbConnection conn)
         return task with { Id = id };
     }
 
+    /// <summary>The task with this id; throws if there is none.</summary>
     public TaskRecord Get(long id) =>
         conn.QuerySingle<Row>($"{SelectColumns} WHERE id = @id", new { id }).ToRecord();
 
+    /// <summary>The task with this id, or null.</summary>
     public TaskRecord? Find(long id) =>
         conn.QuerySingleOrDefault<Row>($"{SelectColumns} WHERE id = @id", new { id })?.ToRecord();
 
+    /// <summary>Every task, lowest id first.</summary>
     public IReadOnlyList<TaskRecord> List() =>
         conn.Query<Row>($"{SelectColumns} ORDER BY id").Select(r => r.ToRecord()).ToList();
 
     /// <summary>
-    /// The only path for status changes — never raw UPDATE tasks SET status.
-    /// Guards against both illegal transitions and lost updates (the WHERE clause
-    /// re-checks the expected current status).
+    /// The only path for status changes. Refuses a transition the legal-transition map does
+    /// not allow, and re-checks the expected current status in the WHERE clause so a
+    /// concurrent update cannot be lost.
     /// </summary>
     public TaskRecord Transition(long taskId, TaskStatus to)
     {
@@ -139,6 +146,7 @@ public sealed class TaskRepository(IDbConnection conn)
         return current with { Status = to };
     }
 
+    /// <summary>Adds to a task's running token total, which is for reporting only.</summary>
     public void AddTokensSpent(long taskId, int tokens)
     {
         if (tokens < 0) throw new ArgumentOutOfRangeException(nameof(tokens));
@@ -148,11 +156,10 @@ public sealed class TaskRepository(IDbConnection conn)
             """, new { taskId, tokens });
     }
 
-    /// <summary>The lowest-id task in a Principal-owned status, or null if there is none.</summary>
-    /// <remarks>
-    /// A stuck task usually gates the DAG, so this queue is served before the engineer's.
-    /// needs_human is deliberately absent: only the client can clear it.
-    /// </remarks>
+    /// <summary>
+    /// The lowest-id task in a status the Principal owns — triage, blocked or out_of_budget —
+    /// or null. needs_human is excluded: only the client can clear it.
+    /// </summary>
     public TaskRecord? NextPrincipalOwned()
     {
         var id = conn.QueryFirstOrDefault<long?>("""
@@ -164,10 +171,8 @@ public sealed class TaskRepository(IDbConnection conn)
     }
 
     /// <summary>
-    /// The bug ledger QA is seeded with so it does not re-file what has already been
-    /// filed: every rejected bug (a durable "not a bug" verdict) and every bug still
-    /// in flight. Fixed (done) bugs are excluded — a recurrence of one is a genuine
-    /// regression that QA should be free to file again.
+    /// The bugs QA is seeded with so it does not re-file them: every rejected bug and every
+    /// one still in flight. Fixed bugs are excluded, so a recurrence can be filed as a regression.
     /// </summary>
     public IReadOnlyList<TaskRecord> BugLedger() =>
         conn.Query<Row>($"""
@@ -176,29 +181,23 @@ public sealed class TaskRepository(IDbConnection conn)
             ORDER BY id
             """).Select(r => r.ToRecord()).ToList();
 
-    /// <summary>Count bugs in a given status — the QA gate's raw material.</summary>
+    /// <summary>How many bugs are in a given status.</summary>
     public int CountBugs(TaskStatus status) =>
         conn.ExecuteScalar<int>(
             "SELECT COUNT(*) FROM tasks WHERE type = 'bug' AND status = @s",
             new { s = SnakeCaseEnum.ToSnakeCase(status) });
 
     /// <summary>
-    /// Count every completed task (tasks, bug-fixes, chores). This is the QA gate's
-    /// watermark: it rises whenever any work finishes — the initial build, a bug-fix, or
-    /// a change request's tasks — so QA re-verifies after all of them, uniformly.
+    /// How many tasks of any kind have finished. The QA gate compares this against its
+    /// watermark to decide whether there is new work to verify.
     /// </summary>
     public int CountDone() =>
         conn.ExecuteScalar<int>("SELECT COUNT(*) FROM tasks WHERE status = 'done'");
 
     /// <summary>
-    /// Attach a child task to its parent Feature — the harness back-fills this after the
-    /// Principal decomposes a Feature, so the linkage is computed by trusted code rather
-    /// than left to the model to set correctly on every create_task.
+    /// Attaches a task to its parent Feature. Nullable, because a split re-parents the
+    /// replacements onto the parent of the task they replace, which may itself have none.
     /// </summary>
-    /// <remarks>
-    /// Nullable because a split re-parents the replacement tasks onto the parent OF the task
-    /// being replaced, which is null when that task sat under no Feature.
-    /// </remarks>
     public void SetParent(long childId, long? parentId) =>
         conn.Execute("""
             UPDATE tasks SET parent_id = @parentId, updated_at = datetime('now') WHERE id = @childId
@@ -210,31 +209,25 @@ public sealed class TaskRepository(IDbConnection conn)
             UPDATE tasks SET split_depth = @depth, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId, depth });
 
-    /// <summary>
-    /// Attach a task to a milestone. Set by the harness when a child inherits its
-    /// Feature's milestone; the Principal may also name one directly on create_task.
-    /// </summary>
+    /// <summary>Attaches a task to a milestone.</summary>
     public void SetMilestone(long taskId, long milestoneId) =>
         conn.Execute("""
             UPDATE tasks SET milestone_id = @milestoneId, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId, milestoneId });
 
-    /// <summary>Sets a task's strike count back to zero.</summary>
-    /// <remarks>
-    /// Called when the client sends a task back for another attempt: without it the task
-    /// returns to the Principal already at its strike ceiling and is given up on at once.
-    /// </remarks>
+    /// <summary>
+    /// Sets a task's strike count back to zero, so a task the client sent back does not
+    /// return to the Principal already at its ceiling.
+    /// </summary>
     public void ResetOutOfBudgetCount(long taskId) =>
         conn.Execute("""
             UPDATE tasks SET out_of_budget_count = 0, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId });
 
-    /// <summary>The lowest-id task in <paramref name="status"/>, or null.</summary>
-    /// <remarks>
-    /// How a task mid-pipeline is found again. Review and merge used to run inline after
-    /// the engineer, so a worker that died between them left the task in a status nothing
-    /// queried; making each step a queue entry is what lets it resume.
-    /// </remarks>
+    /// <summary>
+    /// The lowest-id task in <paramref name="status"/>, or null. How the runner finds work
+    /// part-way through the pipeline again.
+    /// </summary>
     public TaskRecord? NextInStatus(TaskStatus status)
     {
         var id = conn.QueryFirstOrDefault<long?>(
@@ -262,13 +255,9 @@ public sealed class TaskRepository(IDbConnection conn)
 
     /// <summary>
     /// The tasks that transitively depend on <paramref name="taskId"/> and are not yet
-    /// terminal, lowest id first.
+    /// terminal, lowest id first. A dependency is satisfied only by a `done` task, so
+    /// cancelling one strands all of these unless they are cancelled with it.
     /// </summary>
-    /// <remarks>
-    /// A dependency edge is only satisfied by a `done` task, so cancelling one strands
-    /// everything downstream. Callers cancel these together rather than leave them
-    /// permanently unclaimable.
-    /// </remarks>
     public IReadOnlyList<TaskRecord> UnfinishedDependents(long taskId) =>
         conn.Query<Row>($"""
             WITH RECURSIVE downstream(id) AS (
@@ -282,10 +271,8 @@ public sealed class TaskRepository(IDbConnection conn)
             """, new { taskId }).Select(r => r.ToRecord()).ToList();
 
     /// <summary>
-    /// Features in `active` whose children are all terminal (done/rejected/cancelled) —
-    /// these are complete and the harness closes them to `done`, which is what arms QA.
-    /// A Feature with no children yet is excluded: it must not close before any work runs.
-    /// "The last child finished" is derived from this query, never tracked as a flag.
+    /// Active Features whose children have all reached a terminal state, and which the runner
+    /// therefore closes. A Feature with no children yet is excluded.
     /// </summary>
     public IReadOnlyList<long> ActiveFeaturesReadyToClose() =>
         conn.Query<long>("""
@@ -299,9 +286,8 @@ public sealed class TaskRepository(IDbConnection conn)
             """).ToList();
 
     /// <summary>
-    /// Is there anything a worker could pick up? True while any task is neither finished nor
-    /// parked on the client. Deliberately coarse — it decides whether starting a worker is
-    /// worth it, not which task runs, and a worker with nothing to claim simply drains.
+    /// Whether any task is neither finished nor parked on the client. Coarse on purpose: it
+    /// decides whether starting a worker is worthwhile, not which task that worker runs.
     /// </summary>
     public bool HasWorkForAWorker() =>
         conn.ExecuteScalar<int>("""
@@ -309,7 +295,7 @@ public sealed class TaskRepository(IDbConnection conn)
             WHERE status NOT IN ('done','rejected','cancelled','needs_human')
             """) > 0;
 
-    /// <summary>Are all non-bug tasks terminal and no bug still active? Then the board is quiescent.</summary>
+    /// <summary>Whether every task is terminal and at least one non-bug task is done.</summary>
     public bool BoardQuiescent() =>
         conn.ExecuteScalar<int>("""
             SELECT COUNT(*) FROM tasks
@@ -325,7 +311,7 @@ public sealed class TaskRepository(IDbConnection conn)
             WHERE id = @taskId
             """, new { taskId, note });
 
-    /// <summary>Count one budget/iteration exhaustion; returns the new total (the strike count).</summary>
+    /// <summary>Records one budget or iteration exhaustion and returns the task's new strike count.</summary>
     public int IncrementOutOfBudgetCount(long taskId)
     {
         conn.Execute("""
@@ -336,7 +322,7 @@ public sealed class TaskRepository(IDbConnection conn)
             "SELECT out_of_budget_count FROM tasks WHERE id = @taskId", new { taskId });
     }
 
-    /// <summary>Raise (or lower) a task's token budget — the Principal's lever when triaging an out-of-budget task.</summary>
+    /// <summary>Sets a task's token budget to an absolute value.</summary>
     public void SetBudget(long taskId, int tokenBudget)
     {
         if (tokenBudget <= 0)
@@ -348,18 +334,15 @@ public sealed class TaskRepository(IDbConnection conn)
     }
 
     /// <summary>
-    /// An edge of the task DAG (spec §6 task_deps): taskId cannot start until
-    /// dependsOn is done. INSERT OR IGNORE so authoring the same edge twice is
-    /// harmless; a self-edge is a mistake the Principal shouldn't make and we refuse.
-    /// A cycle is refused for the same reason, one step further out: see
-    /// <see cref="DependencyChain"/>.
+    /// Adds a DAG edge: <paramref name="taskId"/> cannot start until <paramref name="dependsOn"/>
+    /// is done. Adding the same edge twice is harmless; a self-edge, or one that would close a
+    /// cycle, is refused.
     /// </summary>
     public void AddDependency(long taskId, long dependsOn)
     {
         if (taskId == dependsOn)
             throw new ArgumentException($"Task {taskId} cannot depend on itself.");
-        // Refusing the closing edge is what keeps the graph on disk acyclic — there is no
-        // later repair, because nothing rereads the DAG once the design phase has written it.
+        // Refusing the closing edge is the only thing keeping the stored graph acyclic.
         if (DependencyChain(from: dependsOn, to: taskId) is { Count: > 0 } chain)
             throw new DependencyCycleException(taskId, dependsOn, chain);
         conn.Execute("""
@@ -368,16 +351,11 @@ public sealed class TaskRepository(IDbConnection conn)
     }
 
     /// <summary>
-    /// The chain of edges by which <paramref name="from"/> already depends on
-    /// <paramref name="to"/> — ids ordered from one to the other — or empty if it does not.
-    /// A path rather than a bool because the caller's job is to show the Principal the cycle
-    /// it is about to close, and "4 → 3 → 4" is actionable where "cycle detected" is not.
+    /// The chain of ids by which <paramref name="from"/> already depends on
+    /// <paramref name="to"/>, or empty if it does not. A path rather than a bool, so a refusal
+    /// can name the cycle it would close. Breadth-first over a visited set, so a graph that
+    /// already contains a cycle still terminates.
     /// </summary>
-    /// <remarks>
-    /// Breadth-first over one snapshot of the edges, with a visited set: a graph that
-    /// ALREADY contains a cycle (HabitTracker's did) must terminate here too, or the check
-    /// added to prevent a deadlock becomes one.
-    /// </remarks>
     public IReadOnlyList<long> DependencyChain(long from, long to)
     {
         var edges = conn.Query<(long TaskId, long DependsOn)>(
