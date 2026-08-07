@@ -82,8 +82,7 @@ public sealed class OpenAiLlmClient : ILlmClient
             });
         }
 
-        // max_completion_tokens, not the deprecated max_tokens: it is the only one that
-        // bounds reasoning tokens as well as visible output.
+        // max_completion_tokens bounds reasoning tokens as well as visible output.
         return new JsonObject
         {
             ["model"] = request.Model,
@@ -93,19 +92,11 @@ public sealed class OpenAiLlmClient : ILlmClient
     }
 
     /// <summary>
-    /// Usage translation, per CompletionUsage. Two asymmetries against Anthropic that
-    /// the adapter is here to absorb:
-    ///
-    /// - `prompt_tokens` is the WHOLE prompt and `cached_tokens` a subset of it, whereas
-    ///   Anthropic's input_tokens already excludes cached ones. Subtracting keeps
-    ///   LlmUsage.TokensIn meaning the same thing for every provider.
-    /// - `cache_write_tokens` is reported but NOT separately priced: OpenAI bills cache
-    ///   writes at the ordinary input rate. They therefore stay inside TokensIn and
-    ///   CacheWriteTokens is left at zero — mapping them across would ask the pricer for
-    ///   a cache-write rate that legitimately does not exist.
-    ///
-    /// `completion_tokens` already includes reasoning tokens (the spec is explicit that
-    /// they count for billing), so no adjustment is needed on the output side.
+    /// Translates CompletionUsage into Forge's four token buckets. `prompt_tokens` includes
+    /// cached tokens, so the cached count is subtracted to leave the uncached remainder that
+    /// TokensIn means everywhere. Cache writes stay inside TokensIn and CacheWriteTokens is
+    /// left at zero, since OpenAI bills them at the ordinary input rate. `completion_tokens`
+    /// already includes reasoning tokens.
     /// </summary>
     internal static LlmResponse ParseResponse(string payload)
     {
