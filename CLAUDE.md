@@ -498,3 +498,49 @@ chat → M3 design → M4 review + CI → M5 QA → M6 change requests. Later wo
   (e.g. an X-Cache header for a cache).
 - .NET 8+ console host; Microsoft.Data.Sqlite + Dapper (no EF);
   System.CommandLine or Spectre.Console for the CLI.
+
+## House style (how the code in THIS repo is written)
+Rules that change what gets written. Anything a competent C# author does by
+default is left out on purpose.
+
+- **Comments state what the code does, not the history of why it was decided.**
+  Every class and every function carries a short comment saying what it is and
+  what it does — a couple of lines, enough for a human to review the file without
+  reading the body. Leave out the incident that motivated it, the option that was
+  rejected, and what it used to do; a decision worth keeping goes in this file,
+  not in the source.
+- **Per-field and per-entry comments are individual.** When commenting a
+  dictionary, a record's fields, or a config block, each entry gets its own line
+  saying what the key is and what the value means — never one shared blurb above
+  the block.
+- **A file is written to be reviewed by a human.** Public surface first, helpers
+  after; one concern per file; no function so long that its comment cannot
+  describe it in a sentence.
+- **If it can be decided deterministically, the harness decides it.** Before
+  adding an LLM call or a tool, ask what the answer depends on. If it can be read
+  from the repo, the database, git, or process output, write the code —
+  `Discover` finds the startup project, `CiRunner` reads the exit code, the
+  coverage gates compare sets. A model call is for judgement only.
+- **Tests are named as the behaviour they protect**, in full sentences:
+  `A_completed_task_lands_in_the_bare_repo_and_the_workspace_is_cleaned_up`. The
+  name is the description; add a comment only where the setup is not obvious.
+  Assert observable outcomes (rows, files on trunk, exit codes), not internal calls.
+- **Refusals are written for the model that will read them.** Every error a tool
+  returns says what was wrong AND the correct form or the available values —
+  `create_task` lists the operationIds that exist, a failed `serve` names the
+  startup project. A refusal the agent cannot act on wastes a whole instance.
+- **A type when the harness enforces it, a string when only the model reads it.**
+  Parse-don't-validate at the boundary (`RequirementsRef`, `ApiContract`), factory
+  methods that enforce invariants, exhaustive switches over closed enums. The same
+  rule as the DB column vs JSON decision, applied in memory.
+- **Derive, never store twice.** If a fact can be computed from rows that already
+  exist (a milestone's state, who acts next, a task's cost), compute it rather
+  than storing a second copy.
+- **One place per concern.** The tool catalogue is the only description of the
+  tool surface; `EventType` is the only list of log categories; prompts are files,
+  never rows. Adding a second place to update is the defect, not the duplication.
+- **Every handler does its work first and transitions last**, so a crash either
+  re-runs an idempotent step or leaves the task claimable.
+- **New dependencies are argued for, not added.** Sqlite + Dapper + Spectre, plus
+  `Microsoft.OpenApi.Readers` for contract parsing. Providers are hand-rolled over
+  HttpClient; there is no SDK surface to keep in step.

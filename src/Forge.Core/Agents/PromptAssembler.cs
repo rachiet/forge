@@ -58,7 +58,7 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     {
         var tools = string.Join("\n", recipe.Tools
             .Where(AgentToolset.Catalogue.ContainsKey)
-            .Select(name => "- " + AgentToolset.Catalogue[name]));
+            .Select(name => AgentToolset.Catalogue[name].Render(name)));
 
         var sb = new StringBuilder($$$"""
             # Tools

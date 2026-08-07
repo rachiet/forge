@@ -78,24 +78,35 @@ public sealed partial class AgentToolset : IDisposable
     /// drift. Merged into <see cref="Catalogue"/>; a property rather than a field because static
     /// field initialisation order across partial files is not something to bet a null on.
     /// </summary>
-    private static IEnumerable<KeyValuePair<string, string>> QaCatalogue =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
+    private static IEnumerable<KeyValuePair<string, ToolDoc>> QaCatalogue =>
+        new Dictionary<string, ToolDoc>(StringComparer.Ordinal)
         {
-            ["serve"] = "serve(command, [port], [cwd], [ready_timeout]) — start a server and LEAVE it "
-                      + "running. Use this, not run(), for anything that does not exit on its own: run() "
-                      + "waits for the process to finish and kills it at the timeout, so it can never host "
-                      + "something you then send requests to. The harness waits until the server is really "
-                      + "listening and returns its base URL, then stops it when your run ends. Give port if "
-                      + "the server does not print its URL at startup; ready_timeout is in seconds.",
-            ["stop_server"] = "stop_server([server]) — stop a server started with serve (all of them if you "
-                            + "name none) and see its final output. Not required at the end of your run; the "
-                            + "harness stops them for you.",
-            ["http"] = "http(url, [method], [body], [headers], [content_type]) — send ONE request to a server "
-                     + "you started with serve, and see the real status line, response headers and body. url "
-                     + "may be just a path (/api/things) to use the server's own base URL. method defaults to "
-                     + "GET; headers is one `Name: value` per line; a body defaults to application/json. "
-                     + "Anything the server logged meanwhile comes back with the response, so a 500 arrives "
-                     + "with its stack trace. Loopback addresses only — this tests your app, not the internet.",
+            ["serve"] = new(
+                "start a server and LEAVE it running. Use this, not run(), for anything that does not "
+              + "exit on its own: run() waits for the process to finish and kills it at the timeout, so "
+              + "it can never host something you then send requests to. The harness waits until the "
+              + "server is really listening, returns its base URL, and stops it when your run ends.",
+                ToolDoc.Required("command", "what starts it, e.g. `dotnet run --project src/App/App.csproj`."),
+                ToolDoc.Optional("port", "the port it binds. Give this if the server does not print its "
+                                       + "URL at startup — the harness then checks the socket directly."),
+                ToolDoc.Optional("cwd", "directory to start it in, relative to your workspace root."),
+                ToolDoc.Optional("ready_timeout", "seconds to wait for it to start listening. Default 60.")),
+
+            ["stop_server"] = new("stop a server started with serve and see its final output. Not required "
+                                + "at the end of your run; the harness stops them for you.",
+                ToolDoc.Optional("server", "which server id to stop. Defaults to all of them.")),
+
+            ["http"] = new(
+                "send ONE request to a server you started with serve, and see the real status line, "
+              + "response headers and body. Anything the server logged meanwhile comes back with the "
+              + "response, so a 500 arrives with its stack trace. Loopback addresses only — this tests "
+              + "your app, not the internet.",
+                ToolDoc.Required("url", "a path like `/api/things` to use the server's own base URL, or a "
+                                      + "full loopback URL."),
+                ToolDoc.Optional("method", "GET (default), POST, PUT, PATCH, DELETE."),
+                ToolDoc.Optional("body", "the request body, sent as application/json unless you say otherwise."),
+                ToolDoc.Optional("headers", "one `Name: value` per line."),
+                ToolDoc.Optional("content_type", "overrides the body's content type.")),
         };
 
     /// <summary>

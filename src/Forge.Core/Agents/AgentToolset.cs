@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text;
 using System.Text.RegularExpressions;
+using static Forge.Core.Agents.ToolDoc;
 using Forge.Core.Db;
 using Forge.Core.Logging;
 using Forge.Core.Model;
@@ -71,71 +72,147 @@ public sealed partial class AgentToolset(
     /// tools are described next to their implementation in QaTools.cs and merged in here, so
     /// this stays the single list every recipe is validated against.
     /// </summary>
-    public static readonly IReadOnlyDictionary<string, string> Catalogue = QaCatalogue.Concat(
-        new Dictionary<string, string>(StringComparer.Ordinal)
+    public static readonly IReadOnlyDictionary<string, ToolDoc> Catalogue = QaCatalogue.Concat(
+        new Dictionary<string, ToolDoc>(StringComparer.Ordinal)
         {
-            ["read_file"] = "read_file(path, [start], [end]) — read a file, optionally a line range.",
-            ["list_dir"] = "list_dir([path]) — list a directory (defaults to the workspace root).",
-            ["grep"] = "grep(pattern, [path]) — regex search across files.",
-            ["write_file"] = "write_file(path, content) — create or overwrite a file, whole contents.",
-            ["run"] = "run(command, [cwd]) — run one binary.",
-            ["add_milestone"] = "add_milestone(name, [description], [ordinal]) — add a milestone to the plan.",
-            ["propose_requirements"] ="propose_requirements(title, objective, [acceptance], "
-                            + "[requirements_ref], [milestone]) — present the finished "
-                            + "requirements to the client for approval. They see Approve & start "
-                            + "building, or keep talking to you. Approving is what opens the Feature "
-                            + "and starts the build; nothing is handed to engineering until then. "
-                            + "Pass milestone (an id from add_milestone) for a change request; pass "
-                            + "none for the initial build, which spans the whole plan.",
-            ["create_task"] = "create_task(title, objective, acceptance, [type], [requirements_ref], "
-                            + "[context_paths], [contract_ops], [budget], [milestone]) — put a task on the "
-                            + "board. Returns its id. "
-                            + "acceptance is REQUIRED and states what must be observably true when the task is "
-                            + "done — the reviewer judges the diff against it, so a task without it can never be "
-                            + "finished. If you cannot say what done looks like, the task is not ready to create. "
-                            + "type is task (default), bug, or chore. requirements_ref names the requirement "
-                            + "file, e.g. `01-todos.md@v1` (version optional). contract_ops is a comma-separated "
-                            + "list of operationIds from the OpenAPI contract this task implements — the engineer "
-                            + "is given exactly those operations. Omit it for work with no HTTP surface.",
-            ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done. "
-                               + "Dependencies must flow one way: an edge that would close a cycle is refused.",
-            ["break_and_relink"] = "break_and_relink(new_tasks, [reason]) — replace this stuck task with "
-                            + "the smaller tasks you have just created (new_tasks is their ids, "
-                            + "comma-separated, at least two). The harness re-points everything that "
-                            + "waited on this task at all of them, gives them its dependencies, files "
-                            + "them under its feature and milestone, and cancels it. Use when the task "
-                            + "is too big to finish, not when the engineer took a wrong turn.",
-            ["redirect"] = "redirect(guidance, [budget]) — hand this stuck task back to the engineer with "
-                         + "concrete direction (and optionally a new absolute token budget). Resets the "
-                         + "attempt so the engineer starts fresh with your guidance. Ends your triage.",
-            ["file_bug"] = "file_bug(title, expected, [requirements_ref]) — record a failure as a bug for the "
-                         + "Principal to triage. You give the title and the expected behaviour (from the contract); "
-                         + "the harness attaches whatever you last did to the running project — the run(), serve() "
-                         + "or http() exchange — and its real output as the evidence. So perform the check that "
-                         + "shows the failure IMMEDIATELY before calling this. Nothing checked = refused.",
-            ["how_to_run"] = "how_to_run(command, [url]) — record the command that starts the app for "
-                           + "the client, and the URL it serves on if it has one. Call it once, after you "
-                           + "have actually started the app. Give the command exactly as you ran it.",
-            ["accept_bug"] = "accept_bug([note]) — this filed bug is real; release it to the board for an engineer. Ends your triage.",
-            ["reject_bug"] = "reject_bug([task], reason) — this bug is not a real defect; reject it with a reason. "
-                           + "Kept on record, never re-filed. At triage/review it acts on the current bug; the PM "
-                           + "passes a task id to close one the client reviewed. Use instead of looping a fix for a non-bug.",
-            ["retriage_bug"] = "retriage_bug(task, note) — send a bug back to the Principal for another triage with "
-                             + "the client's guidance attached. The PM uses this when the client says a flagged bug "
-                             + "needs more investigation rather than rejection.",
-            ["retriage_task"] = "retriage_task(task, note) — send a task the client answered back to the "
-                             + "Principal, with their guidance attached and the attempt counter reset. "
-                             + "Use this when the client tells you how they want it handled.",
-            ["cancel_task"] = "cancel_task(task, reason) — drop a task the client does not want done. "
-                            + "Its branch is deleted and anything depending on it is cancelled too, so "
-                            + "tell them what else goes with it BEFORE you call this.",
-            ["approve"] = "approve([note]) — the diff is good; approve it for merge and end your review.",
-            ["request_changes"] = "request_changes(reason, [convention]) — send the work back with a reason. "
-                                + "Set convention to add a permanent rule to CONVENTIONS.md for a recurring mistake.",
-            ["reply"] = "reply(message) — say this to the client and end your turn.",
-            ["progress_note"] = "progress_note(note) — save state for your successor.",
-            ["done"] = "done(summary) — you believe the work is complete.",
-            ["escalate"] = "escalate(reason) — you are blocked and need a human decision.",
+            ["read_file"] = new("read a file, optionally a line range.",
+                Required("path", "the file to read, relative to your workspace root."),
+                Optional("start", "first line to read (1-based). Defaults to the start of the file."),
+                Optional("end", "last line to read. Defaults to a few hundred lines from `start`.")),
+
+            ["list_dir"] = new("list a directory.",
+                Optional("path", "the directory to list. Defaults to your workspace root.")),
+
+            ["grep"] = new("regex search across files.",
+                Required("pattern", "the regular expression to search for."),
+                Optional("path", "file or directory to search. Defaults to your workspace root.")),
+
+            ["write_file"] = new("create or overwrite a file.",
+                Required("path", "where to write, relative to your workspace root "
+                               + "(e.g. `src/App/Program.cs`). Missing directories are created."),
+                Required("content", "the ENTIRE new contents. It replaces the file, so a partial "
+                                  + "body deletes everything you left out.")),
+
+            ["run"] = new("run one binary and see its exit code and output. No shell.",
+                Required("command", "the binary and its arguments, e.g. `dotnet build`."),
+                Optional("cwd", "directory to run in, relative to your workspace root. Defaults to the root.")),
+
+            ["add_milestone"] = new("add a milestone to the plan. Returns its id, which create_task "
+                                  + "and propose_requirements take.",
+                Required("name", "what the client will see, e.g. `Core API`."),
+                Optional("description", "one line on what is demonstrable when it is reached."),
+                Optional("ordinal", "position in the sequence. Defaults to the end.")),
+
+            ["propose_requirements"] = new(
+                "present the finished requirements to the client for approval. They see Approve & "
+              + "start building, or keep talking to you. Approving is what opens the Feature and "
+              + "starts the build; nothing reaches engineering until then.",
+                Required("title", "what is being built, in the client's words."),
+                Required("objective", "what must be true when it is done."),
+                Optional("acceptance", "how the client would check it from the outside."),
+                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md@v1`."),
+                Optional("milestone", "a milestone id, for a CHANGE REQUEST only. Pass none for the "
+                                    + "initial build: it spans the whole plan, and a Feature-level "
+                                    + "milestone would drag every task under one heading.")),
+
+            ["create_task"] = new("put a task on the board. Returns its id.",
+                Required("title", "short imperative name, e.g. `implement-create-poll-endpoint`."),
+                Required("objective", "what this task must achieve, specific enough to work from."),
+                Required("acceptance", "what must be observably true when it is done. The reviewer "
+                                     + "judges the diff against this, so a task without it can never "
+                                     + "be finished. If you cannot say what done looks like, the task "
+                                     + "is not ready to create."),
+                Optional("type", "`task` (default), `bug`, or `chore`."),
+                Optional("requirements_ref", "the requirement it implements, e.g. `01-todos.md@v1`."),
+                Optional("context_paths", "comma-separated files worth reading first."),
+                Optional("contract_ops", "comma-separated operationIds from the OpenAPI contract this "
+                                       + "task implements. The engineer is handed exactly those "
+                                       + "operations. Omit for work with no HTTP surface."),
+                Optional("budget", "token cap for one agent on this task. Defaults to 60000."),
+                Optional("milestone", "milestone id, so the client can see progress per milestone.")),
+
+            ["add_dependency"] = new("make one task wait for another. Dependencies flow one way: an "
+                                   + "edge that would close a cycle is refused.",
+                Required("task", "the id of the task that must wait."),
+                Required("depends_on", "the id it waits for. That task must be `done` before this one "
+                                     + "can be claimed.")),
+
+            ["break_and_relink"] = new(
+                "replace this stuck task with the smaller tasks you have just created. The harness "
+              + "re-points everything that waited on it at all of them, gives them its dependencies, "
+              + "files them under its feature and milestone, and cancels it. Use when the task is too "
+              + "big to finish, not when the engineer took a wrong turn.",
+                Required("new_tasks", "comma-separated ids from create_task, at least two."),
+                Optional("reason", "why it had to be split, for the record.")),
+
+            ["redirect"] = new("hand this stuck task back to the engineer with direction. Resets the "
+                             + "attempt so it starts fresh with your guidance. Ends your triage.",
+                Required("guidance", "concrete direction: what to do differently, not encouragement."),
+                Optional("budget", "a new ABSOLUTE token budget, if it genuinely needed more room.")),
+
+            ["file_bug"] = new(
+                "record a failure as a bug for the Principal to triage. The harness attaches whatever "
+              + "you last did to the running project — the run(), serve() or http() exchange — and its "
+              + "real output as the evidence, so perform the check that shows the failure IMMEDIATELY "
+              + "before calling this. Nothing checked = refused.",
+                Required("title", "the defect in one line."),
+                Required("expected", "what should have happened, quoted from the contract."),
+                Optional("requirements_ref", "the requirement it violates, e.g. `01-todos.md@v1`.")),
+
+            ["how_to_run"] = new("record the command that starts the app for the client. Call it once, "
+                               + "after you have actually started the app.",
+                Required("command", "exactly as you ran it. The harness refuses any command you did not."),
+                Optional("url", "the URL it serves on, if it has one.")),
+
+            ["accept_bug"] = new("this filed bug is real; release it to the board for an engineer. "
+                               + "Ends your triage.",
+                Optional("note", "what the fix needs to address.")),
+
+            ["reject_bug"] = new("this bug is not a real defect; reject it. Kept on record, never "
+                               + "re-filed. Use instead of looping a fix for a non-bug.",
+                Required("reason", "why it is not a defect. This is the durable verdict."),
+                Optional("task", "the bug's id. Only the PM passes this, to close one the client "
+                               + "reviewed; at triage or review it acts on the bug in front of you.")),
+
+            ["retriage_bug"] = new("send a bug back to the Principal for another triage with the "
+                                 + "client's guidance attached. Use when the client says a flagged bug "
+                                 + "needs more investigation rather than rejection.",
+                Required("task", "the bug's id."),
+                Required("note", "the client's guidance, in their terms.")),
+
+            ["retriage_task"] = new("send a task the client answered back to the Principal, with their "
+                                  + "guidance attached and the attempt counter reset. The build resumes "
+                                  + "on it by itself.",
+                Required("task", "the task's id."),
+                Required("note", "what the client said to do.")),
+
+            ["cancel_task"] = new("drop a task the client does not want done. Its branch is deleted and "
+                                + "anything depending on it is cancelled too, so tell them what else "
+                                + "goes with it BEFORE you call this.",
+                Required("task", "the task's id."),
+                Required("reason", "why it is being dropped.")),
+
+            ["approve"] = new("the diff is good; approve it for merge and end your review.",
+                Optional("note", "what you checked and why it passes.")),
+
+            ["request_changes"] = new("send the work back to the engineer with a reason. Ends your review.",
+                Required("reason", "what is wrong and what would fix it. The engineer resumes with this."),
+                Optional("convention", "a permanent rule appended to CONVENTIONS.md. Use for a mistake "
+                                     + "worth ruling out for every future engineer, not a one-off.")),
+
+            ["reply"] = new("say this to the client and end your turn.",
+                Required("message", "plain language, no jargon. This is what they read.")),
+
+            ["progress_note"] = new("save state for your successor. A fresh instance resumes from this "
+                                  + "and the workspace, and nothing else.",
+                Required("note", "what is done, what is left, what you tried that failed, and the "
+                               + "exact next action.")),
+
+            ["done"] = new("you believe the work is complete. The harness verifies it.",
+                Required("summary", "what you did, in plain language.")),
+
+            ["escalate"] = new("you are blocked and need a human decision. Ends your run.",
+                Required("reason", "what you are blocked on and what decision is needed.")),
         }).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
 
     public async Task<ToolOutcome> ExecuteAsync(ToolCall call, CancellationToken ct = default)
