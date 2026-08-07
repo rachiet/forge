@@ -1,16 +1,10 @@
 namespace Forge.Core.Llm.Pricing;
 
 /// <summary>
-/// What one model costs, in USD per token, split by the four buckets a provider
-/// reports separately. Rates are <c>decimal</c> throughout: these are money, and
-/// binary floating point has no business accumulating a bill across thousands of
-/// calls.
-///
-/// The cache rates are nullable on purpose. Most models have no prompt cache at
-/// all, and a missing rate is not the same as a rate of zero — charging zero for
-/// tokens we did send is the silent-undercount failure this whole change exists to
-/// remove. A null rate is therefore only an error if the call actually used that
-/// bucket, which <see cref="CostOf"/> enforces.
+/// What one model costs in USD per token, split by the four buckets a provider reports
+/// separately. Rates are decimal, since they are money. The cache rates are nullable: most
+/// models have no prompt cache, and a missing rate is not a rate of zero — it is an error only
+/// if a call used that bucket, which <see cref="CostOf"/> enforces.
 /// </summary>
 public sealed record ModelPrice(
     string Model,
@@ -26,9 +20,8 @@ public sealed record ModelPrice(
         + usage.CacheWriteTokens * Rate(CacheWritePerToken, usage.CacheWriteTokens, "cache write");
 
     /// <summary>
-    /// A bucket we have no rate for is fine while it stays empty, and fatal the
-    /// moment it doesn't — guessing a multiplier here is exactly how a price table
-    /// goes quietly wrong.
+    /// What one call's usage costs. Throws when a bucket has tokens but no rate, rather than
+    /// guessing a multiplier.
     /// </summary>
     private decimal Rate(decimal? rate, int tokens, string bucket)
     {
@@ -40,8 +33,7 @@ public sealed record ModelPrice(
 }
 
 /// <summary>
-/// Raised instead of returning a zero cost. With a dollar budget, an unpriced model
-/// that costs $0 is a cap that never trips — the one failure mode a spend limit
-/// must not have.
+/// Thrown when a model or a token bucket has no rate. Raised rather than returning zero, which
+/// would be a spend cap that never trips.
 /// </summary>
 public sealed class ModelNotPricedException(string message) : InvalidOperationException(message);

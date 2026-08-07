@@ -2,26 +2,28 @@ using System.Diagnostics;
 
 namespace Forge.Core.Workspaces;
 
+/// <summary>What one git command produced.</summary>
 public sealed record GitResult(int ExitCode, string Stdout, string Stderr)
 {
+    /// <summary>Whether the command exited zero.</summary>
     public bool Ok => ExitCode == 0;
+    /// <summary>Standard output, or standard error when it wrote nothing.</summary>
     public string Output => string.IsNullOrWhiteSpace(Stdout) ? Stderr.Trim() : Stdout.Trim();
 }
 
+/// <summary>Thrown when a git command the harness required exits non-zero.</summary>
 public sealed class GitException(string command, GitResult result)
     : InvalidOperationException($"git {command} failed ({result.ExitCode}): {result.Stderr.Trim()}");
 
 /// <summary>
-/// Harness-side git. Distinct from the agent's run() tool by design: this is
-/// trusted mechanical code that reads and writes real repo state, which is why
-/// merge and CI status come from here and never from an agent's claim
-/// (spec Principle 1, §8).
+/// Runs git for the harness, separately from the agent's jailed run() tool. Merge state and
+/// branch state are read from here, never from an agent's claim.
 /// </summary>
 public static class Git
 {
     /// <summary>
-    /// Commits are attributed to the harness explicitly rather than inheriting the
-    /// machine's git config, which may be absent on a server and is not ours anyway.
+    /// The identity every harness commit is made under, set explicitly rather than inherited
+    /// from the machine's git config, which may be absent.
     /// </summary>
     private static readonly string[] Identity =
     [
@@ -30,6 +32,7 @@ public static class Git
         "-c", "commit.gpgsign=false",
     ];
 
+    /// <summary>Runs a git command and returns its result, whether or not it succeeded.</summary>
     public static GitResult Run(string workingDir, params string[] args)
     {
         var psi = new ProcessStartInfo
@@ -51,6 +54,7 @@ public static class Git
         return new GitResult(process.ExitCode, stdout, stderr);
     }
 
+    /// <summary>Runs a git command and throws unless it exits zero.</summary>
     public static GitResult Require(string workingDir, params string[] args)
     {
         var result = Run(workingDir, args);

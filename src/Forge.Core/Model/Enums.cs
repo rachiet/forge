@@ -37,7 +37,7 @@ public enum MessageStatus { Pending, Received }
 
 public enum EndReason { Done, Budget, Iterations, Crash, Escalated }
 
-/// <summary>PascalCase enum member ⇄ snake_case TEXT, as stored under the CHECK constraints.</summary>
+/// <summary>Converts an enum member to and from the snake_case TEXT the schema stores.</summary>
 public static class SnakeCaseEnum
 {
     public static string ToSnakeCase<T>(T value) where T : struct, Enum

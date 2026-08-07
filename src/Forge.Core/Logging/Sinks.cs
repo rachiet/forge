@@ -65,7 +65,7 @@ public sealed class CompositeLogSink(params ILogSink[] sinks) : ILogSink
     }
 }
 
-/// <summary>Discards everything. The default when no logger is wired, so logging is never required to run.</summary>
+/// <summary>Discards everything. The default when no sink is wired.</summary>
 public sealed class NullLogSink : ILogSink
 {
     public static readonly NullLogSink Instance = new();
