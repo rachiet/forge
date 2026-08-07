@@ -8,34 +8,17 @@ using Forge.Core.Tools;
 
 namespace Forge.Core.Agents;
 
-/// <summary>
-/// What QA should start, read out of the repo: the startup project and, when the project
-/// says so, the URL it will serve on.
-/// </summary>
+/// <summary>The application to start, read out of the repo.</summary>
 /// <param name="ProjectPath">Repo-relative path of the .csproj to run.</param>
-/// <param name="Url">The http URL from launchSettings, or null when the project does not say.</param>
-/// <param name="Alternatives">
-/// The other runnable roots when the repo has more than one. Empty in the normal case; a
-/// non-empty list means the choice was genuinely ambiguous and someone should decide it.
-/// </param>
+/// <param name="Url">The http URL from launchSettings, or null when the project declares none.</param>
+/// <param name="Alternatives">Other runnable projects, when the repo has more than one.</param>
 public sealed record RunTarget(string ProjectPath, string? Url, IReadOnlyList<string> Alternatives);
 
 /// <summary>
-/// The tools QA needs and no other role has: start the app and keep it running, then talk to
-/// it over its own port.
-///
-/// Why they exist at all: QA is the only role whose job is to observe a program from the
-/// outside while it runs. Every other role either reads the repo or hands work to CI, and
-/// run() serves both — it starts a binary, waits for it to exit, and kills whatever is still
-/// alive at the timeout. A server has no exit; run() can therefore only ever report that it
-/// killed one, which is exactly what happened the first time QA met a web project. It could
-/// not reach the app, had no way to say so, and passed the project by filing nothing.
-///
-/// So the pair here is deliberate and minimal: serve() owns a process's lifetime, http() is
-/// the request half that run() cannot express (no shell, and curl is not on any allowlist —
-/// nor should it be, since a request the harness makes itself is a request it can capture
-/// verbatim as evidence). Both feed the same file_bug evidence trail as run(): what QA
-/// reports is what the harness watched happen, never what the model recalls.
+/// QA's own tools, in the same toolset as the rest: serve() starts an application and leaves
+/// it running, stop_server() ends it, and http() sends a single request to it. Unlike run(),
+/// which waits for a process to exit, serve() owns a process that never does. Both record what
+/// the harness watched happen as evidence file_bug can attach.
 /// </summary>
 public sealed partial class AgentToolset : IDisposable
 {
@@ -45,26 +28,31 @@ public sealed partial class AgentToolset : IDisposable
     /// <summary>How long a single http() request may take before it is abandoned.</summary>
     private static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>How often serve() re-checks whether the server is listening yet.</summary>
     private const int ReadyPollMs = 250;
+
+    /// <summary>How much of a response body is shown to the agent.</summary>
     private const int MaxBodyChars = 4_000;
+
+    /// <summary>How much of a server's startup output is shown to the agent.</summary>
     private const int MaxStartupOutputChars = 3_000;
 
     /// <summary>
-    /// Servers this instance started, in start order — the id an agent names is the index + 1.
-    /// A list rather than a single slot because a project may legitimately serve an API and a
-    /// front end from two processes, and because a failed first attempt should not have to be
-    /// stopped before a second can be tried.
+    /// Servers this instance started, in start order; the id an agent names is the index + 1.
+    /// More than one may run at a time.
     /// </summary>
     private readonly List<RunningServer> _servers = [];
 
-    /// <summary>One served process and the base URL the harness confirmed it is listening on.</summary>
+    /// <summary>One served process.</summary>
+    /// <param name="Id">The number the agent refers to it by.</param>
+    /// <param name="Handle">The running process.</param>
+    /// <param name="BaseUrl">The address the harness confirmed it is listening on.</param>
     private sealed record RunningServer(int Id, ServerHandle Handle, string BaseUrl);
 
     /// <summary>
-    /// Shared by every http() call so connections are pooled and a dev server's self-signed
-    /// certificate does not fail the request. Certificate validation is off because the only
-    /// hosts reachable here are loopback ones we started ourselves — there is no identity to
-    /// establish, and a cert error would read to the model as a defect in the app.
+    /// Shared by every http() call, so connections are pooled. Certificate validation is off and
+    /// redirects are not followed: the only reachable hosts are loopback ones the harness
+    /// started, and a redirect is part of the contract under test.
     /// </summary>
     private static readonly HttpClient Http = new(new HttpClientHandler
     {
@@ -122,16 +110,11 @@ public sealed partial class AgentToolset : IDisposable
     };
 
     /// <summary>
-    /// Starts a server and does not return until it is provably accepting connections — the
-    /// distinction that matters, because "the process is alive" and "the app is up" are minutes
-    /// apart for a .NET web project and only the second one makes the next http() meaningful.
+    /// Starts a server and waits until it is accepting connections, then registers it and returns
+    /// its base URL. Readiness comes from the URL the server announces in its own output, or from
+    /// opening a socket to an explicitly given port. Returns an error if it exits during startup
+    /// or never starts listening.
     /// </summary>
-    /// <remarks>
-    /// Readiness is read from the server itself: Kestrel and friends announce `Now listening on:
-    /// http://localhost:5161`, which is ground truth for the port AND the scheme, neither of
-    /// which the harness could otherwise know. A server that announces nothing is still testable
-    /// by passing an explicit port, which is then confirmed by opening a socket to it.
-    /// </remarks>
     private async Task<ToolOutcome> ServeAsync(ToolCall call, CancellationToken ct)
     {
         var command = call.Arg("command");
@@ -146,8 +129,7 @@ public sealed partial class AgentToolset : IDisposable
 
         while (DateTime.UtcNow < deadline)
         {
-            // A server that dies during startup is the most informative failure there is: the
-            // reason is in the output it just produced. Keep it as evidence and stop waiting.
+            // Exited during startup: its output says why.
             if (handle.HasExited)
             {
                 var exitTrace = Trace(
@@ -155,8 +137,7 @@ public sealed partial class AgentToolset : IDisposable
                     $"exited during startup with code {handle.ExitCode}",
                     handle.Output);
                 handle.Dispose();
-                // Evidence, but NOT a command how_to_run may quote: it is the one thing we know
-                // does not start the app, and the client would be told to type it.
+                // Usable as bug evidence, but not as a command how_to_run may quote.
                 RecordEvidence(exitTrace, command: null);
                 return new ToolOutcome(Truncate(
                     exitTrace + "\n\nThe server did not stay up, so there is nothing to send requests to. "
@@ -175,9 +156,7 @@ public sealed partial class AgentToolset : IDisposable
 
         if (baseUrl is null)
         {
-            // Still alive but unreachable. Killing it is the honest outcome: a process we cannot
-            // address is one nothing will ever stop, and leaking it would bind the port against
-            // the retry the agent is about to make.
+            // Alive but unreachable: kill it rather than leave it holding the port.
             var stalled = handle.Output;
             handle.Dispose();
             return new ToolOutcome(Truncate(
@@ -190,8 +169,7 @@ public sealed partial class AgentToolset : IDisposable
         var server = new RunningServer(_servers.Count + 1, handle, baseUrl);
         _servers.Add(server);
 
-        // Same evidence trail as run(): a started server is something the harness watched happen,
-        // and how_to_run checks the client's instructions against commands actually executed.
+        // Records the command as one really executed, which how_to_run is checked against.
         RecordEvidence(Trace($"$ {command}   (started with serve)",
             $"listening on {baseUrl}", handle.OutputSinceLastRead()), command);
 
@@ -201,9 +179,8 @@ public sealed partial class AgentToolset : IDisposable
     }
 
     /// <summary>
-    /// What the repo says is actually startable, appended to a failed serve. A wrong path fails
-    /// as a build error, which reads like a broken project rather than a bad argument — so the
-    /// refusal has to carry the correction, or the agent has no way back.
+    /// The startup project discovered from the repo, phrased as the serve() call to make, for
+    /// appending to a failed serve. Empty when the repo has nothing runnable.
     /// </summary>
     private string StartupHint()
     {
@@ -213,7 +190,7 @@ public sealed partial class AgentToolset : IDisposable
              + (target.Url is { } url ? $", expected on {url}." : ".");
     }
 
-    /// <summary>Stops one server, or all of them, and hands back what it printed on the way out.</summary>
+    /// <summary>Stops the named server, or all of them, and returns their final output.</summary>
     private ToolOutcome StopServer(ToolCall call)
     {
         if (_servers.Count == 0) return new ToolOutcome("ERROR: no server is running; serve() starts one.");
@@ -239,14 +216,13 @@ public sealed partial class AgentToolset : IDisposable
     }
 
     /// <summary>
-    /// One HTTP request, made by the harness rather than by a program the agent wrote. That is the
-    /// point: the request and the response are captured verbatim by trusted code, so a bug filed
-    /// from them carries a trace nobody could have narrated — the same rule run() already enforces.
+    /// Sends one request to the most recently started server and returns the status line, every
+    /// response header, the body, and anything the server logged while handling it. The whole
+    /// exchange is recorded as evidence file_bug can attach.
     /// </summary>
     private async Task<ToolOutcome> HttpAsync(ToolCall call, CancellationToken ct)
     {
-        // No live server means the failure is QA's, not the app's, and it must not become
-        // evidence: "the API did not answer" is only a defect if something was there to answer.
+        // With no server running there is nothing to observe, so nothing is recorded as evidence.
         if (_servers.Count == 0)
             return new ToolOutcome(
                 "ERROR: no server is running, so there is nothing to send a request to. Start the app "
@@ -277,9 +253,7 @@ public sealed partial class AgentToolset : IDisposable
             using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
             var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             var head = new StringBuilder($"< HTTP {(int)response.StatusCode} {response.ReasonPhrase} ({clock.ElapsedMilliseconds} ms)");
-            // Headers in full: the architecture asks the Principal to expose otherwise-invisible
-            // behaviour through response headers (an X-Cache, say), so they are often the contract
-            // under test rather than noise around it.
+            // Headers in full: they are often the contract under test, not noise around it.
             foreach (var (name, values) in response.Headers.Concat(response.Content.Headers))
                 head.Append($"\n< {name}: {string.Join(", ", values)}");
             received = head.Append("\n\n").Append(Tail(text, MaxBodyChars)).ToString();
@@ -290,8 +264,7 @@ public sealed partial class AgentToolset : IDisposable
         }
         catch (HttpRequestException ex)
         {
-            // A live server that refuses or drops the connection is real observed behaviour, so it
-            // is recorded like any other response rather than treated as the tool failing.
+            // A refused or dropped connection is observed behaviour, recorded like any response.
             received = $"< request failed: {ex.Message}";
         }
 
@@ -299,7 +272,7 @@ public sealed partial class AgentToolset : IDisposable
         var trace = Trace(sent.ToString(), received,
             serverLog.Length > 0 ? $"--- server {target.Id} log during this request ---\n{serverLog.TrimEnd()}" : null);
 
-        // Exchange first, evidence second: file_bug attaches exactly what is shown here.
+        // file_bug attaches exactly what is shown here.
         RecordEvidence(trace, command: null);
         if (target.Handle.HasExited)
             trace += $"\n\n(Server {target.Id} is no longer running — it exited with code {target.Handle.ExitCode}.)";
@@ -307,16 +280,14 @@ public sealed partial class AgentToolset : IDisposable
     }
 
     /// <summary>
-    /// The base URL a server announced, preferring plain http and honouring an explicitly
-    /// requested port when the server binds more than one.
+    /// The base URL a server announced in its output, or null if it has announced none. Prefers
+    /// plain http over https, and honours an explicitly requested port when it bound several.
     /// </summary>
     private static string? AnnouncedUrl(string output, int? port)
     {
         var urls = ListeningUrl().Matches(output)
             .Select(m => (
-                // 0.0.0.0 means "every interface", which is not an address anything can be sent
-                // to. Rewrite it to loopback, or every later request would be refused for
-                // pointing at a non-loopback host the server never meant to name.
+                // 0.0.0.0 is not an address requests can be sent to; use loopback instead.
                 Url: m.Value.TrimEnd('/').Replace("0.0.0.0", "127.0.0.1", StringComparison.Ordinal),
                 Port: int.Parse(m.Groups[2].Value),
                 Secure: m.Groups[1].Value.Equals("https", StringComparison.OrdinalIgnoreCase)))
@@ -325,8 +296,7 @@ public sealed partial class AgentToolset : IDisposable
 
         var matching = port is { } p ? urls.Where(u => u.Port == p).ToList() : urls;
         if (matching.Count == 0) return null;
-        // http over https: a dev server usually offers both, and the plain one cannot fail on a
-        // certificate. Deliberate, not incidental — QA is testing the app, not its TLS setup.
+        // Plain http where the server offers both, so no request can fail on a certificate.
         return matching.FirstOrDefault(u => !u.Secure, matching[0]).Url;
     }
 
@@ -343,12 +313,10 @@ public sealed partial class AgentToolset : IDisposable
         catch (SocketException) { return false; }
     }
 
-    /// <summary>A path against the running server, or an absolute URL — loopback either way.</summary>
-    /// <remarks>
-    /// The scheme decides what counts as absolute, not the shape: on Unix a rooted path like
-    /// `/api/things` — the form QA will use most — parses perfectly well as an absolute
-    /// `file://` URI, so a shape test would send every request to the filesystem.
-    /// </remarks>
+    /// <summary>
+    /// Resolves a path against the running server's base URL, or accepts a full http(s) address.
+    /// Returns null for anything that is not a loopback web address.
+    /// </summary>
     private static Uri? ResolveUrl(string url, string baseUrl)
     {
         var text = url.Trim();
@@ -361,8 +329,8 @@ public sealed partial class AgentToolset : IDisposable
     private static bool IsWeb(Uri uri) => uri.Scheme is "http" or "https";
 
     /// <summary>
-    /// `Name: value` per line. Request and content headers are two different collections in
-    /// HttpClient and a model has no reason to know which is which, so try one then the other.
+    /// Adds `Name: value` headers, one per line, to the request or its content. Returns an error
+    /// message for a malformed or unacceptable header, or null when all were applied.
     /// </summary>
     private static string? ApplyHeaders(HttpRequestMessage request, string? headers)
     {
@@ -381,8 +349,8 @@ public sealed partial class AgentToolset : IDisposable
     }
 
     /// <summary>
-    /// Makes an observation the harness captured usable as proof: file_bug attaches this verbatim,
-    /// and how_to_run accepts only commands that were really executed.
+    /// Records what the harness just observed as the evidence file_bug will attach, and the
+    /// command as one how_to_run may quote when it started something.
     /// </summary>
     private void RecordEvidence(string trace, string? command)
     {
@@ -390,10 +358,11 @@ public sealed partial class AgentToolset : IDisposable
         if (command is not null) _ranCommands.Add(command);
     }
 
+    /// <summary>Joins the non-empty parts of a trace with newlines.</summary>
     private static string Trace(params string?[] parts) =>
         string.Join("\n", parts.Where(p => !string.IsNullOrWhiteSpace(p))).TrimEnd();
 
-    /// <summary>Keeps the END of long output: a stack trace's cause is at the bottom, not the top.</summary>
+    /// <summary>Truncates to the last <paramref name="max"/> characters, where a failure's cause sits.</summary>
     private static string Tail(string text, int max)
     {
         var trimmed = text.TrimEnd();
@@ -403,26 +372,12 @@ public sealed partial class AgentToolset : IDisposable
     }
 
     /// <summary>
-    /// Works out which project QA should start, by reading the repo rather than letting the
-    /// model guess a path. Returns null when the checkout holds nothing runnable.
+    /// Finds the application to start by reading the repo. A project qualifies if it is runnable
+    /// (a Web or BlazorWebAssembly SDK, or OutputType Exe) and is not a test project, and it is
+    /// chosen if nothing else references it — references from test projects are ignored, since
+    /// the test project references the app. The URL comes from launchSettings.json. Returns null
+    /// when the checkout holds nothing runnable; ties break on the shortest path.
     /// </summary>
-    /// <remarks>
-    /// A guess is not merely unreliable, it is undetectable: `dotnet run --project` on a path
-    /// that does not exist fails with a build error, which reads like a broken project rather
-    /// than a bad argument. There is no fixed layout to fall back on either — one project here
-    /// is `src/BillSplitter.Web`, another is `src/Weatherboard` — so the answer has to be derived.
-    ///
-    /// Three signals, in the order a person would use them:
-    /// 1. **Runnable, not a test.** A Web/BlazorWebAssembly SDK, or OutputType Exe. A test
-    ///    project can be Exe too, so Microsoft.NET.Test.Sdk excludes it — running it would run
-    ///    the tests, not the product.
-    /// 2. **Nothing depends on it.** The startup project is the root of the reference graph.
-    ///    References from TEST projects are ignored on purpose: the test project references the
-    ///    web app, so counting them would make the web app look depended-upon and leave no root
-    ///    at all — the one subtlety that decides whether this works.
-    /// 3. **launchSettings for the URL.** `.csproj` cannot say which port the app binds;
-    ///    Properties/launchSettings.json can, and it is what `dotnet run` itself reads.
-    /// </remarks>
     public static RunTarget? Discover(string checkoutDir)
     {
         if (!Directory.Exists(checkoutDir)) return null;
@@ -442,8 +397,7 @@ public sealed partial class AgentToolset : IDisposable
 
         var roots = candidates.Where(p => !dependedUpon.Contains(p.Path)).ToList();
 
-        // No root at all means a reference cycle or an unusual layout; fall back to the plain
-        // candidate list rather than refusing to answer. Shortest path breaks any remaining tie.
+        // With no root — a reference cycle, or an unusual layout — fall back to every candidate.
         var ranked = (roots.Count > 0 ? roots : candidates)
             .OrderBy(p => p.Path.Length)
             .ToList();
@@ -455,7 +409,10 @@ public sealed partial class AgentToolset : IDisposable
             [.. ranked.Skip(1).Select(p => Relative(checkoutDir, p.Path))]);
     }
 
-    /// <summary>One project's three facts. A file that will not parse is simply not runnable.</summary>
+    /// <summary>
+    /// Reads one .csproj: its absolute path, whether it is runnable, whether it is a test project,
+    /// and the projects it references. A file that will not parse is reported as not runnable.
+    /// </summary>
     private static (string Path, bool Runnable, bool IsTest, List<string> References) Describe(string csproj)
     {
         XDocument doc;
@@ -475,8 +432,7 @@ public sealed partial class AgentToolset : IDisposable
             .Select(p => p.Attribute("Include")?.Value ?? "")
             .Any(id => id.Equals("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase));
 
-        // Include paths are written with Windows separators by every template; resolve them to
-        // absolute paths so the graph compares like with like whatever wrote the file.
+        // Resolved to absolute paths, and Windows separators normalised, so the graph compares.
         var dir = Path.GetDirectoryName(csproj)!;
         var references = doc.Descendants("ProjectReference")
             .Select(r => r.Attribute("Include")?.Value)
@@ -488,9 +444,8 @@ public sealed partial class AgentToolset : IDisposable
     }
 
     /// <summary>
-    /// The URL `dotnet run` would serve on, from the profile it actually uses. Profiles for IIS
-    /// or Docker are skipped (commandName is not "Project"), and http is preferred over https so
-    /// a development certificate cannot fail the first request.
+    /// The URL from the project's launchSettings.json, or null if it declares none. Only profiles
+    /// `dotnet run` itself uses are read (commandName "Project"), and http is preferred over https.
     /// </summary>
     private static string? UrlFromLaunchSettings(string csproj)
     {
@@ -520,18 +475,18 @@ public sealed partial class AgentToolset : IDisposable
         return null;
     }
 
+    /// <summary>A path relative to the checkout root, with forward slashes.</summary>
     private static string Relative(string root, string full) =>
         Path.GetRelativePath(root, full).Replace('\\', '/');
 
-    /// <summary>`Now listening on: http://localhost:5161` and every equivalent a server prints.</summary>
+    /// <summary>Matches a loopback URL in a server's output, capturing its scheme and port.</summary>
     [GeneratedRegex(@"\b(https?)://(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):(\d{2,5})(?:/\S*)?",
         RegexOptions.IgnoreCase)]
     private static partial Regex ListeningUrl();
 
     /// <summary>
-    /// Nothing an agent started may outlive its run. Called from the agent loop's finally, so a
-    /// budget stop, a crash or a Ctrl-C leaves no orphaned server holding a port — the failure
-    /// that would otherwise poison every following QA round on the same machine.
+    /// Stops every server this instance started. Called however the run ends, so no server
+    /// outlives it holding a port.
     /// </summary>
     public void Dispose()
     {

@@ -14,9 +14,9 @@ namespace Forge.Core.Agents;
 public sealed record ToolOutcome(string Observation, EndReason? End = null)
 {
     /// <summary>
-    /// Whether the call was rejected rather than performed: an unavailable tool, a
-    /// jail or scope violation, or a malformed argument. A tool that ran and
-    /// reported failure — a non-zero `run` exit — is not refused.
+    /// Whether the call was rejected rather than performed: an unavailable tool, a jail or
+    /// scope violation, or a malformed argument. A tool that ran and reported failure — a
+    /// non-zero `run` exit — is not refused.
     /// </summary>
     public bool Refused =>
         Observation.AsSpan().TrimStart() is var text
@@ -25,12 +25,10 @@ public sealed record ToolOutcome(string Observation, EndReason? End = null)
 }
 
 /// <summary>
-/// The v1 tool surface (spec §4.1), bound to one agent's workspace. Which tools
-/// exist is the recipe's business, not this class's — so a role gains or loses a
-/// capability by editing data. Every path goes through the PathJail and the
-/// role's PathScope, and every command through the ToolExecutor, so a model that
-/// asks for something out of bounds gets a refusal as an observation rather than
-/// an effect.
+/// Implements every tool, bound to one agent's workspace. Which of them the agent may call is
+/// the recipe's business, checked on dispatch. Every path goes through the PathJail and the
+/// role's PathScope, and every command through the ToolExecutor, so an out-of-bounds call
+/// comes back as a refusal rather than an effect.
 /// </summary>
 public sealed partial class AgentToolset(
     ToolExecutor executor,
@@ -39,8 +37,13 @@ public sealed partial class AgentToolset(
     TaskRecord? task = null,
     ForgeLogger? logger = null)
 {
+    /// <summary>How much of one observation is shown to the agent.</summary>
     private const int MaxObservationChars = 8_000;
+
+    /// <summary>How many lines read_file returns when given no range.</summary>
     private const int DefaultReadLines = 400;
+
+    /// <summary>How much of a tool call or its result appears on a log line.</summary>
     private const int LogSummaryChars = 200;
 
     private readonly PathJail _jail = executor.Jail;
@@ -49,28 +52,28 @@ public sealed partial class AgentToolset(
     private readonly MilestoneRepository _milestones = new(connection);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
 
-    /// <summary>Last note the agent wrote, for the harness's end-of-run fallback.</summary>
+    /// <summary>The last note the agent wrote, used as the resume note when the run ends.</summary>
     public string? LastProgressNote { get; private set; }
 
     /// <summary>What the agent last said to the client, when it is a chat role.</summary>
     public string? LastReply { get; private set; }
 
-    /// <summary>The review verdict, when this run was a Principal review. Null until decided.</summary>
+    /// <summary>The review verdict; null until the reviewer decides, and on any non-review run.</summary>
     public bool? ReviewApproved { get; private set; }
 
-    /// <summary>The review's reason (on changes requested) or note (on approval).</summary>
+    /// <summary>The reviewer's reason for changes, or its approval note.</summary>
     public string? ReviewFeedback { get; private set; }
 
-    /// <summary>A rule the reviewer wants added to CONVENTIONS.md for a recurring mistake.</summary>
+    /// <summary>A rule the reviewer asked to append to CONVENTIONS.md, if it gave one.</summary>
     public string? ReviewConvention { get; private set; }
 
-    /// <summary>Set when a bug was rejected (at triage or in review) — the reason it is not a real defect.</summary>
+    /// <summary>Why a bug was rejected, set when one was at triage or in review.</summary>
     public string? RejectedBugReason { get; private set; }
 
     /// <summary>
-    /// One line per tool, rendered into the prompt so docs cannot drift from code. The QA-only
-    /// tools are described next to their implementation in QaTools.cs and merged in here, so
-    /// this stays the single list every recipe is validated against.
+    /// Every tool the harness implements, with its summary and arguments. Rendered into the
+    /// prompt from a recipe's tool list, and the list every recipe is validated against. The
+    /// QA-only tools are documented beside their implementation in QaTools.cs and merged here.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, ToolDoc> Catalogue = QaCatalogue.Concat(
         new Dictionary<string, ToolDoc>(StringComparer.Ordinal)
@@ -265,12 +268,9 @@ public sealed partial class AgentToolset(
                 _ => await QaToolAsync(call, ct).ConfigureAwait(false),
             };
         }
-        // Refusals are observations, not crashes: the agent should see the boundary
-        // and correct, exactly as it would see a compiler error.
+        // Refusals come back as observations, so the agent sees the boundary and can correct.
         catch (ToolJailViolationException ex) { return new ToolOutcome($"REFUSED: {ex.Message}"); }
-        // Any other tool failure — a malformed argument, a bad requirement ref, an
-        // I/O error — is an observation the agent can correct, never a crash of the
-        // run. Cancellation is the one exception: it means the harness is stopping.
+        // Any other failure is also an observation. Cancellation is not: the harness is stopping.
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new ToolOutcome($"ERROR: {ex.Message}");
@@ -278,9 +278,8 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// One log line per tool call — the narrative of what the agent actually did.
-    /// A refused or errored call is logged as tool.refused so the log shows the
-    /// boundary being hit, not just successes.
+    /// Logs one line per tool call, under the tool's own event type or tool.refused when the
+    /// call was rejected.
     /// </summary>
     private void LogOutcome(ToolCall call, ToolOutcome outcome)
     {
@@ -291,10 +290,8 @@ public sealed partial class AgentToolset(
             return;
         }
 
-        // A refusal without the text that caused it is undiagnosable: the reason
-        // names the argument the harness wanted, never the shape the model actually
-        // emitted. Carry a collapsed snippet of the original block so a malformed
-        // call can be read straight out of the log.
+        // A refusal carries a snippet of the call that caused it, so the log shows what was
+        // actually emitted and not only what the harness wanted.
         var call_ = Collapse(call.Raw);
         _log.Event(EventType.ToolRefused,
             call_.Length == 0 ? summary : $"{summary} | emitted: {call_}");
@@ -316,7 +313,7 @@ public sealed partial class AgentToolset(
         return line.Length <= LogSummaryChars ? line : line[..LogSummaryChars] + "…";
     }
 
-    /// <summary>Jail first (can it be reached?), then role scope (may this role reach it?).</summary>
+    /// <summary>Resolves a path inside the jail, then checks it against the role's scope.</summary>
     private string Resolve(string relativePath)
     {
         var full = _jail.Resolve(relativePath);
@@ -388,13 +385,10 @@ public sealed partial class AgentToolset(
     {
         var path = Resolve(call.Arg("path"));
         var content = call.Args.TryGetValue("content", out var c) ? c : "";
-        // The tag protocol eats the layout newline before </arg>; restore the
-        // conventional trailing newline so files are not written without one.
+        // The tag protocol eats the newline before </arg>; restore the trailing one.
         if (content.Length > 0 && !content.EndsWith('\n')) content += "\n";
 
-        // The contract is the one file the harness itself reads, so a broken one is
-        // refused here rather than discovered by the tasks and tests built from it.
-        // Same shape as a compiler error: the author sees it and fixes it in this run.
+        // The contract is refused at the point of writing, so the author can fix it in this run.
         if (ContractRejection(path, content) is { } rejection) return new ToolOutcome(rejection);
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -405,8 +399,8 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// Why a write to the OpenAPI contract is being refused, or null to let it through.
-    /// Only that one path is checked; every other file is the author's business.
+    /// Validates a write to the OpenAPI contract path and returns why it is refused, or null to
+    /// let it through. Every other path is written unchecked.
     /// </summary>
     private string? ContractRejection(string absolutePath, string content)
     {
@@ -433,29 +427,25 @@ public sealed partial class AgentToolset(
         if (result.Stdout.Length > 0) sb.Append("\n--- stdout ---\n").Append(result.Stdout.TrimEnd());
         if (result.Stderr.Length > 0) sb.Append("\n--- stderr ---\n").Append(result.Stderr.TrimEnd());
 
-        // Remember the exact command and its real output. This is the evidence file_bug
-        // attaches verbatim, so a filed bug carries a trace the harness captured — not a
-        // description the model typed (which is how a fabricated "actual" slips in).
+        // Records the command and its real output as the evidence file_bug attaches verbatim.
         _lastRunTrace = sb.ToString();
         _ranCommands.Add(command);
         return new ToolOutcome(Truncate(sb.ToString()));
     }
 
-    /// <summary>The command + real output of the most recent run() — evidence for file_bug.</summary>
+    /// <summary>The most recent observation the harness captured, attached by file_bug.</summary>
     private string? _lastRunTrace;
 
-    /// <summary>Every command run() has executed this instance — what how_to_run is checked against.</summary>
+    /// <summary>Commands this instance really executed; how_to_run accepts only these.</summary>
     private readonly HashSet<string> _ranCommands = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Tasks created by create_task in THIS instance — what break_and_relink accepts as
-    /// replacements. Same rule as how_to_run and file_bug: a verdict may only cite work the
-    /// harness watched happen, so a split cannot retire a task in favour of pre-existing ones
-    /// it merely nominated.
+    /// Tasks create_task made in this instance; break_and_relink accepts only these as
+    /// replacements, so a split cannot retire a task in favour of pre-existing ones.
     /// </summary>
     private readonly HashSet<long> _createdTaskIds = [];
 
-    /// <summary>The milestone plan is a real table, not prose in a markdown file the harness can't query.</summary>
+    /// <summary>Adds a milestone row to the plan and returns its id.</summary>
     private ToolOutcome AddMilestone(ToolCall call)
     {
         var name = call.Arg("name");
@@ -470,11 +460,9 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// The Principal breaks the design into board tasks (spec §7). Tasks are born
-    /// `created`, not `ready`: nothing is claimable until the client signs off on
-    /// the design, which is the gate that flips them to ready. A malformed packet
-    /// (empty title/objective, budget ≤ 0, bad requirement ref) is refused by the
-    /// factory and comes back as an ERROR the Principal can correct.
+    /// Puts a task on the board, born `created` and released to `ready` by the caller that
+    /// decomposed the Feature. Refuses a malformed packet, or a contract_ops id the contract
+    /// does not define, as an ERROR the Principal can correct.
     /// </summary>
     private ToolOutcome CreateTask(ToolCall call)
     {
@@ -560,11 +548,8 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// The canonical requirement ref is <c>file.md@vN</c>, but a model will often
-    /// reach for the natural path (<c>docs/requirements/01-todos.md</c>) or omit
-    /// the version. Meet it there: strip any directory, and when the version is
-    /// missing, read it from the requirement file's "Version: N" line rather than
-    /// rejecting the whole task over a formatting nicety.
+    /// Parses a requirement ref, accepting the forms a model tends to write: any directory
+    /// prefix is stripped, and a missing version is read from the file's "Version: N" line.
     /// </summary>
     private RequirementsRef NormalizeRequirementRef(string reqRef)
     {
@@ -595,12 +580,9 @@ public sealed partial class AgentToolset(
         return null;
     }
 
-    /// <summary>A DAG edge: the task waits on its dependency. The serial worker respects it (spec §7).</summary>
     /// <summary>
-    /// The Principal's triage verdict: hand a blocked/out-of-budget task back to the
-    /// engineer with direction. Resets the spend so the redirected attempt starts
-    /// fresh (a new directed try, not a continuation), optionally with a new budget,
-    /// and re-readies the task. Ends the triage instance.
+    /// Hands a task being triaged back to the engineer with guidance, optionally with a new
+    /// budget, and returns it to `ready`. Ends the triage instance.
     /// </summary>
     private ToolOutcome Redirect(ToolCall call)
     {
@@ -628,16 +610,9 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// QA records a failure as a bug for the Principal to triage. The bug is born in
-    /// `triage` (not on the engineer's board yet) and carries structured repro /
-    /// expected / actual so a triager and, later, a fixer both know exactly what broke.
+    /// Records the command that starts the app, for the client to be told at handover. Refused
+    /// unless it is a command this instance really ran.
     /// </summary>
-    /// <summary>Records the command that starts the app, for the client to be told.</summary>
-    /// <remarks>
-    /// Refused unless the command was one QA actually ran, on the same principle as
-    /// <see cref="FileBug"/>: instructions the client will follow must be observed, not
-    /// recalled. The harness falls back to <see cref="Board.DeliveryPlan"/> when unset.
-    /// </remarks>
     private ToolOutcome HowToRun(ToolCall call)
     {
         var command = call.Arg("command");
@@ -651,12 +626,13 @@ public sealed partial class AgentToolset(
         return new ToolOutcome($"Recorded: the client will be told to start the project with `{command}`.");
     }
 
+    /// <summary>
+    /// Records a failure as a bug for the Principal to triage, born in `triage` with the
+    /// harness's most recent captured observation attached as the evidence. Refused when this
+    /// instance has observed nothing.
+    /// </summary>
     private ToolOutcome FileBug(ToolCall call)
     {
-        // Evidence is not optional and not the model's to narrate: a bug must be backed by
-        // something QA actually did to the project — a command it ran, a server it started, a
-        // request it sent — whose real output the harness captured. No check, no bug; this is
-        // what makes a fabricated "actual" impossible.
         if (_lastRunTrace is null)
             return new ToolOutcome(
                 "ERROR: file_bug needs evidence. Perform the check that demonstrates the failure first — run() "
@@ -692,7 +668,7 @@ public sealed partial class AgentToolset(
         return new ToolOutcome($"Bug {bug.Id} filed: {bug.Title} (triage — the Principal decides).");
     }
 
-    /// <summary>The Principal's verdict: this filed bug is real. Release it to the board for an engineer.</summary>
+    /// <summary>Accepts a bug in triage and releases it to the board for an engineer.</summary>
     private ToolOutcome AcceptBug(ToolCall call)
     {
         if (task is null) return new ToolOutcome("ERROR: accept_bug needs a bug to act on; this run has none.");
@@ -709,14 +685,12 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// Verdict that a filed bug is not a real defect — kept on record with the reason,
-    /// never re-filed. Reachable both at triage (before any work) and during review of a
-    /// bug-fix: if the reviewer finds the reported defect isn't real, it rejects the bug
-    /// instead of looping request_changes on a fix for a non-bug.
+    /// Rejects a bug as not a real defect, keeping it on record with the reason so it is never
+    /// re-filed. Called at triage, during review of a bug-fix, or by the PM with an explicit id.
     /// </summary>
     private ToolOutcome RejectBug(ToolCall call)
     {
-        // Target the current task (triage/review) or an explicit id (the PM, from chat).
+        // The current task at triage or review; an explicit id when the PM calls it from chat.
         if ((call.OptionalInt("task") ?? task?.Id) is not { } bugId || _tasks.Find(bugId) is not { } bug)
             return new ToolOutcome("ERROR: reject_bug needs a bug — pass a task id, or run it on a bug task.");
         if (bug.Type != TaskType.Bug)
@@ -732,15 +706,12 @@ public sealed partial class AgentToolset(
         ResolveEscalations(bugId);
         LastProgressNote = $"Bug rejected: {reason}";
         RejectedBugReason = reason;
-        // Conversational for the PM (it replies to the client next); terminal for a triage/review instance.
+        // The PM keeps its turn to reply to the client; a triage or review instance ends here.
         return new ToolOutcome($"Bug {bugId} rejected and kept on record; QA will not re-file it.",
             recipe.Role == AgentRole.Pm ? null : EndReason.Done);
     }
 
-    /// <summary>
-    /// The PM's other resolution for a human-reviewed bug: send it back to the Principal
-    /// for another triage with the client's guidance attached, instead of rejecting it.
-    /// </summary>
+    /// <summary>Sends a bug back to the Principal for another triage with the client's guidance.</summary>
     private ToolOutcome RetriageBug(ToolCall call)
     {
         if (call.OptionalInt("task") is not { } bugId || _tasks.Find(bugId) is not { } bug)
@@ -804,7 +775,7 @@ public sealed partial class AgentToolset(
         new($"ERROR: {tool} needs the id of a task waiting on the client. Waiting now: " +
             $"{string.Join(", ", _tasks.AwaitingClient().Select(t => t.Id))}.");
 
-    /// <summary>Mark any pending human-facing escalation for a task resolved, so it stops surfacing.</summary>
+    /// <summary>Marks any escalation pending on the PM for this task resolved.</summary>
     private void ResolveEscalations(long taskId)
     {
         foreach (var m in _messages.Pending("pm").Concat(_messages.Pending("client")))
@@ -812,6 +783,10 @@ public sealed partial class AgentToolset(
                 _messages.SetStatus(m.Id, MessageStatus.Received);
     }
 
+    /// <summary>
+    /// Records that a task waits on another. The worker will not claim it until the dependency
+    /// is done, and an edge that would close a cycle is refused.
+    /// </summary>
     private ToolOutcome AddDependency(ToolCall call)
     {
         var taskId = call.OptionalInt("task") ?? throw new ToolCallException("add_dependency needs 'task'.");
@@ -825,27 +800,13 @@ public sealed partial class AgentToolset(
     private const int SplitDepthCap = 2;
 
     /// <summary>
-    /// The triage verdict for a task that is simply too large: replace it with the tasks the
-    /// Principal has just created, and cancel it.
+    /// Replaces an oversized task with the tasks the Principal has just created, and cancels it.
+    /// The harness does the rewiring: every dependent of the old task waits on all the
+    /// replacements, and every replacement inherits all of its dependencies, so the graph is
+    /// correct whether the replacements run in sequence or in parallel. The old task is
+    /// cancelled rather than deleted, keeping its ledger rows attributable. Every check runs
+    /// before the first write, so a refusal leaves the graph untouched.
     /// </summary>
-    /// <remarks>
-    /// The graph surgery is the harness's, not the model's — that is the whole reason this is
-    /// one tool rather than a run of add_dependency calls. Rewiring is deliberately
-    /// conservative: every dependent of the old task waits on ALL the replacements, and every
-    /// replacement inherits ALL of the old task's dependencies. The harness cannot know whether
-    /// the replacements are sequential or parallel — the Principal expresses that itself with
-    /// add_dependency between them — and the conservative graph is correct either way, at the
-    /// cost of some redundant edges.
-    ///
-    /// The old task is CANCELLED, never deleted: token_ledger, messages, discussions and
-    /// agent_instances all reference tasks(id), and foreign keys are on, so a delete would
-    /// either fail or strand the spend that motivated the split — money the board could no
-    /// longer attribute. Cancelled reads as gone everywhere the client looks, and the ledger
-    /// stays intact.
-    ///
-    /// Every check runs before the first write. The alternative is a half-rewired graph on a
-    /// refusal, which is worse than the deadlock this tool exists to prevent.
-    /// </remarks>
     private ToolOutcome BreakAndRelink(ToolCall call)
     {
         if (task is null) return new ToolOutcome("ERROR: break_and_relink needs a task; this run has none.");
@@ -868,8 +829,7 @@ public sealed partial class AgentToolset(
         if (ids.Contains(-1))
             return new ToolOutcome("ERROR: new_tasks must be a comma-separated list of task ids, e.g. \"7,8,9\".");
 
-        // Two or more, and created in this turn: a split into one task is a redirect with extra
-        // steps, and a split into none would cancel the work outright.
+        // At least two, and created in this instance.
         if (ids.Count < 2)
             return new ToolOutcome(
                 $"ERROR: break_and_relink needs at least two replacement tasks; got {ids.Count}. "
@@ -882,8 +842,7 @@ public sealed partial class AgentToolset(
                 $"ERROR: task(s) {string.Join(", ", foreign)} were not created in this triage. "
                 + "break_and_relink only accepts replacements you have just created with create_task.");
 
-        // Pre-check the edges the rewire will add. AddDependency refuses a cycle mid-way
-        // through, and a half-rewired graph is worse than no rewire at all.
+        // Pre-check every edge the rewire will add, so a cycle is refused before any write.
         var dependents = _tasks.DependentsOf(task.Id).Where(d => !ids.Contains(d)).ToList();
         var dependencies = _tasks.DependenciesOf(task.Id).Where(d => !ids.Contains(d)).ToList();
         foreach (var dependent in dependents)
@@ -921,7 +880,7 @@ public sealed partial class AgentToolset(
             EndReason.Done);
     }
 
-    /// <summary>Review verdict: the diff is good. The harness reads the verdict and merges.</summary>
+    /// <summary>Approves the diff for merge and ends the review.</summary>
     private ToolOutcome Approve(ToolCall call)
     {
         ReviewApproved = true;
@@ -930,9 +889,8 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// Review verdict: send it back. The reason reaches the engineer; an optional
-    /// convention is the self-improving loop (spec §7) — the harness appends it to
-    /// CONVENTIONS.md so the same mistake is ruled out for every future task.
+    /// Sends the work back to the engineer with a reason, and ends the review. An optional
+    /// convention is appended to CONVENTIONS.md on trunk by the caller.
     /// </summary>
     private ToolOutcome RequestChanges(ToolCall call)
     {
@@ -943,9 +901,8 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// The client-facing turn. Recorded as a message so the conversation survives
-    /// the instance that produced it — chat history lives in the DB, never in a
-    /// transcript held in memory (Principle 2).
+    /// Says something to the client and ends the turn. Recorded as a message row, so the
+    /// conversation survives the instance that produced it.
     /// </summary>
     private ToolOutcome Reply(ToolCall call)
     {
@@ -957,8 +914,8 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>
-    /// Persisted immediately, not at end of run: the note is the only thing a
-    /// fresh instance inherits after a kill, so it must survive one.
+    /// Saves the agent's progress note, written to the task immediately so it survives a kill.
+    /// It is the only state a fresh instance inherits besides the workspace.
     /// </summary>
     private ToolOutcome ProgressNote(ToolCall call)
     {
@@ -981,9 +938,7 @@ public sealed partial class AgentToolset(
     {
         var reason = call.Arg("reason");
         var from = SnakeCaseEnum.ToSnakeCase(recipe.Role);
-        // Escalation climbs one rung: engineer/qa/researcher → principal (the author
-        // of the DAG and contracts, who can re-scope or re-budget), principal → pm
-        // (only a requirements/scope question that needs the client), pm → client.
+        // One rung up: engineer/qa/researcher → principal, principal → pm, pm → client.
         var to = recipe.Role switch
         {
             AgentRole.Pm => "client",
@@ -996,7 +951,7 @@ public sealed partial class AgentToolset(
         return new ToolOutcome($"Escalation sent to the {to}; stopping here.", EndReason.Escalated);
     }
 
-    /// <summary>Tool output is untrusted and unbounded; the context window is not.</summary>
+    /// <summary>Caps one observation at <see cref="MaxObservationChars"/>.</summary>
     private static string Truncate(string text) =>
         text.Length <= MaxObservationChars
             ? text
