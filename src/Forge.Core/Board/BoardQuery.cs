@@ -16,11 +16,7 @@ public sealed record ChatLine(long Id, string From, string Text, string? At);
 /// <summary>A task the build has stopped on until the client answers.</summary>
 public sealed record StuckTask(long Id, string Title, string? Note);
 
-/// <summary>
-/// Everything the progress page renders, in one snapshot. Assembled per poll — the
-/// board is a read model over the same tables the orchestrator writes, never a
-/// second copy of the truth, so it cannot drift from what actually happened.
-/// </summary>
+/// <summary>Everything the progress page renders, assembled fresh on every poll.</summary>
 public sealed record BoardSnapshot(
     string Project,
     string State,
@@ -49,16 +45,15 @@ public sealed record BoardSnapshot(
 }
 
 /// <summary>
-/// The board's read side. Every figure is derived at query time from tasks,
-/// milestones, token_ledger and messages; nothing here is stored or cached, so the
-/// page cannot show a number the ledger disagrees with.
+/// Builds the board's snapshot. Every figure is derived at query time from tasks, milestones,
+/// token_ledger and messages; nothing is stored or cached, so the page cannot disagree with
+/// the ledger.
 /// </summary>
 public sealed class BoardQuery(IDbConnection conn, string project)
 {
     /// <summary>
-    /// Cost attributed to a set of tasks: their own ledger rows plus those of any
-    /// children. A Feature is a parent the Principal decomposes, so its real cost is
-    /// the subtree's, not the parent row's — which is usually near zero.
+    /// What a set of tasks cost, including their children's rows. A Feature's own row is
+    /// near zero; its real cost is its subtree's.
     /// </summary>
     private const string SubtreeCost = """
         COALESCE((
@@ -68,9 +63,10 @@ public sealed class BoardQuery(IDbConnection conn, string project)
         ), 0)
         """;
 
-    /// <summary>What the dropdown needs and nothing more — the full snapshot pulls
-    /// chat, agents and the reconciliation buckets, which the project LIST never shows,
-    /// and it is queried for every project on every poll.</summary>
+    /// <summary>
+    /// The few fields the project dropdown shows. Kept separate from the full snapshot, which
+    /// is far more work and is queried for every project on every poll.
+    /// </summary>
     public (string State, decimal TotalCostUsd, decimal? BudgetUsd, string? Provider) Summary()
     {
         var settings = new ProjectSettings(conn);
@@ -89,17 +85,12 @@ public sealed class BoardQuery(IDbConnection conn, string project)
         var total = LedgerRepository.FromNanos(
             conn.ExecuteScalar<long>("SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger"));
 
-        // Calls with no task at all: the PM conversation, the design phase, QA rounds.
-        // They belong to the project rather than to any feature, and omitting them
-        // would leave the client with a total nobody can account for.
+        // Calls with no task at all: the PM conversation, design, and QA rounds.
         var projectLevel = LedgerRepository.FromNanos(conn.ExecuteScalar<long>(
             "SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger WHERE task_id IS NULL"));
 
-        // Task work that sits under no feature THE PAGE SHOWS. The features section
-        // excludes cancelled/rejected features, so their subtrees — and their own
-        // ledger rows — must land here instead: money that appears in the total but in
-        // no section is money the client cannot account for, which is the one property
-        // this page must never lose. (Weatherboard really has a cancelled feature.)
+        // Task work under no feature the page shows, including the subtrees of cancelled and
+        // rejected features. Every dollar in the total appears in one section or another.
         var unparented = LedgerRepository.FromNanos(conn.ExecuteScalar<long>("""
             SELECT COALESCE(SUM(l.cost_nanos),0)
             FROM token_ledger l
@@ -122,11 +113,8 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             settings.BudgetUsd,
             settings.Provider,
             Planned: milestones.Count > 0 || features.Count > 0,
-            // The spec is shown once the PM puts it to the client — either as a pending
-            // proposal awaiting approval, or as a Feature already approved. Before then
-            // the requirements are still being drafted and revised in conversation, and
-            // showing a half-written spec would invite approval of something the PM has
-            // not committed to.
+            // Shown once the PM has put it to the client: a pending proposal, or an approved
+            // Feature. Before that the requirements are still being drafted.
             SpecReady: proposal is not null || conn.ExecuteScalar<long>(
                 "SELECT COUNT(*) FROM tasks WHERE type = 'feature'") > 0,
             milestones,
@@ -158,10 +146,8 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             """).ToList();
 
     /// <summary>
-    /// Milestone state is DERIVED from the tasks attached to it, never read from
-    /// milestones.status — the same rule routing follows (CLAUDE.md): two sources of
-    /// truth drift, and a status column nothing advances is worse than no column.
-    /// A milestone with no tasks yet is pending, not complete.
+    /// A milestone's state, derived from its tasks: done when all of them are, active when any
+    /// is in flight or finished, pending otherwise. A milestone with no tasks is pending.
     /// </summary>
     private IReadOnlyList<BoardItem> Milestones() =>
         conn.Query<(long Id, string Name, long Cost, int Done, int Total, int Active)>($"""
@@ -214,18 +200,10 @@ public sealed class BoardQuery(IDbConnection conn, string project)
     };
 
     /// <summary>
-    /// How far the plan has got, from the data alone — "planning" before there is anything to
-    /// build, "complete" once every planned item is done, "building" in between.
+    /// How far the plan has got: "planning" before there is anything to build, "complete" once
+    /// every planned item is done, "building" in between. Milestones holding no tasks are
+    /// skipped, since an empty milestone is a row in the plan rather than outstanding work.
     /// </summary>
-    /// <remarks>
-    /// Milestones holding no tasks are skipped. An empty milestone is a row in the plan, not
-    /// outstanding work, and treating it as pending kept a finished project reading "paused"
-    /// forever: HabitTracker shipped every task and was delivered while the PM's two duplicate,
-    /// task-less milestones held the whole project short of complete.
-    ///
-    /// Cancelled and rejected tasks need no handling here — the milestone and feature queries
-    /// already leave them out of their totals, so work that was dropped cannot hold a project open.
-    /// </remarks>
     private static string ProjectState(IReadOnlyList<BoardItem> milestones, IReadOnlyList<BoardItem> features)
     {
         if (milestones.Count == 0 && features.Count == 0) return "planning";
@@ -242,10 +220,7 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             .Select(r => new AgentSpend(SnakeCaseEnum.ToSnakeCase(r.Role), r.Calls, r.CostUsd))
             .ToList();
 
-    /// <summary>
-    /// The client's conversation with the PM. Only the two directions the client is
-    /// party to — agent-to-agent traffic is not their business and would read as noise.
-    /// </summary>
+    /// <summary>The client's conversation with the PM. Agent-to-agent traffic is left out.</summary>
     private IReadOnlyList<ChatLine> Chat(int limit) =>
         conn.Query<(long Id, string From, string Payload, string CreatedAt)>("""
             SELECT id, from_agent, payload, created_at FROM messages

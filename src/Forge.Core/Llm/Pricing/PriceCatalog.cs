@@ -5,11 +5,9 @@ using Forge.Core.Logging;
 namespace Forge.Core.Llm.Pricing;
 
 /// <summary>
-/// The cached price table, wrapped in our own envelope rather than trusted to the
-/// file's mtime — a FORGE_HOME gets copied, restored from backup and moved between
-/// machines, and every one of those resets mtime while leaving the prices as stale
-/// as they were. <c>Models</c> holds the upstream payload verbatim so the snapshot
-/// stays diffable against the source.
+/// A cached price table with its own freshness stamp, rather than relying on the file's mtime,
+/// which copying or restoring a data root resets. <c>Models</c> holds the upstream payload
+/// verbatim, so a snapshot stays diffable against its source.
 /// </summary>
 public sealed record PriceSnapshot
 {
@@ -24,17 +22,10 @@ public sealed record PriceSnapshot
 }
 
 /// <summary>
-/// Model prices, resolved once and cached: in memory for the process, on disk for
-/// the machine.
-///
-/// Prices are a property of the world, not of a project, so the disk copy lives at
-/// the data root and is shared by every project — a copy per project.db would drift
-/// five ways on a machine with five projects.
-///
-/// The in-memory copy is deliberately loaded once and held for the life of the
-/// process. A `forge run --loop` can run for hours, and letting rates change
-/// underneath it would leave a single project's ledger internally inconsistent —
-/// worse than being a few hours out of date.
+/// Resolves a model id to its rates, from a table cached in memory for the process and on disk
+/// at the data root for the machine. The disk copy is shared by every project, and the
+/// in-memory copy is held for the life of the process, so rates cannot change under a run in
+/// progress.
 /// </summary>
 public sealed class PriceCatalog
 {
@@ -69,13 +60,9 @@ public sealed class PriceCatalog
     public PriceSnapshot Snapshot => _snapshot ??= Load();
 
     /// <summary>
-    /// The rate card for one model id, as the provider names it.
-    ///
-    /// A miss forces one refresh before it is allowed to fail: the likeliest reason
-    /// a cached table lacks a model is that the model is newer than the table, and
-    /// that case should heal itself rather than block a run. A miss that survives a
-    /// fresh fetch is a real one, and throwing beats returning zero — an unpriced
-    /// model at $0 is a budget that never trips.
+    /// The rates for one model id, as the provider names it. A miss forces one refresh before
+    /// it is allowed to fail, since the usual cause is a model newer than the table. A miss
+    /// that survives the refresh throws rather than returning zero.
     /// </summary>
     public ModelPrice For(string model)
     {
@@ -98,7 +85,7 @@ public sealed class PriceCatalog
 
     public bool IsStale() => Age() > _ttl;
 
-    /// <summary>Force a fetch regardless of TTL (`forge prices update`).</summary>
+    /// <summary>Fetches a fresh table regardless of the TTL.</summary>
     public PriceSnapshot Update() => Refresh() ?? Snapshot;
 
     private PriceSnapshot Load()
@@ -111,10 +98,7 @@ public sealed class PriceCatalog
         _snapshot = cached; // so a refresh can send the stored ETag
         if (Refresh() is { } refreshed) return refreshed;
 
-        // A refresh that fails over a table we already have is not worth halting a
-        // build for: rates move rarely, and a day-old rate is approximately right.
-        // The genuinely dangerous staleness — a model missing entirely — is caught
-        // in For(), which refetches before it refuses.
+        // A failed refresh falls back to the stale snapshot; a missing model is caught in For().
         if (cached is not null)
         {
             _log.Message($"Price refresh failed; continuing on the cached snapshot " +
