@@ -81,16 +81,19 @@ flowchart TD
    Feature — the single handoff to engineering.
 2. **Design.** A Principal instance turns the requirements into project
    structure, contracts, conventions, and a task DAG of database rows with
-   dependency edges. A coverage gate checks mechanically that every
-   requirement file is claimed by at least one task.
+   dependency edges. The HTTP contract is an OpenAPI document; three coverage
+   gates check mechanically that every requirement file is claimed by at least
+   one task, that every requirement is served by at least one contract
+   operation, and that every operation is claimed by at least one task.
 3. **Build.** The scheduler hands claimable tasks to Engineer agents, one task
    per isolated workspace.
 4. **Integration.** Each finished task passes commit → CI → review → merge.
    Failures return to the engineer with feedback; a task never advances on an
    agent's own claim.
-5. **Acceptance.** Once the board is quiescent, QA exercises the built project
-   through its CLI or HTTP surface and files a bug per unmet requirement. Bugs
-   are triaged and re-enter the build loop.
+5. **Acceptance.** Once the board is quiescent, QA writes a black-box
+   acceptance suite covering every contract operation, and the harness runs it
+   against a started instance. A red suite becomes a bug; bugs are triaged and
+   re-enter the build loop.
 6. **Completion.** A QA round that produces no new accepted work ends the
    project.
 
@@ -126,14 +129,23 @@ descend.
 
 ```
 PROJECT.md              one-pager: what, why, current milestone
-CONVENTIONS.md          the rules — under a page; grows via review write-backs
+CONVENTIONS.md          the rules; seeded from Forge's base file at project creation,
+                        extended by the Principal per project and by review write-backs
 STATUS.md               PM-maintained; answers client status queries at zero tokens
 docs/
   requirements/         INDEX.md + NN-<feature>.md, versioned; PM-owned
-  design/               architecture, data model, contracts/, decisions/ (ADRs)
+  design/
+    contracts/openapi.yaml   the HTTP contract; Principal-owned
+    03-contracts/            non-HTTP contracts (CLI grammar, file formats)
+    ...                      architecture, data model, decisions/ (ADRs)
 src/<module>/MODULE.md  purpose, public interface, key decisions, gotchas
-tests/
+tests/                  the engineers' unit and integration tests, in the solution
+tests/acceptance/       QA's black-box suite; NOT in the solution
 ```
+
+`CONVENTIONS.md` arrives with the repository rather than being written per
+project: Forge's base file (`prompts/templates/CONVENTIONS.md`) is committed in
+the seed commit, and the Principal appends only what this build requires.
 
 Docs live in git beside the code, so design and implementation cannot silently
 diverge and a change request is a diff the client can read. Updating MODULE.md
@@ -265,6 +277,15 @@ different owners, so each needs its own signal.
 **The DAG is data, not prose.** Design produces `tasks` rows and `task_deps`
 edges, so claimability is a database query rather than an interpretation of a
 plan document.
+
+**Work is linked to the contract by name.** A task carries `requirements_ref`,
+the requirement file it serves, and `contract_ops`, the operationIds from the
+OpenAPI document it implements — null for work with no HTTP surface. An
+operationId a task names must exist in the contract or `create_task` refuses
+it. The engineer's packet renders exactly those operations, so it receives the
+paths, status codes and response schemas it must produce rather than a pointer
+to a folder. The chain requirement → operation → task → acceptance test is
+therefore a set comparison at every edge.
 
 Task types are `Feature` (a parent that decomposes into children), `Task`,
 `Bug`, and `Chore`. A Feature is the PM's unit of handoff; its children
@@ -415,30 +436,40 @@ observable behavior to black-box, so acceptance is a property of the finished
 project. QA runs only when the board is quiescent and there is new finished
 work to verify.
 
-**Black-box.** A QA instance clones trunk fresh, reads `docs/requirements/`
-and `docs/design/`, and exercises the project through the CLI or HTTP contract
-the Principal designed. It does not read source, does not consider the
-engineer's unit tests, and does not judge aesthetics — visual feel is the
-client's call. Every feature must be verifiable from that side channel, which
-constrains design: where a behavior would otherwise be internal, the Principal
-has to expose it on the contract.
+**QA writes the acceptance suite; the harness runs it.** A QA instance clones
+trunk fresh and authors black-box tests in `tests/acceptance/` against the
+project's OpenAPI contract. It does not deliver a verdict: the harness starts
+the application on a port it chooses, runs the suite against it, and the exit
+code is the round's result. The suite is committed to trunk and re-run against
+every later change, so it is also the regression suite.
 
-**Bugs are first-class tasks.** `file_bug` creates a `bug` task born in
-`triage`. The Principal either accepts it (→ `ready`, fixed by an engineer
-through the normal gate) or rejects it (→ `rejected`, a durable "not a bug"
-verdict that is kept, never deleted). Rejected bugs stay in the ledger QA is
-seeded with, so the same non-bug is not re-filed.
+The suite reaches the application only over HTTP at the base URL in
+`FORGE_BASE_URL`, and is kept out of the solution file — the engineers' CI
+builds and tests the solution, so it never sees the acceptance suite and never
+goes red on work in progress.
 
-A filed bug carries machine-captured evidence: the toolset attaches QA's most
-recent `run` command and its verbatim output, and `file_bug` refuses if QA has
-executed nothing. Model prose is not accepted as a repro.
+**Coverage is a set comparison.** Each test declares the operation it exercises
+with `[Trait("operation", "<operationId>")]`. Before the suite is run, the
+harness reads those traits from the test source and compares them to the
+operations in the contract; while any operation is uncovered the round does not
+pass and the watermark does not move.
+
+**Bugs are first-class tasks.** A red suite is filed by the harness as a `bug`
+task carrying the test output verbatim. `file_bug` remains for a gap no test
+can express, and refuses unless QA has executed something, attaching that
+command and its real output. Model prose is not accepted as a repro.
+
+A bug is born in `triage`. The Principal either accepts it (→ `ready`, fixed by
+an engineer through the normal gate) or rejects it (→ `rejected`, a durable
+"not a bug" verdict that is kept, never deleted). Rejected bugs stay in the
+ledger QA is seeded with, so the same non-bug is not re-filed.
 
 **Completion is decided by counting.** A watermark records how much done work
 QA has verified, and QA re-runs only when the count of done tasks exceeds it.
-A round that files nothing, or whose bugs are all rejected, never advances the
-count — so the next tick finds nothing new and the project is complete. A
-round that keeps finding real bugs re-triggers after each fix, up to a round
-cap, past which the harness escalates rather than looping forever.
+A round whose suite is green and files nothing, or whose bugs are all rejected,
+never advances the count — so the next tick finds nothing new and the project
+is complete. A round that keeps finding real bugs re-triggers after each fix,
+up to a round cap, past which the harness escalates rather than looping forever.
 
 Because termination depends on the counters rather than the model's diligence,
 a QA round that crashes does not advance the watermark, and neither does one

@@ -88,12 +88,15 @@ public sealed partial class AgentToolset(
                             + "Pass milestone (an id from add_milestone) for a change request; pass "
                             + "none for the initial build, which spans the whole plan.",
             ["create_task"] = "create_task(title, objective, acceptance, [type], [requirements_ref], "
-                            + "[context_paths], [budget], [milestone]) — put a task on the board. Returns its id. "
+                            + "[context_paths], [contract_ops], [budget], [milestone]) — put a task on the "
+                            + "board. Returns its id. "
                             + "acceptance is REQUIRED and states what must be observably true when the task is "
                             + "done — the reviewer judges the diff against it, so a task without it can never be "
                             + "finished. If you cannot say what done looks like, the task is not ready to create. "
                             + "type is task (default), bug, or chore. requirements_ref names the requirement "
-                            + "file, e.g. `01-todos.md@v1` (version optional).",
+                            + "file, e.g. `01-todos.md@v1` (version optional). contract_ops is a comma-separated "
+                            + "list of operationIds from the OpenAPI contract this task implements — the engineer "
+                            + "is given exactly those operations. Omit it for work with no HTTP surface.",
             ["add_dependency"] = "add_dependency(task, depends_on) — task cannot start until depends_on is done. "
                                + "Dependencies must flow one way: an edge that would close a cycle is refused.",
             ["break_and_relink"] = "break_and_relink(new_tasks, [reason]) — replace this stuck task with "
@@ -120,7 +123,7 @@ public sealed partial class AgentToolset(
             ["retriage_bug"] = "retriage_bug(task, note) — send a bug back to the Principal for another triage with "
                              + "the client's guidance attached. The PM uses this when the client says a flagged bug "
                              + "needs more investigation rather than rejection.",
-            ["resolve_task"] = "resolve_task(task, note) — send a task the client answered back to the "
+            ["retriage_task"] = "retriage_task(task, note) — send a task the client answered back to the "
                              + "Principal, with their guidance attached and the attempt counter reset. "
                              + "Use this when the client tells you how they want it handled.",
             ["cancel_task"] = "cancel_task(task, reason) — drop a task the client does not want done. "
@@ -171,7 +174,7 @@ public sealed partial class AgentToolset(
                 "accept_bug" => AcceptBug(call),
                 "reject_bug" => RejectBug(call),
                 "retriage_bug" => RetriageBug(call),
-                "resolve_task" => ResolveTask(call),
+                "retriage_task" => RetriageTask(call),
                 "cancel_task" => CancelTask(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
@@ -312,11 +315,35 @@ public sealed partial class AgentToolset(
         // conventional trailing newline so files are not written without one.
         if (content.Length > 0 && !content.EndsWith('\n')) content += "\n";
 
+        // The contract is the one file the harness itself reads, so a broken one is
+        // refused here rather than discovered by the tasks and tests built from it.
+        // Same shape as a compiler error: the author sees it and fixes it in this run.
+        if (ContractRejection(path, content) is { } rejection) return new ToolOutcome(rejection);
+
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var existed = File.Exists(path);
         File.WriteAllText(path, content);
         var lineCount = content.Count(ch => ch == '\n');
         return new ToolOutcome($"{(existed ? "Overwrote" : "Wrote")} {_jail.Relative(path)} ({lineCount} lines).");
+    }
+
+    /// <summary>
+    /// Why a write to the OpenAPI contract is being refused, or null to let it through.
+    /// Only that one path is checked; every other file is the author's business.
+    /// </summary>
+    private string? ContractRejection(string absolutePath, string content)
+    {
+        var relative = _jail.Relative(absolutePath).Replace('\\', '/');
+        if (!relative.Equals(Design.ApiContract.Path, StringComparison.OrdinalIgnoreCase)) return null;
+
+        var (_, errors) = Design.ApiContract.Validate(content);
+        if (errors.Count == 0) return null;
+
+        return $"REFUSED: {relative} was not written — it is not a usable contract.\n"
+             + string.Join("\n", errors.Select(e => $"  - {e}"))
+             + "\n\nThe harness reads this document: tasks name its operationIds and QA tests "
+             + "against them, so it must parse and every operation must be identifiable. "
+             + "Fix these and write it again.";
     }
 
     private async Task<ToolOutcome> RunAsync(ToolCall call, CancellationToken ct)
@@ -382,6 +409,25 @@ public sealed partial class AgentToolset(
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             ?? [];
 
+        var ops = call.Optional("contract_ops")?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            ?? [];
+
+        // An id nobody defined would sit outside every gate: no packet slice for the
+        // engineer, and an operation left uncovered while a task claims to cover it.
+        if (ops.Length > 0)
+        {
+            if (Design.ApiContract.Load(_jail.Root) is not { } contract)
+                return new ToolOutcome(
+                    $"ERROR: this project has no contract at {Design.ApiContract.Path}, so there are "
+                    + "no operationIds to name. Write the contract first, or omit contract_ops.");
+
+            if (contract.Unknown(ops) is { Count: > 0 } unknown)
+                return new ToolOutcome(
+                    $"ERROR: the contract defines no operation called {string.Join(", ", unknown)}. "
+                    + $"Available: {string.Join(", ", contract.OperationIds)}.");
+        }
+
         var created = _tasks.Insert(TaskRecord.Create(
             call.Optional("type") is { } type ? ParseRunnableTaskType(type) : TaskType.Task,
             call.Arg("title"),
@@ -392,7 +438,8 @@ public sealed partial class AgentToolset(
             requirementsRef: requirement,
             milestoneId: call.OptionalInt("milestone") is { } m ? m : null,
             assignedRole: AgentRole.Engineer,
-            createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role)));
+            createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role),
+            contractOps: ops));
 
         _createdTaskIds.Add(created.Id);
         return new ToolOutcome($"Task {created.Id} created: {created.Title} " +
@@ -634,9 +681,9 @@ public sealed partial class AgentToolset(
     }
 
     /// <summary>Sends a task awaiting the client back to the Principal with their guidance.</summary>
-    private ToolOutcome ResolveTask(ToolCall call)
+    private ToolOutcome RetriageTask(ToolCall call)
     {
-        if (AwaitingClient(call) is not { } task) return NotAwaitingClient("resolve_task");
+        if (AwaitingClient(call) is not { } task) return NotAwaitingClient("retriage_task");
 
         var note = call.Arg("note");
         _tasks.SetProgressNote(task.Id, $"FROM THE CLIENT (via the PM): {note}");
@@ -646,7 +693,7 @@ public sealed partial class AgentToolset(
         new DiscussionRepository(connection).Open(task.Id, "pm", $"[client guidance] {note}");
         return new ToolOutcome(
             $"Task {task.Id} sent back to the Principal with the client's guidance. " +
-            "The build picks it up on the next run.");
+            "The build resumes on it by itself; the client does not have to start anything.");
     }
 
     /// <summary>Cancels a task the client dropped, along with everything depending on it.</summary>

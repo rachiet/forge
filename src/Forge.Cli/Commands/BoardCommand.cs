@@ -292,6 +292,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         await _chatLock.WaitAsync().ConfigureAwait(false);
         _pmBusy[project] = true;
         _pmError.TryRemove(project, out _);
+        var resume = false;
         try
         {
             using var conn = Database.OpenProject(dbPath);
@@ -301,6 +302,12 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger);
 
             await chat.SendAsync(message).ConfigureAwait(false);
+
+            // A turn can put work back on the board — retriage_task on something the client
+            // answered, or cancel_task freeing what waited on it. The worker that was running
+            // exited when the board went quiet, so without this the client answers the
+            // question and nothing happens until they also press Start.
+            resume = new TaskRepository(conn).HasWorkForAWorker();
         }
         catch (Exception ex)
         {
@@ -311,6 +318,10 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             _pmBusy[project] = false;
             _chatLock.Release();
         }
+
+        // Outside the chat lock, and only after the connection is closed: StartWorker opens
+        // its own. A worker already building wins — it will reach the task on its next tick.
+        if (resume) StartWorker(project, dbPath, out _);
     }
 
     /// <summary>

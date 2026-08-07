@@ -58,6 +58,30 @@ public class TaskRunnerTests : IDisposable
     private string ShowFromTrunk(string path) =>
         Git.Require(_paths.ProjectBareRepo(Project), "show", $"{WorkspaceManager.TrunkBranch}:{path}").Stdout;
 
+    /// <summary>Commit a file to trunk directly, standing in for work that already landed.</summary>
+    private void WriteToTrunk(string path, string content)
+    {
+        var clone = Path.Combine(_dataRoot, $"seed-{Guid.NewGuid():N}");
+        _workspaces.PrepareTrunkClone(clone);
+        var file = Path.Combine(clone, path.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, content);
+        _workspaces.CommitAndPushTrunk(clone, $"seed: {path}");
+    }
+
+    private const string Contract = """
+        openapi: 3.0.0
+        info: { title: demo, version: "1.0" }
+        paths:
+          /api/notes:
+            get:
+              operationId: notes-list
+              x-requirement: 01-notes.md
+              responses:
+                "200": { description: ok }
+                "404": { description: missing }
+        """;
+
     [Fact]
     public void Bootstrap_seeds_a_trunk_commit_so_the_first_task_has_something_to_branch_from()
     {
@@ -415,6 +439,28 @@ public class TaskRunnerTests : IDisposable
         for (var i = 0; i < maxSteps; i++)
             if (await runner.RunNextByPriorityAsync() is null) return;
         throw new Xunit.Sdk.XunitException("loop did not drain — possible QA/fix loop");
+    }
+
+    [Fact]
+    public async Task Qa_that_writes_no_suite_for_a_contract_does_not_accept_the_project()
+    {
+        // The failure this gate exists for: a QA round that observes nothing, files nothing,
+        // and is read as "every requirement met". With a contract on trunk the verdict is the
+        // suite's, so calling `done` without writing one leaves the project unverified.
+        WriteToTrunk(Forge.Core.Design.ApiContract.Path, Contract);
+        DoneTask();
+
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("done", ("summary", "Everything looks fine to me.")))
+        { Fallback = ScriptedLlmClient.Tool("done", ("summary", "still fine")) };
+
+        await DrainAsync(Runner(llm), maxSteps: 10);
+
+        var meta = new ProjectMetaRepository(_conn);
+        // Never verified, so never delivered — and escalated to the client once the rounds ran out.
+        Assert.Null(meta.Get("qa_verified_count"));
+        Assert.Equal("1", meta.Get("qa_escalated"));
+        Assert.Null(meta.Get("project_delivered"));
     }
 
     [Fact]

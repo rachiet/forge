@@ -38,6 +38,11 @@ public static class Schema
           acceptance_criteria TEXT,
           context_paths TEXT,
           requirements_ref TEXT,
+          -- JSON array of operationIds from the project's OpenAPI contract that this task
+          -- implements. Null for work with no HTTP surface. Every operation in the contract
+          -- must appear in some task's list; an id here that the contract does not define
+          -- is refused at create_task.
+          contract_ops TEXT,
           assigned_role TEXT CHECK(assigned_role IS NULL OR assigned_role IN
             ('pm','principal','engineer','qa','researcher')),
           status TEXT NOT NULL DEFAULT 'created' CHECK(status IN

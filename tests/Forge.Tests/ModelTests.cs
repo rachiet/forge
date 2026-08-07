@@ -61,12 +61,27 @@ public class RequirementsRefTests
     }
 
     [Theory]
+    [InlineData("02-todos-read.md@v1.0", 1)]
+    [InlineData("02-todos-read.md@v2.1.4", 2)]
+    public void A_dotted_version_parses_to_its_major(string text, int expected)
+    {
+        // The PM stamps its requirement files "v1.0"; the Principal quotes that back on every
+        // task it creates. Refusing it rejected an entire design run, twice, for a suffix
+        // nothing in the system reads — coverage matches on the file name alone.
+        var r = RequirementsRef.Parse(text);
+        Assert.Equal("02-todos-read.md", r.File);
+        Assert.Equal(expected, r.Version);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("02-todos-read.md")]
     [InlineData("02-todos-read.md@")]
     [InlineData("02-todos-read.md@3")]
     [InlineData("02-todos-read.md@v0")]
     [InlineData("02-todos-read.md@vx")]
+    [InlineData("02-todos-read.md@v1.")]
+    [InlineData("02-todos-read.md@v1.0-draft")]
     [InlineData("@v3")]
     public void Malformed_refs_throw(string text) =>
         Assert.Throws<FormatException>(() => RequirementsRef.Parse(text));

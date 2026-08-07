@@ -14,25 +14,29 @@ public static class Migrations
     {
         AddNeedsHumanStatus(conn);
         AddSplitDepth(conn);
+        AddColumn(conn, "contract_ops", "ALTER TABLE tasks ADD COLUMN contract_ops TEXT;");
     }
 
     /// <summary>
-    /// Adds `tasks.split_depth` (default 0) to a database that predates task splitting.
-    /// A plain ADD COLUMN, not a rebuild: no CHECK constraint changes, and every existing
-    /// task correctly starts at depth 0 — none of them came from a split.
+    /// Adds a nullable column to `tasks` when the database predates it. A plain ADD COLUMN
+    /// rather than a rebuild: no CHECK constraint changes, and every existing row correctly
+    /// reads null. A no-op once <see cref="AddNeedsHumanStatus"/> has rebuilt the table from
+    /// the current <see cref="Schema.TasksDdl"/>, which already has the column.
     /// </summary>
-    /// <remarks>
-    /// A no-op after <see cref="AddNeedsHumanStatus"/> has rebuilt the table, since that
-    /// rebuild uses the current <see cref="Schema.TasksDdl"/> and so already has the column.
-    /// </remarks>
-    private static void AddSplitDepth(SqliteConnection conn)
+    private static void AddColumn(SqliteConnection conn, string column, string ddl)
     {
-        var hasColumn = conn.Query<string>("SELECT name FROM pragma_table_info('tasks')")
-            .Any(c => string.Equals(c, "split_depth", StringComparison.Ordinal));
-        if (hasColumn) return;
-
-        conn.Execute("ALTER TABLE tasks ADD COLUMN split_depth INTEGER NOT NULL DEFAULT 0;");
+        var present = conn.Query<string>("SELECT name FROM pragma_table_info('tasks')")
+            .Any(c => string.Equals(c, column, StringComparison.Ordinal));
+        if (!present) conn.Execute(ddl);
     }
+
+    /// <summary>
+    /// Adds `tasks.split_depth` to a database that predates task splitting. Default 0 is
+    /// correct for every existing task — none of them came from a split.
+    /// </summary>
+    private static void AddSplitDepth(SqliteConnection conn) =>
+        AddColumn(conn, "split_depth",
+            "ALTER TABLE tasks ADD COLUMN split_depth INTEGER NOT NULL DEFAULT 0;");
 
     /// <summary>Rebuilds the tasks table when its status CHECK predates 'needs_human'.</summary>
     private static void AddNeedsHumanStatus(SqliteConnection conn)

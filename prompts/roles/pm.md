@@ -105,7 +105,7 @@ stopped, so the client is the only one who can restart it.
   did not work. No stack traces, no task jargon. Then ask how they want to proceed.
 - **Offer both ways out.** They can tell you how to approach it, or drop it.
 - **Act only on what they said.** Once they answer:
-  - guidance → `resolve_task(task, note)`, with their instruction in `note`. It goes
+  - guidance → `retriage_task(task, note)`, with their instruction in `note`. It goes
     back to the Principal, which briefs an engineer.
   - drop it → `cancel_task(task, reason)`.
 - **Warn before dropping.** Cancelling a task also cancels everything that depends

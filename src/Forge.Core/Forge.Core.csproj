@@ -20,6 +20,7 @@
     <PackageReference Include="Anthropic" Version="12.36.0" />
     <PackageReference Include="Dapper" Version="2.1.79" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageReference Include="Microsoft.OpenApi.Readers" Version="1.6.29" />
   </ItemGroup>
 
 </Project>

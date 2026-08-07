@@ -24,11 +24,16 @@ wrong and no amount of good coding rescues the result.
   nothing already covered above it, and nothing a competent C# engineer does
   anyway; every line is re-read on every turn of every task. This file also grows
   later when reviews find recurring mistakes.
-- **External contracts** (`docs/design/03-contracts/`). The CLI grammar, HTTP
-  routes and schemas, file formats — the observable boundary. QA will test
-  against these and nothing else, so a feature with no external contract is a
-  feature that cannot be verified. Every feature needs an observable side-channel;
-  design one even for behaviour that would otherwise be internal.
+- **The HTTP contract** (`docs/design/contracts/openapi.yaml`). An OpenAPI 3
+  document, and the observable boundary: QA tests against it and nothing else, so a
+  feature absent from it is a feature that cannot be verified. Every operation needs
+  an `operationId` in kebab-case, an `x-requirement` naming the requirement file it
+  serves, and its error responses documented alongside the success one. The harness
+  parses this document — tasks name its operationIds and tests are checked against
+  them — so a document it cannot read is refused when you write it.
+- **Other external contracts** (`docs/design/03-contracts/`). CLI grammar, file
+  formats, anything with no HTTP surface. Every feature needs an observable
+  side-channel; design one even for behaviour that would otherwise be internal.
 - **Acceptance criteria per feature.** Behavioural statements at the boundary,
   concrete enough that an engineer knows when they are done and a reviewer can
   check the *shape* of the solution, not just the examples.
@@ -65,6 +70,10 @@ wrong and no amount of good coding rescues the result.
 3. **Cover every requirement.** Each requirement section must map to at least one
    task, and each task should name the requirement it implements. A requirement
    with no task is a hole the coverage gate will find and hand back to you.
+   The same holds through the contract: every requirement file must be named by
+   some operation's `x-requirement`, and every operation must be claimed by some
+   task's `contract_ops`. Both are checked before any engineer starts, and a plan
+   that fails either goes to the client rather than to the board.
 4. **Sequence with dependencies.** If task B needs the module task A creates, add
    the edge. The worker runs the DAG in order; unstated dependencies produce
    engineers building against things that do not exist yet.

@@ -9,6 +9,7 @@ using Forge.Core.Design;
 using Forge.Core.Llm;
 using Forge.Core.Logging;
 using Forge.Core.Model;
+using Forge.Core.Qa;
 using Forge.Core.Review;
 using Forge.Core.Secrets;
 using Forge.Core.Tools;
@@ -190,6 +191,19 @@ public sealed class TaskRunner(
             var note = $"Feature {feature.Id} produced no tasks ({SnakeCaseEnum.ToSnakeCase(outcome.End)}): {outcome.Summary}";
             log.Message(note);
             return new TaskRunOutcome(feature.Id, outcome.End, feature.Status, note);
+        }
+
+        // An unlinked plan does not go to engineering. A requirement no operation serves can
+        // never be verified — QA tests the contract — and an operation no task claims is an
+        // endpoint nobody will build. The tasks already exist, so re-running design would
+        // duplicate them; the Feature is parked on the client instead, naming the gap.
+        if (!outcome.Contract.Complete)
+        {
+            var gap = $"Design is incomplete: {outcome.Contract.Describe()}.";
+            log.Message(gap);
+            _messages.Insert(Message.Create(MessageType.Escalation, "principal", "pm", gap, feature.Id));
+            Transition(feature.Id, TaskStatus.NeedsHuman, log);
+            return new TaskRunOutcome(feature.Id, EndReason.Escalated, TaskStatus.NeedsHuman, gap);
         }
 
         // Back-fill the linkage the harness owns: every task created in this run becomes
@@ -575,21 +589,102 @@ public sealed class TaskRunner(
             return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, crashNote);
         }
 
-        var filed = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
+        // The suite QA just wrote is part of the project, not scratch work: it has to
+        // survive the round to be re-run against the next change.
+        if (_workspaces.CommitAndPushTrunk(workspace, "test(qa): acceptance suite"))
+            _log.Event(EventType.GitCommit, "committed the acceptance suite to trunk");
 
-        // Advance the round counter and the watermark to the count of finished work QA
-        // has now verified. Newly-filed bugs are still in triage (not done), so this only
-        // rises again when an accepted bug is fixed or a change request's tasks complete —
-        // which is exactly what re-triggers QA, and equally for both.
         _meta.Set("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
+
+        // A project with an HTTP contract is judged by its suite; one without has no
+        // operations to cover and nothing mechanical to run, so it keeps the older rule —
+        // QA exercised it and filed what failed.
+        if (ApiContract.Load(workspace) is not null
+            && SuiteVerdict(workspace) is { } incomplete)
+        {
+            // No verdict: the watermark stays put, so the next tick re-runs QA and
+            // QaRoundCap bounds the retries before it reaches the client.
+            _log.Message(incomplete);
+            return new TaskRunOutcome(0, result.End, TaskStatus.Qa, incomplete);
+        }
+
+        // Advance the watermark to the count of finished work QA has now verified. Newly
+        // filed bugs are still in triage (not done), so it only rises again when an accepted
+        // bug is fixed or a change request's tasks complete — exactly what re-triggers QA.
         _meta.Set("qa_verified_count", _tasks.CountDone().ToString());
 
+        var filed = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
         var summary = filed == 0
             ? "QA passed — every requirement met; the project is accepted."
             : $"QA filed {filed} bug(s) for the Principal to triage.";
         _log.Message($"QA round complete — {summary}");
         return new TaskRunOutcome(0, result.End, TaskStatus.Qa, summary);
     }
+
+    /// <summary>
+    /// Runs the acceptance suite and returns why the round produced no verdict, or null when
+    /// it did. A red suite IS a verdict — it becomes a bug — so only "not covered" and "did
+    /// not run" stop the round, and neither may be mistaken for a pass.
+    /// </summary>
+    private string? SuiteVerdict(string workspace)
+    {
+        // Coverage first, from the test source: a suite that covers half the contract can
+        // go green while verifying half the project, which is the false pass this replaces.
+        var contract = ApiContract.Load(workspace)!;
+        var declared = AcceptanceSuite.DeclaredOperations(workspace);
+        if (contract.OperationIds.Where(id => !declared.Contains(id)).ToList() is { Count: > 0 } uncovered)
+            return "QA round incomplete — no acceptance test covers " + string.Join(", ", uncovered);
+
+        var acceptance = AcceptanceSuite.Run(workspace);
+        if (!acceptance.Ran)
+            return $"QA round incomplete — the acceptance suite did not run: {acceptance.Output}";
+
+        if (acceptance.Passed)
+        {
+            _log.Message("Acceptance suite passed against the contract.");
+            return null;
+        }
+
+        FileAcceptanceFailure(acceptance);
+        return null;
+    }
+
+    /// <summary>
+    /// A red suite becomes one bug carrying the test output verbatim. Filed by the harness
+    /// rather than by QA: the failure is process output, and a verdict that depends on the
+    /// model remembering to report it is the verdict this design replaces.
+    /// </summary>
+    private void FileAcceptanceFailure(AcceptanceResult acceptance)
+    {
+        var objective = $"""
+            The acceptance suite fails against the contract. Reproduce it, then make it pass.
+
+            ## Expected
+            Every test in `{AcceptanceSuite.Directory}` passes against a running instance.
+            The suite is black-box and tests the contract in
+            `{ApiContract.Path}` — fix the implementation, not the test.
+
+            ## Observed — the acceptance run, captured verbatim
+            ```
+            {Truncate(acceptance.Output)}
+            ```
+            """;
+
+        var bug = _tasks.Insert(TaskRecord.Create(
+            TaskType.Bug,
+            "Acceptance suite fails",
+            objective,
+            300_000,
+            acceptanceCriteria: $"`dotnet test {AcceptanceSuite.Directory}` passes against a running instance.",
+            assignedRole: AgentRole.Engineer,
+            createdBy: "qa") with { Status = TaskStatus.Triage });
+
+        _log.Message($"Bug {bug.Id} filed from the acceptance run.");
+    }
+
+    /// <summary>Keeps the END of a test log: the failure summary is at the bottom.</summary>
+    private static string Truncate(string output, int max = 6_000) =>
+        output.Length <= max ? output : $"... [{output.Length - max} earlier chars omitted]\n{output[^max..]}";
 
     private string QaBrief(string workspace)
     {
@@ -599,24 +694,67 @@ public sealed class TaskRunner(
             : string.Join("\n", ledger.Select(b =>
                 $"- Bug {b.Id} [{SnakeCaseEnum.ToSnakeCase(b.Status)}]: {b.Title}"));
         return $"""
-            # QA: verify the finished project against the client's requirements
+            # QA: write the acceptance suite for this project
 
-            The project is built and merged. Read `docs/requirements/` (the client's intent)
-            and `docs/design/` (the observable contract), then exercise the project through
-            its observable side-channel — its HTTP endpoints or CLI, never its source — and
-            check each requirement. Build and run it with `run` as needed.
+            The project is built and merged. Your job is the suite in `{AcceptanceSuite.Directory}`
+            that decides whether it is accepted — you do not deliver a verdict yourself. The
+            harness starts the app, runs your suite against it, and reads the result.
+
+            {ContractSection(workspace)}
+
+            Write xUnit tests in `{AcceptanceSuite.Directory}` (its own project, and NOT added
+            to the solution file — the engineers' CI must never run it):
+            - Reach the app only over HTTP at the base URL in the `{AcceptanceSuite.BaseUrlVariable}`
+              environment variable. Never reference the application's projects; this is
+              black-box, and a test that calls the code directly is not an acceptance test.
+            - Tag every test with the operation it exercises:
+              `[Trait("{AcceptanceSuite.OperationTrait}", "shorten-create")]`. Every operation in
+              the contract must be covered by at least one test, and the round does not pass
+              until they all are.
+            - Assert what the contract states — the status codes, the response field names,
+              and the error cases, not just the happy path. A test that asserts nothing passes
+              and verifies nothing.
+            - If a suite is already there, update it to match the contract as it now stands
+              and add tests for anything new, rather than starting again.
+
+            Run it yourself while you work — `serve` the app and `run` the tests — so you hand
+            over a suite you have seen execute. When it is right, call `done`.
 
             {StartupSection(workspace)}
 
-            File a bug with `file_bug` for every requirement that is NOT met — exact repro
-            steps, the expected result, and the actual result. If everything is met, file
-            nothing; that is what accepts the project.
+            Use `file_bug` only for something the suite cannot express — a requirement with no
+            observable channel at all. A failing test is not filed by hand; the harness files
+            it with the run output attached.
 
             Bugs already on record — do NOT re-file any of these (rejected ones are settled,
             open ones are already tracked; only a regression of a *fixed* bug is fileable again):
             {ledgerText}
 
-            When you have checked every requirement once, call `done` with a summary.
+            When the suite covers every operation, call `done` with a summary.
+            """;
+    }
+
+    /// <summary>
+    /// The operations the suite must cover, listed from the contract itself so QA is
+    /// working from the same set the coverage gate will check it against.
+    /// </summary>
+    private static string ContractSection(string workspace)
+    {
+        if (ApiContract.Load(workspace) is not { } contract)
+            return "This project has no OpenAPI contract, so there is nothing to cover "
+                 + "mechanically. Verify it through `run` and the files it writes, and file "
+                 + "a bug for anything unmet.";
+
+        var operations = string.Join("\n", contract.Operations.Select(
+            o => $"- `{o.OperationId}` — {o.Signature} (serves {o.Requirement})"));
+
+        return $"""
+            ## The contract — `{ApiContract.Path}`
+
+            Read it in full; it states the schemas and status codes. Every operation below
+            needs a test:
+
+            {operations}
             """;
     }
 

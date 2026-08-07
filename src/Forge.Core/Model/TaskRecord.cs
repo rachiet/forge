@@ -21,6 +21,8 @@ public sealed record TaskRecord
     public required string Objective { get; init; }
     public string? AcceptanceCriteria { get; init; }
     public IReadOnlyList<string> ContextPaths { get; init; } = [];
+    /// <summary>OperationIds from the OpenAPI contract this task implements; empty for non-HTTP work.</summary>
+    public IReadOnlyList<string> ContractOps { get; init; } = [];
     public RequirementsRef? RequirementsRef { get; init; }
     public AgentRole? AssignedRole { get; init; }
     public TaskStatus Status { get; init; } = TaskStatus.Created;
@@ -52,7 +54,8 @@ public sealed record TaskRecord
         AgentRole? assignedRole = null,
         string? createdBy = null,
         long? parentId = null,
-        int splitDepth = 0)
+        int splitDepth = 0,
+        IReadOnlyList<string>? contractOps = null)
     {
         if (string.IsNullOrWhiteSpace(title))
             throw new ArgumentException("Task title must be non-empty.", nameof(title));
@@ -72,6 +75,7 @@ public sealed record TaskRecord
             ParentId = parentId,
             AcceptanceCriteria = acceptanceCriteria,
             ContextPaths = contextPaths ?? [],
+            ContractOps = contractOps ?? [],
             RequirementsRef = requirementsRef,
             AssignedRole = assignedRole,
             CreatedBy = createdBy,

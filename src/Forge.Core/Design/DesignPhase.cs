@@ -15,6 +15,7 @@ public sealed record DesignOutcome(
     EndReason End,
     int TasksCreated,
     CoverageReport Coverage,
+    ContractReport Contract,
     string Summary,
     // The project's dollar cap refused the run — pause the build, don't treat the
     // design (or a Feature decomposition reusing it) as having failed.
@@ -90,12 +91,18 @@ public sealed class DesignPhase(
             : $"Coverage gate: {coverage.Uncovered.Count} requirement(s) with no task: "
               + string.Join(", ", coverage.Uncovered));
 
+        var contract = CoverageGate.CheckContract(conn, workspace);
+        _log.Message(contract.Complete
+            ? "Contract gate: requirements, operations and tasks all linked"
+            : $"Contract gate: {contract.Describe()}");
+
         // The Principal ends with done(summary), not reply — its recipe has no reply
         // tool — so the plain-language summary for the PM and client rides the
         // progress note. Reply is kept first for any future chat-shaped design turn.
         var summary = result.Reply ?? result.ProgressNote
             ?? $"Design ended ({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns.";
-        return new DesignOutcome(result.End, created, coverage, summary, result.ProjectBudgetExhausted);
+        return new DesignOutcome(
+            result.End, created, coverage, contract, summary, result.ProjectBudgetExhausted);
     }
 
     /// <summary>
@@ -129,25 +136,31 @@ public sealed class DesignPhase(
             """;
     }
 
-    private static string Brief() => """
+    private static string Brief() => $"""
         # Design brief
 
         The requirements for this project are in `docs/requirements/`. Read the
         INDEX and every section first, then design the system.
 
         Produce, on disk and on the board:
-        - `CONVENTIONS.md` — the rules engineers follow (under a page).
+        - The project's `CONVENTIONS.md` section for what only this build needs.
         - The folder tree with a `MODULE.md` per module.
-        - External contracts under `docs/design/03-contracts/` — the observable
-          boundary QA will test against.
+        - `{ApiContract.Path}` — the HTTP contract, as OpenAPI 3. Every operation
+          carries an `operationId` (kebab-case, e.g. `shorten-create`), an
+          `{ApiContract.RequirementExtension}` naming the requirement file it serves, and
+          its error responses as well as its success one. The harness parses this
+          document and refuses one it cannot use, so write it before the tasks.
+          Anything with no HTTP surface is described under `docs/design/03-contracts/`
+          in prose instead.
         - Acceptance criteria per feature.
         - A task DAG: one `create_task` per unit of work, each naming the
-          requirement it implements, with `add_dependency` edges for ordering.
+          requirement it implements and passing `contract_ops` for the operations it
+          builds, with `add_dependency` edges for ordering.
 
-        Every requirement section must map to at least one task. Call `done` with a
-        plain-language summary of the design when the plan is complete; it goes
-        through a mechanical coverage check and then straight to the board —
-        engineers start on it as soon as you finish.
+        Two things are checked mechanically before any engineer starts, and design is
+        handed back if either fails: every requirement file must be named by at least
+        one operation, and every operation must be claimed by at least one task. Call
+        `done` with a plain-language summary when the plan is complete.
         """;
 
     /// <summary>
@@ -155,7 +168,7 @@ public sealed class DesignPhase(
     /// not a fresh design. The Principal reads the existing code and plans only the delta —
     /// or pushes back if the change is ill-advised.
     /// </summary>
-    private static string ChangeRequestBrief() => """
+    private static string ChangeRequestBrief() => $"""
         # Change request — impact analysis
 
         This project already exists: its structure, contracts, code, `CONVENTIONS.md`
@@ -167,9 +180,13 @@ public sealed class DesignPhase(
         - Work out what the change affects: which modules, which contracts, and which
           existing features could regress if a shared contract changes. Write a short
           impact note to `docs/design/impact/` naming the affected pieces and the risk.
+        - Update `{ApiContract.Path}` for the change: add, alter or remove operations so
+          the document describes the system as it will be. It is what QA's acceptance
+          suite is checked against, so an endpoint missing from it will not be verified.
         - Plan ONLY the delta: one `create_task` per new or modified unit of work, each
-          naming the requirement it serves, with a budget and `add_dependency` edges.
-          Do NOT recreate tasks for work that is already done — reuse the existing code.
+          naming the requirement it serves and the `contract_ops` it touches, with a
+          budget and `add_dependency` edges. Do NOT recreate tasks for work that is
+          already done — reuse the existing code.
         - If the change is ill-advised, contradicts an existing requirement, or is far
           larger than it appears, do NOT create tasks — `escalate(reason)` with your
           concern so it goes back to the client to decide.

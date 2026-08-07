@@ -71,8 +71,21 @@ public sealed class AgentLoop(
         RunAsync(
             assembler.SystemPrompt(_recipe, task, executor.Jail),
             [new LlmMessage("user", PromptAssembler.TaskPacket(
-                task, new DiscussionRepository(conn).ClientGuidance(task.Id)))],
+                task,
+                new DiscussionRepository(conn).ClientGuidance(task.Id),
+                // Read from the workspace the agent is about to work in, so the slice is
+                // the contract as it stands on this branch rather than as it was planned.
+                ContractSlice(task, executor.Jail.Root)))],
             executor, task, ct);
+
+    /// <summary>
+    /// The operations this task implements, rendered from the project's contract — or null
+    /// when it names none, or the project has no HTTP surface at all.
+    /// </summary>
+    private static string? ContractSlice(TaskRecord task, string workspace) =>
+        task.ContractOps.Count > 0 && Design.ApiContract.Load(workspace) is { } contract
+            ? contract.Slice(task.ContractOps)
+            : null;
 
     /// <summary>
     /// Triage a stuck task: the opening turn is a just-in-time packet describing the

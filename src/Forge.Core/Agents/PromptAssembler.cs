@@ -126,7 +126,13 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     /// by every redirect and review, so guidance stored only there is lost by the time an
     /// engineer reads it.
     /// </param>
-    public static string TaskPacket(TaskRecord task, IReadOnlyList<string>? standingGuidance = null)
+    /// <param name="contractSlice">
+    /// The operations from <see cref="TaskRecord.ContractOps"/> as an OpenAPI fragment. The
+    /// engineer is handed the exact paths, status codes and response schemas it must produce,
+    /// rather than a pointer to a contracts folder it may or may not read.
+    /// </param>
+    public static string TaskPacket(
+        TaskRecord task, IReadOnlyList<string>? standingGuidance = null, string? contractSlice = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Task {task.Id}: {task.Title}").AppendLine();
@@ -146,6 +152,17 @@ public sealed class PromptAssembler(PromptLibrary prompts)
 
         if (task.RequirementsRef is { } req)
             sb.AppendLine($"## Requirement\n\nImplements `{req}`. Work to this exact version.").AppendLine();
+
+        if (contractSlice is { Length: > 0 })
+        {
+            sb.AppendLine("## The contract you implement").AppendLine();
+            sb.AppendLine(
+                "These operations are yours. Match them exactly — paths, status codes and "
+                + "response field names are the contract QA will test against, and they are "
+                + "not yours to change. Use `[JsonPropertyName]` where a C# member name differs.")
+                .AppendLine();
+            sb.AppendLine("```yaml").AppendLine(contractSlice.TrimEnd()).AppendLine("```").AppendLine();
+        }
 
         if (task.ContextPaths.Count > 0)
         {

@@ -42,6 +42,10 @@ find are worth making permanent. Nothing above that section is theirs to rewrite
 - A production project never references a test-only package. If a test needs a
   different backing store, select it at runtime (`Database.IsRelational()` and
   similar), do not add the dependency to the shipping project.
+- `tests/acceptance/` belongs to QA. It is not in the solution file and must not be
+  added to it — it runs only against a started application, and the build would fail
+  without one. Engineers do not edit it; a failing acceptance test is fixed in the
+  code it tests.
 
 ## Stay inside the task
 

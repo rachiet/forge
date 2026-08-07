@@ -17,6 +17,7 @@ public sealed class TaskRepository(IDbConnection conn)
         public string Objective { get; init; } = "";
         public string? AcceptanceCriteria { get; init; }
         public IReadOnlyList<string> ContextPaths { get; init; } = [];
+        public IReadOnlyList<string> ContractOps { get; init; } = [];
         public RequirementsRef? RequirementsRef { get; init; }
         public string? AssignedRole { get; init; }
         public string Status { get; init; } = "";
@@ -40,6 +41,7 @@ public sealed class TaskRepository(IDbConnection conn)
             Objective = Objective,
             AcceptanceCriteria = AcceptanceCriteria,
             ContextPaths = ContextPaths,
+            ContractOps = ContractOps,
             RequirementsRef = RequirementsRef,
             AssignedRole = AssignedRole is null ? null : SnakeCaseEnum.Parse<AgentRole>(AssignedRole),
             Status = SnakeCaseEnum.Parse<TaskStatus>(Status),
@@ -58,7 +60,8 @@ public sealed class TaskRepository(IDbConnection conn)
     private const string SelectColumns = """
         SELECT id AS Id, milestone_id AS MilestoneId, parent_id AS ParentId, type AS Type, title AS Title,
                objective AS Objective, acceptance_criteria AS AcceptanceCriteria,
-               context_paths AS ContextPaths, requirements_ref AS RequirementsRef,
+               context_paths AS ContextPaths, contract_ops AS ContractOps,
+               requirements_ref AS RequirementsRef,
                assigned_role AS AssignedRole, status AS Status,
                token_budget AS TokenBudget, tokens_spent AS TokensSpent,
                out_of_budget_count AS OutOfBudgetCount, split_depth AS SplitDepth,
@@ -71,11 +74,11 @@ public sealed class TaskRepository(IDbConnection conn)
     {
         var id = conn.ExecuteScalar<long>("""
             INSERT INTO tasks (milestone_id, parent_id, type, title, objective, acceptance_criteria,
-                               context_paths, requirements_ref, assigned_role, status,
+                               context_paths, contract_ops, requirements_ref, assigned_role, status,
                                token_budget, tokens_spent, split_depth, progress_note,
                                branch_name, created_by)
             VALUES (@MilestoneId, @ParentId, @Type, @Title, @Objective, @AcceptanceCriteria,
-                    @ContextPaths, @RequirementsRef, @AssignedRole, @Status,
+                    @ContextPaths, @ContractOps, @RequirementsRef, @AssignedRole, @Status,
                     @TokenBudget, @TokensSpent, @SplitDepth, @ProgressNote, @BranchName, @CreatedBy)
             RETURNING id
             """,
@@ -88,6 +91,7 @@ public sealed class TaskRepository(IDbConnection conn)
                 task.Objective,
                 task.AcceptanceCriteria,
                 task.ContextPaths,
+                task.ContractOps,
                 task.RequirementsRef,
                 AssignedRole = task.AssignedRole is { } r ? SnakeCaseEnum.ToSnakeCase(r) : null,
                 Status = SnakeCaseEnum.ToSnakeCase(task.Status),
@@ -293,6 +297,17 @@ public sealed class TaskRepository(IDbConnection conn)
                 WHERE c.parent_id = f.id AND c.status NOT IN ('done','rejected','cancelled'))
             ORDER BY f.id
             """).ToList();
+
+    /// <summary>
+    /// Is there anything a worker could pick up? True while any task is neither finished nor
+    /// parked on the client. Deliberately coarse — it decides whether starting a worker is
+    /// worth it, not which task runs, and a worker with nothing to claim simply drains.
+    /// </summary>
+    public bool HasWorkForAWorker() =>
+        conn.ExecuteScalar<int>("""
+            SELECT COUNT(*) FROM tasks
+            WHERE status NOT IN ('done','rejected','cancelled','needs_human')
+            """) > 0;
 
     /// <summary>Are all non-bug tasks terminal and no bug still active? Then the board is quiescent.</summary>
     public bool BoardQuiescent() =>

@@ -111,7 +111,7 @@ public sealed class PmChat(
             + "Write a SHORT message (a few sentences) saying what is stuck, and be specific "
             + "about the decision you need from them: guidance so it can be tried again, or "
             + "drop it. No task ids, token budgets, file names or tooling. Do not call "
-            + "resolve_task or cancel_task yet — you have not heard from them. End with `reply`.]\n"
+            + "retriage_task or cancel_task yet — you have not heard from them. End with `reply`.]\n"
             + items;
 
         var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);

@@ -89,10 +89,10 @@ public sealed record AgentRecipe
         // approving is what opens the Feature, so the PM hands nothing to engineering on its
         // own and never creates tasks itself. reject_bug / retriage_bug let the PM close out a
         // bug the client reviewed in chat — reject it, or send it back to the Principal with
-        // the client's guidance. resolve_task / cancel_task do the same for a stuck task the
+        // the client's guidance. retriage_task / cancel_task do the same for a stuck task the
         // Principal could not resolve: the client's answer either redirects it or drops it.
         Tools = ["read_file", "list_dir", "grep", "write_file", "add_milestone", "propose_requirements",
-                 "reject_bug", "retriage_bug", "resolve_task", "cancel_task", "reply", "escalate"],
+                 "reject_bug", "retriage_bug", "retriage_task", "cancel_task", "reply", "escalate"],
         Scope = new PathScope(["PROJECT.md", "STATUS.md", "docs/"]),
         ToolAllowlist = [],
         DefaultBudget = 400_000,
