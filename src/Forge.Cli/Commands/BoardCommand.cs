@@ -23,12 +23,9 @@ using Spectre.Console.Cli;
 namespace Forge.Cli.Commands;
 
 /// <summary>
-/// The client's window on Forge: create a project, talk to the PM, watch milestones,
-/// features and spend, and start or stop the build — all without a terminal, because
-/// this page is meant to be the client's only interface.
-///
-/// Serves every project rather than one: the project is a query parameter, so the
-/// dropdown switches without restarting the host.
+/// Serves the client's web page and its API: create a project, talk to the PM, watch
+/// milestones, features and spend, approve requirements, and start or stop the build. Every
+/// project is served by one host, with the project as a query parameter.
 /// </summary>
 public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
 {
@@ -40,24 +37,20 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     }
 
     private readonly SemaphoreSlim _chatLock = new(1, 1);
-    // Concurrent on purpose: written from background PM/worker tasks and read on
-    // ASP.NET request threads at the same time — a plain Dictionary is undefined
-    // behaviour under that access pattern.
+    // Concurrent because background PM and worker tasks write these while request threads read.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _pmBusy = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _pmError = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _runError = new();
 
-    // One sink per project for the life of the host: a chat turn and a worker running
-    // together used to open two writers on the same forge.log, interleaving lines and
-    // throwing outright on Windows. Never disposed per-turn; the process owns them.
+    // One log sink per project for the life of the host, so a chat turn and a worker never
+    // open two writers on the same file.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FileLogSink> _sinks = new();
 
+    /// <summary>The logger for a project, sharing one sink per project across the host.</summary>
     private ForgeLogger LoggerFor(string project) => new(
         _sinks.GetOrAdd(project, p => new FileLogSink(_paths.ProjectLog(p))), project);
 
-    // The build the board itself is running, if any. One at a time by decision, and
-    // enforced across the whole machine by WorkerLease — a terminal `forge run` takes
-    // the same lease, so a Start click cannot collide with one.
+    // The build the board itself is running, if any. WorkerLease enforces one per machine.
     private CancellationTokenSource? _workerCancel;
     private Task? _worker;
     private string? _workerProject;
@@ -113,8 +106,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 return Results.Conflict(new { error = ex.Message });
             }
 
-            // The client's choices live with the project, not in a machine-wide file:
-            // two projects must be able to run on different providers and budgets.
+            // Stored per project, so two projects can use different providers and budgets.
             using var conn = Database.OpenProject(_paths.ProjectDb(name));
             var project = new ProjectSettings(conn)
             {
@@ -160,12 +152,11 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
 
             using var conn = Database.OpenProject(dbPath);
             var settings = new ProjectSettings(conn);
-            // Raising it is the whole point: hitting the cap stops the build, and the
-            // client needs a way to continue that does not involve a terminal.
+            // Raising the cap is how a client continues a build that hit it.
             settings.BudgetUsd = request.BudgetUsd;
 
-            // The cap being spent is the only thing that escalation reported, and it no
-            // longer is. Left pending it would keep excluding its task from the queue.
+            // Clear the escalation the spent cap raised; it would otherwise keep its task
+            // out of the queue.
             var messages = new MessageRepository(conn);
             foreach (var m in messages.Pending("pm"))
                 if (m is EscalationMessage && m.Payload.StartsWith("Project budget exhausted", StringComparison.Ordinal))
@@ -174,8 +165,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             return Results.Ok(new { budgetUsd = request.BudgetUsd });
         });
 
-        // The client's one approval. Approving is what opens the Feature and starts the
-        // build, so the PM hands nothing to engineering until the person paying says so.
+        // Approving opens the Feature and starts the build; it is the client's one commitment.
         app.MapPost("/api/proposal", (ProposalDecision request) =>
         {
             if (Resolve(request.Project) is not { } dbPath) return Results.NotFound();
@@ -194,8 +184,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
 
             var feature = proposal.Approve(conn);
 
-            // Said here rather than by a PM turn so it lands on the next poll: approving
-            // is the client's one commitment and must not be met with silence.
+            // Written here rather than by a PM turn, so it lands on the very next poll.
             new MessageRepository(conn).Insert(Message.Create(
                 MessageType.Status, "pm", "client", ClientFacing.ApprovalAcknowledgement, feature.Id));
 
@@ -211,9 +200,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             if (_pmBusy.GetValueOrDefault(request.Project))
                 return Results.Conflict(new { error = "The project manager is still replying." });
 
-            // A PM turn is a real model call that can run for a minute; the browser would
-            // time out long before it returns. The reply lands in `messages`, which the
-            // page is already polling.
+            // A PM turn outlasts any browser request; its reply arrives via the page's polling.
             _ = Task.Run(() => RunPmTurnAsync(dbPath, request.Project, request.Message));
             return Results.Accepted();
         });
@@ -260,10 +247,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         }
     }
 
-    /// <summary>
-    /// The registry plus enough of each project's state to fill the dropdown. Cheap
-    /// enough per poll: a handful of projects, one small query each.
-    /// </summary>
+    /// <summary>Every project, with the little state the dropdown shows for each.</summary>
     private IReadOnlyList<object> ListProjects()
     {
         using var global = Database.OpenGlobal(_paths.GlobalDb);
@@ -287,6 +271,10 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         return projects;
     }
 
+    /// <summary>
+    /// Runs one PM turn in the background and starts a worker afterwards if the turn left work
+    /// on the board. The reply reaches the page through its ordinary polling.
+    /// </summary>
     private async Task RunPmTurnAsync(string dbPath, string project, string message)
     {
         await _chatLock.WaitAsync().ConfigureAwait(false);
@@ -303,10 +291,8 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
 
             await chat.SendAsync(message).ConfigureAwait(false);
 
-            // A turn can put work back on the board — retriage_task on something the client
-            // answered, or cancel_task freeing what waited on it. The worker that was running
-            // exited when the board went quiet, so without this the client answers the
-            // question and nothing happens until they also press Start.
+            // A turn can put work back on the board, so check whether a worker is now needed:
+            // the previous one exited when the board went quiet.
             resume = new TaskRepository(conn).HasWorkForAWorker();
         }
         catch (Exception ex)
@@ -319,20 +305,15 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             _chatLock.Release();
         }
 
-        // Outside the chat lock, and only after the connection is closed: StartWorker opens
-        // its own. A worker already building wins — it will reach the task on its next tick.
+        // Outside the chat lock and after the connection closes, since StartWorker opens its
+        // own. A worker already building wins, and reaches the task on its next tick.
         if (resume) StartWorker(project, dbPath, out _);
     }
 
     /// <summary>
-    /// The build loop, run inside the board so the client can start and stop it. Holds
-    /// the machine-wide lease for its whole life and beats on every tick, so the page
-    /// can tell "working" from "idle" and a second worker cannot start.
-    /// </summary>
-    /// <summary>
-    /// Takes the machine-wide lease and starts the build loop, or reports why it could
-    /// not. Shared by the Resume control and by approving a proposal, so both paths get
-    /// the same one-build-at-a-time guarantee.
+    /// Takes the machine-wide lease and starts the build loop in the background, or reports why
+    /// it could not. Shared by the Start control, approving a proposal, and a PM turn that put
+    /// work back on the board.
     /// </summary>
     private bool StartWorker(string project, string dbPath, out string? error)
     {
@@ -356,6 +337,11 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         return true;
     }
 
+    /// <summary>
+    /// The build loop, run inside the board so the client can start and stop it. Holds the
+    /// machine-wide lease for its whole life and beats it on every tick, so the page can tell
+    /// working from idle and no second worker can start.
+    /// </summary>
     private async Task RunWorkerAsync(string dbPath, string project, CancellationToken ct)
     {
         using var lease = WorkerLease.TryAcquire(_paths, project);
