@@ -5,15 +5,13 @@ using Forge.Core.Tools;
 namespace Forge.Core.Agents;
 
 /// <summary>
-/// Assembles agent instructions from the three layers (CLAUDE.md, [DECIDED]):
-///   A — role identity      prompts/roles/&lt;role&gt;.md
-///   B — task-type rules    prompts/tasks/&lt;type&gt;.md  (task work only)
-///   C — the task packet    columns on the tasks row, rendered to markdown here
-/// Layer C markdown is rendered into the prompt and never written to disk.
+/// Assembles an agent's instructions from three layers: the role prompt, the task-type prompt,
+/// and the task packet rendered from the tasks row. The packet is rendered into the prompt and
+/// never written to disk.
 /// </summary>
 public sealed class PromptAssembler(PromptLibrary prompts)
 {
-    /// <summary>Layers A + B + protocol + standing context, for an agent working a task.</summary>
+    /// <summary>The system prompt for an agent working a task: role, task type, tools, context.</summary>
     public string SystemPrompt(AgentRecipe recipe, TaskRecord task, PathJail workspace)
     {
         var sb = new StringBuilder();
@@ -24,9 +22,8 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     }
 
     /// <summary>
-    /// Layer A + protocol + standing context, for a role in conversation rather
-    /// than on a task. There is no Layer B because a chat has no task type — the
-    /// client's words are the packet.
+    /// The system prompt for a role in conversation rather than on a task. No task-type layer:
+    /// a chat has no task type, and the conversation itself is the packet.
     /// </summary>
     public string ChatSystemPrompt(AgentRecipe recipe, PathJail workspace)
     {
@@ -36,6 +33,7 @@ public sealed class PromptAssembler(PromptLibrary prompts)
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>Appends the tool protocol and the recipe's standing-context files, if present.</summary>
     private static void AppendCommon(StringBuilder sb, AgentRecipe recipe, PathJail workspace)
     {
         sb.AppendLine(ToolProtocol(recipe)).AppendLine();
@@ -50,9 +48,9 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     }
 
     /// <summary>
-    /// Generated from the recipe rather than written prose, so the documented
-    /// surface cannot drift from the executable one — a role that loses a tool
-    /// stops being told it has one, with no second place to update.
+    /// The tool protocol section: how to emit a call, the tools this recipe has with their
+    /// arguments, and the limits the harness enforces. Generated from the recipe, so a role is
+    /// never told about a tool it does not have.
     /// </summary>
     public static string ToolProtocol(AgentRecipe recipe)
     {
@@ -119,17 +117,15 @@ public sealed class PromptAssembler(PromptLibrary prompts)
         return sb.ToString().TrimEnd();
     }
 
-    /// <summary>Layer C — the task packet, the agent's first user turn.</summary>
+    /// <summary>The task packet: the agent's first user turn, rendered from the tasks row.</summary>
+    /// <param name="task">The task being worked.</param>
     /// <param name="standingGuidance">
-    /// Instructions that outlive one attempt — the client's answer when a task was put to
-    /// them. Passed separately because <see cref="TaskRecord.ProgressNote"/> is overwritten
-    /// by every redirect and review, so guidance stored only there is lost by the time an
-    /// engineer reads it.
+    /// Instructions that outlive one attempt, such as the client's answer when the task was put
+    /// to them. Passed separately because the progress note is overwritten by every revision.
     /// </param>
     /// <param name="contractSlice">
-    /// The operations from <see cref="TaskRecord.ContractOps"/> as an OpenAPI fragment. The
-    /// engineer is handed the exact paths, status codes and response schemas it must produce,
-    /// rather than a pointer to a contracts folder it may or may not read.
+    /// The task's contract operations as an OpenAPI fragment, so the engineer is handed the
+    /// exact paths, status codes and response schemas it must produce.
     /// </param>
     public static string TaskPacket(
         TaskRecord task, IReadOnlyList<string>? standingGuidance = null, string? contractSlice = null)
@@ -194,9 +190,8 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     }
 
     /// <summary>
-    /// Rehydrate a chat as an alternating conversation. Statelessness mechanics
-    /// (Principle 2): the instance answering this turn never saw the previous
-    /// ones — the messages table is the memory, replayed on every spin-up.
+    /// Replays stored messages as an alternating conversation. The instance answering this turn
+    /// never saw the previous ones; the messages table is the memory.
     /// </summary>
     public static IReadOnlyList<Llm.LlmMessage> Conversation(IEnumerable<Message> history)
     {

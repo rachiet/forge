@@ -10,18 +10,22 @@ using Forge.Core.Workspaces;
 
 namespace Forge.Core.Review;
 
+/// <summary>A reviewer's decision on one task.</summary>
+/// <param name="Approved">Whether the diff may merge.</param>
+/// <param name="Feedback">The reason for changes, or the approval note.</param>
+/// <param name="Convention">A rule to append to CONVENTIONS.md, if the reviewer gave one.</param>
+/// <param name="End">Why the reviewer's instance stopped.</param>
+/// <param name="RejectedBugReason">Set when the review rejected the underlying bug instead.</param>
 public sealed record ReviewVerdict(
     bool Approved, string Feedback, string? Convention, EndReason End, string? RejectedBugReason = null);
 
 /// <summary>
-/// The Principal review (spec §7, M4): a diff that already passed CI is read by
-/// the Principal, who approves it or sends it back. Reviewer ≠ author — this runs
-/// a fresh Principal instance that did not write the code.
+/// Runs a fresh Principal over a task's diff, which has already passed CI, to approve it or
+/// send it back. A new instance every time, so the reviewer never wrote the code.
 ///
-/// Runs the same agent loop, in the task's existing workspace (so read_file and
-/// grep see the branch), seeded with the diff. The verdict comes back on the
-/// AgentRunResult; a requested convention is appended to CONVENTIONS.md here, so
-/// the rule survives whether or not this particular task ends up merging.
+/// It runs in the task's existing workspace, so read_file and grep see the branch, and is
+/// seeded with the diff. A convention the reviewer asked for is appended to CONVENTIONS.md
+/// here, whether or not the task itself goes on to merge.
 /// </summary>
 public sealed class ReviewPhase(
     IDbConnection conn,
@@ -33,13 +37,13 @@ public sealed class ReviewPhase(
     private readonly AgentRecipe _recipe = AgentRecipe.PrincipalReview;
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
 
+    /// <summary>Reviews a task's branch against trunk and returns the verdict.</summary>
     public async Task<ReviewVerdict> RunAsync(
         TaskRecord task, string branch, WorkspaceManager workspaces, CancellationToken ct = default)
     {
         var log = _log.For(task.Id);
         var executor = new ToolExecutor(workspaces.Path(task.Id), _recipe.ToolAllowlist, vault);
-        // The review is about one task; bind its loop's logging to that task so its
-        // events (instance start, llm.call) are task-scoped like the rest of the task.
+        // Bind logging to the task, so a review's events sit alongside the rest of its story.
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, log);
 
         var diff = workspaces.DiffAgainstTrunk(task.Id, branch);
@@ -47,17 +51,14 @@ public sealed class ReviewPhase(
             .RunReviewAsync([new LlmMessage("user", Brief(task, diff))], task, executor, ct)
             .ConfigureAwait(false);
 
-        // The reviewer judged the underlying bug not a real defect and rejected it
-        // (already transitioned to Rejected by the tool). Surface that so the runner
-        // closes it instead of looping request_changes on a fix for a non-bug.
+        // The reviewer rejected the underlying bug, which the runner closes rather than revises.
         if (result.RejectedBugReason is { } rejectReason)
         {
             log.Event(EventType.ReviewChangesRequested, $"bug rejected in review: {rejectReason}");
             return new ReviewVerdict(false, rejectReason, null, result.End, rejectReason);
         }
 
-        // No verdict tool was called (budget, cap, crash) — treat as inconclusive,
-        // which the runner handles as "not approved" without pretending it was rejected.
+        // No verdict tool was called: inconclusive, which the runner reviews again.
         if (result.ReviewApproved is not { } approved)
         {
             log.Event(EventType.ReviewChangesRequested,
@@ -77,6 +78,7 @@ public sealed class ReviewPhase(
         return new ReviewVerdict(approved, feedback, result.ReviewConvention, result.End);
     }
 
+    /// <summary>The reviewer's opening turn: the task, its acceptance criteria, and the diff.</summary>
     private static string Brief(TaskRecord task, string diff) => $"""
         # Review
 

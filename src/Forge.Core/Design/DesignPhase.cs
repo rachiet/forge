@@ -11,28 +11,30 @@ using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Core.Design;
 
+/// <summary>What a design run produced.</summary>
+/// <param name="End">Why the Principal's instance stopped.</param>
+/// <param name="TasksCreated">How many tasks it added to the board.</param>
+/// <param name="Coverage">Which requirements map to a task.</param>
+/// <param name="Contract">Gaps in the requirement-operation-task links.</param>
+/// <param name="Summary">The Principal's plain-language account of the design.</param>
+/// <param name="ProjectBudgetExhausted">
+/// The project's dollar cap refused the run; the build pauses rather than treating the design
+/// as failed.
+/// </param>
 public sealed record DesignOutcome(
     EndReason End,
     int TasksCreated,
     CoverageReport Coverage,
     ContractReport Contract,
     string Summary,
-    // The project's dollar cap refused the run — pause the build, don't treat the
-    // design (or a Feature decomposition reusing it) as having failed.
     bool ProjectBudgetExhausted = false);
 
 /// <summary>
-/// The design phase (spec §7, M3): the Principal reads the requirements and
-/// authors the structure — tree, CONVENTIONS.md, contracts, acceptance criteria —
-/// and breaks the work into a task DAG.
-///
-/// It runs the same agent loop as everyone else, seeded with a design brief
-/// instead of a task packet or a chat, on a long-lived clone of trunk (like the
-/// PM's doc work). The PM coverage gate is checked here mechanically. The
-/// client's approval is the requirements the PM put to them with
-/// `propose_requirements`: approving opens the Feature, and the harness runs
-/// this phase and releases the tasks it creates to `ready` on its own
-/// (`TaskRunner.DecomposeFeatureAsync`).
+/// Runs the Principal over the requirements to produce the project structure, its
+/// CONVENTIONS.md section, the OpenAPI contract and the task DAG, then checks the coverage
+/// gates. The same agent loop as everywhere else, seeded with a design brief and run on a
+/// long-lived clone of trunk, which it commits to. A project that already has finished work
+/// gets the change-request brief instead, and plans only the delta.
 /// </summary>
 public sealed class DesignPhase(
     ForgePaths paths,
@@ -47,16 +49,19 @@ public sealed class DesignPhase(
     private readonly TaskRepository _tasks = new(conn);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
 
+    /// <summary>The long-lived clone of trunk the Principal designs in.</summary>
     public string WorkspacePath => paths.RoleWorkspace(project, "principal");
 
+    /// <summary>
+    /// Runs one design phase and returns what it produced, having committed the design to trunk
+    /// and checked the coverage gates.
+    /// </summary>
     public async Task<DesignOutcome> RunAsync(CancellationToken ct = default)
     {
         var existing = _tasks.List();
         var before = existing.Count;
 
-        // A project with completed work already exists — this run is a change request,
-        // so the Principal does impact analysis against the existing code and plans only
-        // the delta, rather than designing the whole system from a blank slate.
+        // Finished work means the project exists, so this run is a change request.
         var isChangeRequest = existing.Any(t => t.Status == TaskStatus.Done);
         _log.Message(isChangeRequest
             ? "Design phase: Principal starting a change-request impact analysis"
@@ -72,10 +77,7 @@ public sealed class DesignPhase(
             .RunChatAsync([new LlmMessage("user", brief)], executor, ct)
             .ConfigureAwait(false);
 
-        // The design docs are the Principal's artifacts; they go straight to trunk,
-        // the same way the PM's requirements do. Nothing further waits on a human:
-        // the tasks this run creates are released to `ready` by the caller
-        // (`TaskRunner.DecomposeFeatureAsync`) as soon as this method returns.
+        // The design docs go straight to trunk; the caller releases the tasks it created.
         var committed = new WorkspaceManager(paths, project).CommitAndPushTrunk(WorkspacePath,
             isChangeRequest ? "design: change-request impact analysis and delta tasks"
                             : "design: structure, conventions, contracts, task plan");
@@ -83,8 +85,7 @@ public sealed class DesignPhase(
 
         var created = _tasks.List().Count - before;
 
-        // PM coverage gate: read from the freshly-committed workspace so it reflects
-        // exactly what the Principal wrote this run.
+        // Read from the freshly committed workspace, so the gates see what this run wrote.
         var coverage = CoverageGate.Check(conn, workspace);
         _log.Message(coverage.Complete
             ? $"Coverage gate: all requirements mapped to tasks ({created} tasks created)"
@@ -96,9 +97,7 @@ public sealed class DesignPhase(
             ? "Contract gate: requirements, operations and tasks all linked"
             : $"Contract gate: {contract.Describe()}");
 
-        // The Principal ends with done(summary), not reply — its recipe has no reply
-        // tool — so the plain-language summary for the PM and client rides the
-        // progress note. Reply is kept first for any future chat-shaped design turn.
+        // The Principal has no reply tool, so its summary arrives as the progress note.
         var summary = result.Reply ?? result.ProgressNote
             ?? $"Design ended ({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns.";
         return new DesignOutcome(
@@ -106,13 +105,8 @@ public sealed class DesignPhase(
     }
 
     /// <summary>
-    /// The PM's milestone plan, appended to whichever brief is running.
-    ///
-    /// Without this the Principal cannot attach a task to a milestone even though
-    /// `create_task` has always accepted one: the ids live in a table it never sees,
-    /// so every task was created with a null milestone and the client's progress view
-    /// had nothing to group by. Ids are listed explicitly because that is what
-    /// `create_task(milestone: N)` takes.
+    /// The milestone section of the brief: the PM's plan with each milestone's id, which is
+    /// what `create_task(milestone: N)` takes. Empty when there are no milestones.
     /// </summary>
     private string MilestoneSection()
     {
@@ -136,6 +130,7 @@ public sealed class DesignPhase(
             """;
     }
 
+    /// <summary>The brief for a new project: build the structure, the contract and the DAG.</summary>
     private static string Brief() => $"""
         # Design brief
 
@@ -164,9 +159,8 @@ public sealed class DesignPhase(
         """;
 
     /// <summary>
-    /// The change-request brief: the project already exists, so this is impact analysis,
-    /// not a fresh design. The Principal reads the existing code and plans only the delta —
-    /// or pushes back if the change is ill-advised.
+    /// The brief for a project that already exists: read the code, write an impact note, update
+    /// the contract, and create only the delta tasks — or escalate if the change is ill-advised.
     /// </summary>
     private static string ChangeRequestBrief() => $"""
         # Change request — impact analysis
