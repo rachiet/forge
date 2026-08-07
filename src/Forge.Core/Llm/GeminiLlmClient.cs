@@ -5,16 +5,9 @@ using System.Text.Json.Nodes;
 namespace Forge.Core.Llm;
 
 /// <summary>
-/// The Google Gemini provider adapter (spec §11). Thin by design: it translates
-/// Forge's request/response records to `generateContent` and back. Hand-rolled over
-/// HttpClient for the same reason as the OpenAI adapter — none of an SDK's surface
-/// would be used.
-///
-/// Never hand one of these to an agent loop directly — wrap it in MeteredLlmClient
-/// so the ledger is written and budgets are enforced.
-///
-/// Shapes below follow the v1beta discovery document's GenerateContentRequest,
-/// Content/Part, GenerationConfig and UsageMetadata.
+/// The Google Gemini adapter: translates Forge's request and response records to the v1beta
+/// `generateContent` API and back, over HttpClient. Wrap it in MeteredLlmClient before handing
+/// it to an agent loop, or nothing is ledgered and no budget is enforced.
 /// </summary>
 public sealed class GeminiLlmClient : ILlmClient
 {
@@ -23,18 +16,15 @@ public sealed class GeminiLlmClient : ILlmClient
     public const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
 
     /// <summary>
-    /// Ids carry the price table's `gemini/` prefix so they are priceable as written;
-    /// <see cref="WireModel"/> strips it for the URL. One canonical id travels through
-    /// the recipe, the ledger and the pricer, and the provider-specific spelling is
-    /// resolved at the one place that talks to the provider.
+    /// This provider's answer to each tier. Ids carry the price table's `gemini/` prefix so
+    /// they are priceable as written; <see cref="WireModel"/> strips it for the URL.
     /// </summary>
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
         {
             [ModelTier.Fast] = "gemini/gemini-3.1-flash-lite",
             [ModelTier.Coding] = "gemini/gemini-2.5-flash",
-            // Not a pro model: the pro tier is quota-limited on this account and hangs
-            // often enough to stall a build. Revisit when pro capacity is reliable.
+            // A flash model, not pro: pro capacity is unreliable enough to stall a build.
             [ModelTier.Reasoning] = "gemini/gemini-3.6-flash",
         };
 
@@ -64,8 +54,7 @@ public sealed class GeminiLlmClient : ILlmClient
         {
             Content = new StringContent(BuildBody(request), Encoding.UTF8, "application/json"),
         };
-        // Header rather than ?key=, so the credential never lands in a URL that some
-        // proxy or error message might echo.
+        // Sent as a header, so the key never lands in a URL a proxy or error might echo.
         if (!string.IsNullOrWhiteSpace(_apiKey)) message.Headers.Add("x-goog-api-key", _apiKey);
 
         using var response = await _http.SendAsync(message, ct).ConfigureAwait(false);
@@ -83,10 +72,9 @@ public sealed class GeminiLlmClient : ILlmClient
     }
 
     /// <summary>
-    /// Gemini's conversation shape differs from the other two in three ways, all
-    /// absorbed here: the system prompt is `systemInstruction` (not a message), the
-    /// assistant role is spelled `model`, and content is a list of parts rather than
-    /// a string.
+    /// Builds the request body. Gemini's shape differs from the other providers in three ways:
+    /// the system prompt is `systemInstruction` rather than a message, the assistant role is
+    /// spelled `model`, and content is a list of parts rather than a string.
     /// </summary>
     internal static string BuildBody(LlmRequest request)
     {
@@ -115,18 +103,11 @@ public sealed class GeminiLlmClient : ILlmClient
     }
 
     /// <summary>
-    /// Usage translation, per UsageMetadata. The two things worth stating:
-    ///
-    /// - `promptTokenCount` is documented as "still the total effective prompt size"
-    ///   when content is cached, so `cachedContentTokenCount` is a subset and is
-    ///   subtracted — the same normalisation the OpenAI adapter performs, so
-    ///   LlmUsage.TokensIn means one thing everywhere.
-    /// - output is `candidatesTokenCount` PLUS `thoughtsTokenCount`. Thinking tokens are
-    ///   reported separately but billed as output, and omitting them would undercount
-    ///   every call to a thinking model.
-    ///
-    /// Cache writes have no counterpart: Gemini's implicit cache is not separately
-    /// charged, and explicit cached content is billed as storage rather than per call.
+    /// Translates UsageMetadata into Forge's four token buckets. `promptTokenCount` includes
+    /// cached content, so the cached count is subtracted to leave the uncached remainder that
+    /// TokensIn means everywhere. Output is `candidatesTokenCount` plus `thoughtsTokenCount`,
+    /// which is reported separately but billed as output. Cache writes are always zero:
+    /// Gemini does not charge them per call.
     /// </summary>
     internal static LlmResponse ParseResponse(string payload)
     {

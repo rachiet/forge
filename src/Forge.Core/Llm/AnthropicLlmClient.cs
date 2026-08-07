@@ -5,11 +5,9 @@ using ForgeMessage = Forge.Core.Llm.LlmMessage;
 namespace Forge.Core.Llm;
 
 /// <summary>
-/// The provider adapter (spec §11). Deliberately thin: it translates Forge's
-/// request/response records to the Anthropic SDK and back, and does nothing else.
-///
-/// Never hand one of these to an agent loop directly — wrap it in
-/// MeteredLlmClient so the ledger is written and budgets are enforced.
+/// The Anthropic adapter: translates Forge's request and response records to the Messages API
+/// and back. Wrap it in MeteredLlmClient before handing it to an agent loop, or nothing is
+/// ledgered and no budget is enforced.
 /// </summary>
 public sealed class AnthropicLlmClient : ILlmClient
 {
@@ -17,9 +15,8 @@ public sealed class AnthropicLlmClient : ILlmClient
     public const string ProviderName = "anthropic";
 
     /// <summary>
-    /// This provider's answer to each tier. The only place in Forge that names an
-    /// Anthropic model — recipes ask for a tier, and an operator can override any
-    /// entry in llm.json without touching code.
+    /// This provider's answer to each tier, and the only place an Anthropic model is named.
+    /// Any entry can be overridden in llm.json.
     /// </summary>
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
@@ -33,11 +30,8 @@ public sealed class AnthropicLlmClient : ILlmClient
     private readonly IReadOnlyDictionary<ModelTier, string> _models;
 
     /// <summary>
-    /// Forge authenticates its calls to the Anthropic Messages API with a Claude API
-    /// key (`sk-ant-api…`), read from the environment that forge_env populates at
-    /// startup — never from the database or a task packet. The SDK sends it as the
-    /// `x-api-key` header. Pass a key explicitly only in tests; in normal use the SDK
-    /// resolves ANTHROPIC_API_KEY from the environment itself.
+    /// Builds the client. The API key comes from the environment forge_env populates at
+    /// startup, never from the database or a task packet; pass one explicitly only in tests.
     /// </summary>
     public AnthropicLlmClient(string? apiKey = null, LlmConfig? config = null)
     {
@@ -54,15 +48,9 @@ public sealed class AnthropicLlmClient : ILlmClient
 
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
-        // Prompt caching. Our agent loop re-sends a byte-identical system prompt
-        // (role + task-type template + tool protocol) plus a growing conversation
-        // prefix on every turn — the ideal caching case. We set two ephemeral
-        // breakpoints: one after the system prompt, one on the last message. The
-        // system breakpoint reuses the frozen preamble across every turn of a run;
-        // the last-message breakpoint caches the whole conversation-so-far, so the
-        // next turn reads that prefix (~0.1x) and writes only its new suffix.
-        // Cost of a long agent loop drops from ~O(turns^2) to ~O(turns) in input
-        // tokens. Cache reads are verified via message.Usage.CacheReadInputTokens.
+        // Two cache breakpoints: one after the system prompt, which is identical on every
+        // turn, and one on the last message, which caches the conversation so far. The next
+        // turn then reads that prefix at cache rates and writes only its new suffix.
         var messages = request.Messages.Select(ToSdkMessage).ToList();
         if (messages.Count > 0)
             messages[^1] = WithCacheBreakpoint(request.Messages[^1]);
@@ -82,8 +70,7 @@ public sealed class AnthropicLlmClient : ILlmClient
                 },
             };
 
-        // The SDK raises typed exceptions rather than returning a status, so the
-        // translation to Forge's one meaning of "try again" happens here.
+        // The SDK throws rather than returning a status; translate to Forge's transient type.
         Message message;
         try
         {
@@ -122,9 +109,8 @@ public sealed class AnthropicLlmClient : ILlmClient
     };
 
     /// <summary>
-    /// Same message, but its content carried as a single cacheable text block with
-    /// an ephemeral breakpoint — the caching seam for the growing conversation
-    /// prefix. A plain string content can't carry cache_control; a block list can.
+    /// The same message with its content as a single text block carrying a cache breakpoint.
+    /// A plain string content cannot carry one; a block list can.
     /// </summary>
     private static MessageParam WithCacheBreakpoint(ForgeMessage message) => new()
     {

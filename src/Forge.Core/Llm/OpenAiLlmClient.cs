@@ -6,16 +6,9 @@ using System.Text.Json.Nodes;
 namespace Forge.Core.Llm;
 
 /// <summary>
-/// The OpenAI provider adapter (spec §11). Deliberately thin: it translates Forge's
-/// request/response records to the Chat Completions API and back, and does nothing
-/// else. Hand-rolled over HttpClient rather than the SDK — Forge uses none of the SDK
-/// surface (no streaming, no function calling, no structured output; tool calls are
-/// parsed out of plain text), so a dependency would buy nothing.
-///
-/// Never hand one of these to an agent loop directly — wrap it in MeteredLlmClient
-/// so the ledger is written and budgets are enforced.
-///
-/// Shapes below follow openai-openapi's CreateChatCompletionRequest / CompletionUsage.
+/// The OpenAI adapter: translates Forge's request and response records to the Chat Completions
+/// API and back, over HttpClient. Wrap it in MeteredLlmClient before handing it to an agent
+/// loop, or nothing is ledgered and no budget is enforced.
 /// </summary>
 public sealed class OpenAiLlmClient : ILlmClient
 {
@@ -24,8 +17,8 @@ public sealed class OpenAiLlmClient : ILlmClient
     public const string Endpoint = "https://api.openai.com/v1/chat/completions";
 
     /// <summary>
-    /// Ids are the price table's keys, so every default is priceable out of the box —
-    /// an unpriced model refuses to run, and a default that cannot run is not a default.
+    /// This provider's answer to each tier. The ids are price-table keys, so every default is
+    /// priceable — an unpriced model refuses to run.
     /// </summary>
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
