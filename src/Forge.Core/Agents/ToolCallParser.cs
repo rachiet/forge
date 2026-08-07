@@ -4,10 +4,10 @@ namespace Forge.Core.Agents;
 
 public sealed class ToolCallException(string message) : Exception(message);
 
-/// <summary>
-/// One parsed tool invocation from a model turn. Arguments are raw strings;
-/// <paramref name="Raw"/> is the original block the call was parsed from.
-/// </summary>
+/// <summary>One parsed tool invocation.</summary>
+/// <param name="Name">The tool being called.</param>
+/// <param name="Args">Its arguments, as raw strings.</param>
+/// <param name="Raw">The original text the call was parsed from, for logging a refusal.</param>
 public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> Args, string Raw = "")
 {
     public string Arg(string name) =>
@@ -29,12 +29,8 @@ public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> A
 }
 
 /// <summary>
-/// Parses tool calls out of a model's text turn.
-///
-/// The protocol is tag-delimited rather than JSON on purpose: engineers write
-/// file contents containing quotes, backslashes and newlines constantly, and a
-/// JSON payload turns every such write into an escaping problem the model gets
-/// wrong. Raw text between tags has no escaping rules to get wrong.
+/// Parses tool calls out of a model's text turn. The protocol is tag-delimited rather than
+/// JSON, so file contents full of quotes, backslashes and newlines need no escaping.
 ///
 ///   &lt;tool name="write_file"&gt;
 ///   &lt;arg name="path"&gt;src/Foo.cs&lt;/arg&gt;

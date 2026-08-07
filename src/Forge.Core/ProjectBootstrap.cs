@@ -18,18 +18,15 @@ public static class ProjectBootstrap
         "Don't worry about being technical, that's our job. Just describe the idea that's on your mind.\n\n" +
         "What would you like to forge today?";
 
-    /// <summary>Same name in Forge's templates/ and in the client repo's root.</summary>
+    /// <summary>The conventions file's name, the same in Forge's templates/ and the client repo.</summary>
     public const string ConventionsFile = "CONVENTIONS.md";
 
     public static void Init(ForgePaths paths, string name)
     {
         ForgePaths.ValidName(name);
 
-        // A project exists in three places — the directory, the registry row, the
-        // bare repo — and they can disagree if a previous init half-finished. Check
-        // all three up front so a broken remnant reports "already exists" instead of
-        // being silently completed, and so the registry INSERT never surprises us
-        // with a primary-key violation partway through.
+        // A project exists in three places — directory, registry row, bare repo — which a
+        // half-finished init can leave disagreeing. Check all of them before writing any.
         using var global = Database.OpenGlobal(paths.GlobalDb);
         var registered = global.ExecuteScalar<long>(
             "SELECT COUNT(*) FROM projects WHERE name = @name", new { name }) > 0;
@@ -54,19 +51,11 @@ public static class ProjectBootstrap
     }
 
     /// <summary>
-    /// The bare repo gets a seed commit immediately. An empty repo has no HEAD, so
-    /// cloning one and branching from it fails — every task workspace would have to
-    /// special-case "is this the first task?". One commit at init removes the case.
-    /// PROJECT.md is a stub here; the PM authors the real one in M2.
+    /// Creates the bare repo and gives it a seed commit, so cloning and branching from it work
+    /// without a first-task special case. The commit carries a stub PROJECT.md for the PM to
+    /// replace, a .gitignore, and Forge's base CONVENTIONS.md, which the Principal extends
+    /// rather than authors.
     /// </summary>
-    /// <remarks>
-    /// CONVENTIONS.md is seeded from Forge's own template for the same reason .gitignore
-    /// is: it is knowledge the harness already has, and a model asked to re-derive it every
-    /// project produces a different answer each time. Two finished projects disagreed on
-    /// their error-response shape and their test naming for no reason, and the second began
-    /// with none of the rules the first had paid for in failed tasks. The Principal appends
-    /// what is genuinely project-specific; the house rules arrive before it runs.
-    /// </remarks>
     private static void InitBareRepo(string repoPath, string project)
     {
         Git.Require(Path.GetDirectoryName(repoPath)!,
@@ -81,12 +70,8 @@ public static class ProjectBootstrap
                 $"# {project}\n\nCreated by Forge. Requirements and design not yet authored.\n");
             File.WriteAllText(Path.Combine(seed, ConventionsFile),
                 PromptLibrary.Resolve().Template(ConventionsFile));
-            // The tool executor points HOME at the task workspace (so agents can't
-            // read ~/forge_env), which makes the .NET SDK drop its caches —
-            // .dotnet/, .nuget/, .local/ — inside the jail. Without this file the
-            // harness's own commit-all sweeps that junk into every task branch and
-            // reviewers reject it over and over. Seeded at birth, not left for an
-            // agent to remember.
+            // HOME points at the workspace, so the SDK drops its caches inside the jail.
+            // Without these entries the harness's commit-all sweeps them into every branch.
             File.WriteAllText(Path.Combine(seed, ".gitignore"), """
                 bin/
                 obj/

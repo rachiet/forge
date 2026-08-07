@@ -1,18 +1,10 @@
 namespace Forge.Core.Configuration;
 
 /// <summary>
-/// Loads Forge's own credentials from a dotenv-style file into the process
-/// environment at startup.
-///
-/// These are the harness's keys (the LLM provider key, and whatever later
-/// milestones need) — infrastructure that lives *below* the agents. They are not
-/// client project secrets: those belong in the encrypted vault, where the tool
-/// executor substitutes them at exec time and redacts them on the way back
-/// (spec Principle 10). Keeping the two apart is the whole point of having both.
-///
-/// The file deliberately lives outside ForgeDataRoot: the data root holds client
-/// repos and databases and is meant to be movable and shareable, and credentials
-/// must not ride along in that payload.
+/// Loads Forge's own credentials — the LLM provider keys — from a dotenv-style file into the
+/// process environment at startup. These are the harness's keys, not client project secrets,
+/// which live in the encrypted vault. The file sits outside the data root, so credentials do
+/// not travel with the repos and databases it holds.
 /// </summary>
 public static class EnvFile
 {
@@ -26,10 +18,8 @@ public static class EnvFile
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "forge_env");
 
     /// <summary>
-    /// Load the file into the process environment. A variable already set in the
-    /// real environment wins, so a one-off `FOO=bar forge run` still overrides the
-    /// file. Returns the number of variables applied; a missing file is not an
-    /// error (a fresh checkout has no credentials yet).
+    /// Loads the file into the process environment and returns how many variables it applied.
+    /// A variable already set in the real environment wins. A missing file is not an error.
     /// </summary>
     public static int Load(string? path = null)
     {
@@ -47,9 +37,8 @@ public static class EnvFile
     }
 
     /// <summary>
-    /// Minimal dotenv: KEY=VALUE per line, # comments, blank lines, an optional
-    /// `export ` prefix, and optional surrounding quotes. No interpolation — a
-    /// credential file is not a place for a scripting language.
+    /// Parses one line: KEY=VALUE, with # comments, blank lines, an optional `export ` prefix
+    /// and optional surrounding quotes. No interpolation.
     /// </summary>
     internal static IReadOnlyList<(string Key, string Value)> Parse(string text)
     {
@@ -76,7 +65,7 @@ public static class EnvFile
         return entries;
     }
 
-    /// <summary>Write a starter file with owner-only permissions. Never overwrites an existing one.</summary>
+    /// <summary>Writes a starter file with owner-only permissions, and never overwrites one.</summary>
     public static bool CreateTemplate(string? path = null)
     {
         path ??= Resolve();
