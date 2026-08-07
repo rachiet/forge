@@ -8,6 +8,21 @@ using Forge.Core.Tools;
 
 namespace Forge.Core.Agents;
 
+/// <summary>What one agent instance produced.</summary>
+/// <param name="InstanceId">The agent_instances row this run wrote.</param>
+/// <param name="End">Why the loop stopped.</param>
+/// <param name="Iterations">Turns taken.</param>
+/// <param name="ProgressNote">The last note the agent saved, for its successor.</param>
+/// <param name="Detail">A human-readable line about how it ended.</param>
+/// <param name="Reply">What a chat role said to the client.</param>
+/// <param name="ReviewApproved">A reviewer's verdict; null when this was not a review.</param>
+/// <param name="ReviewFeedback">The reviewer's reason or approval note.</param>
+/// <param name="ReviewConvention">A rule the reviewer wants appended to CONVENTIONS.md.</param>
+/// <param name="RejectedBugReason">Why a bug was rejected, when one was.</param>
+/// <param name="ProjectBudgetExhausted">
+/// With End == Budget, means the PROJECT dollar cap refused the call rather than the task's
+/// token budget. The runner pauses the build instead of striking the task.
+/// </param>
 public sealed record AgentRunResult(
     string InstanceId,
     EndReason End,
@@ -19,19 +34,15 @@ public sealed record AgentRunResult(
     string? ReviewFeedback = null,
     string? ReviewConvention = null,
     string? RejectedBugReason = null,
-    // End == Budget with this set means the PROJECT cap refused the call — no task
-    // overran anything, so the runner must pause the build, never strike the task.
     bool ProjectBudgetExhausted = false);
 
 /// <summary>
-/// The harness's inner loop (spec §4.1):
-///   assemble context → call LLM → parse tool calls → execute jailed tools →
-///   append observations → repeat until done | budget | iteration cap | escalation.
+/// Runs one agent instance: assemble the context, call the model, parse its tool calls,
+/// execute them in the jail, append the observations, and repeat until the agent finishes or
+/// the harness stops it on budget, turns, refusals or an escalation.
 ///
-/// Stateful within a run (the conversation is the working memory), stateless
-/// across runs (nothing survives but the workspace, the progress note, and rows
-/// in the DB). Everything in here is trusted mechanical code; everything coming
-/// back from the model is untrusted output under supervision (Principle 6).
+/// The conversation is the working memory within a run. Across runs nothing survives but the
+/// workspace, the progress note, and rows in the database.
 /// </summary>
 public sealed class AgentLoop(
     ILlmClient llm,
@@ -40,7 +51,7 @@ public sealed class AgentLoop(
     AgentRecipe recipe,
     ForgeLogger? logger = null)
 {
-    /// <summary>Turns with no tool call are dead weight; three in a row means the model is lost.</summary>
+    /// <summary>Consecutive turns with no tool call before the instance is stopped.</summary>
     private const int MaxEmptyTurns = 3;
 
     /// <summary>
@@ -49,15 +60,10 @@ public sealed class AgentLoop(
     /// </summary>
     private const int MaxRefusedTurns = 5;
 
-    /// <summary>
-    /// The turn-budget analogue of the supervisor's 70% token nudge
-    /// (<see cref="MeteredLlmClient"/>): the fraction of the iteration cap at which
-    /// the model is first told to wrap up. Kept equal to the token threshold so a
-    /// run out of turns and a run out of tokens feel the same to the agent.
-    /// </summary>
+    /// <summary>Fraction of the iteration cap at which the agent is first told to wrap up.</summary>
     private const double IterationNudgeThreshold = 0.70;
 
-    /// <summary>Validated here, not only in the factories: `with` bypasses those.</summary>
+    /// <summary>Re-validated here because `with` on a recipe bypasses the factory checks.</summary>
     private readonly AgentRecipe _recipe = recipe.Validate();
 
     private readonly TaskRepository _tasks = new(conn);
@@ -73,14 +79,13 @@ public sealed class AgentLoop(
             [new LlmMessage("user", PromptAssembler.TaskPacket(
                 task,
                 new DiscussionRepository(conn).ClientGuidance(task.Id),
-                // Read from the workspace the agent is about to work in, so the slice is
-                // the contract as it stands on this branch rather than as it was planned.
+                // Read from the workspace, so the slice is the contract as it stands on this branch.
                 ContractSlice(task, executor.Jail.Root)))],
             executor, task, ct);
 
     /// <summary>
-    /// The operations this task implements, rendered from the project's contract — or null
-    /// when it names none, or the project has no HTTP surface at all.
+    /// The task's operations as an OpenAPI fragment, or null when it names none or the
+    /// project has no contract.
     /// </summary>
     private static string? ContractSlice(TaskRecord task, string workspace) =>
         task.ContractOps.Count > 0 && Design.ApiContract.Load(workspace) is { } contract
@@ -88,10 +93,8 @@ public sealed class AgentLoop(
             : null;
 
     /// <summary>
-    /// Triage a stuck task: the opening turn is a just-in-time packet describing the
-    /// block and how to resolve it (redirect / decompose / escalate), assembled by the
-    /// runner — not the role prompt. Task-scoped like task work, so the Principal's
-    /// note and instance land on the task it is unblocking.
+    /// Triages a stuck task. The opening turn is a packet the runner assembles describing the
+    /// block and the verdicts available. Scoped to the task, so the instance and note land on it.
     /// </summary>
     public Task<AgentRunResult> RunTriageAsync(
         string packet, TaskRecord task, ToolExecutor executor, CancellationToken ct = default) =>
@@ -101,19 +104,23 @@ public sealed class AgentLoop(
             executor, task, ct);
 
     /// <summary>
-    /// Review a task's diff. Chat-shaped (the diff is the opening turn), but the task is
-    /// bound so the review's tools can act on it — specifically `reject_bug`, which closes
-    /// an invalid bug rather than looping request_changes on a fix for a non-bug.
+    /// Reviews a task's diff. The conversation is the opening state, and the task is bound so
+    /// the review's tools can act on it.
     /// </summary>
     public Task<AgentRunResult> RunReviewAsync(
         IReadOnlyList<LlmMessage> conversation, TaskRecord task, ToolExecutor executor, CancellationToken ct = default) =>
         RunAsync(assembler.ChatSystemPrompt(_recipe, executor.Jail), conversation, executor, task, ct);
 
-    /// <summary>Answer a client: the conversation so far is the opening state.</summary>
+    /// <summary>Runs a chat turn with no task attached; the conversation is the opening state.</summary>
     public Task<AgentRunResult> RunChatAsync(
         IReadOnlyList<LlmMessage> conversation, ToolExecutor executor, CancellationToken ct = default) =>
         RunAsync(assembler.ChatSystemPrompt(_recipe, executor.Jail), conversation, executor, task: null, ct);
 
+    /// <summary>
+    /// The loop every entry point shares: call the model, run the tool calls it emitted, feed
+    /// the observations back, and stop on the agent's own ending tool, the iteration cap, a
+    /// refused budget, too many empty or fully-refused turns, or a provider failure.
+    /// </summary>
     private async Task<AgentRunResult> RunAsync(
         string system,
         IReadOnlyList<LlmMessage> seed,
@@ -121,12 +128,10 @@ public sealed class AgentLoop(
         TaskRecord? task,
         CancellationToken ct)
     {
-        // Task-scoped when working a task, project-scoped for a chat turn — so
-        // every line this run emits carries the right correlation automatically.
+        // Task-scoped when working a task, project-scoped for a chat turn.
         var log = task is { } scoped ? _baseLog.For(scoped.Id) : _baseLog;
 
-        // Resolved once per instance, not per turn: the model must not change under a
-        // conversation. The recipe asks for a tier; the configured client names it.
+        // Resolved once per instance: the model must not change under a conversation.
         var model = llm.ModelFor(_recipe.Tier);
 
         var instanceId = _instances.NewId(_recipe.InstancePrefix);
@@ -134,10 +139,7 @@ public sealed class AgentLoop(
         log.Event(EventType.InstanceStart,
             $"{instanceId} ({SnakeCaseEnum.ToSnakeCase(_recipe.Role)}, {model})");
 
-        // `using`, not a bare new: a toolset may own live processes (QA's serve()), and an
-        // instance that ends for ANY reason — done, budget, crash, iteration cap, or the
-        // cancellation below that never reaches Finish — must not leave one running. An
-        // orphaned server holds its port against every later run on this machine.
+        // Disposed however the instance ends, so a server QA started with serve() is killed.
         using var toolset = new AgentToolset(executor, conn, _recipe, task, log);
         var attribution = new LlmAttribution(instanceId, _recipe.Role, task?.Id);
 
@@ -145,9 +147,7 @@ public sealed class AgentLoop(
         var iterations = 0;
         var emptyTurns = 0;
         var refusedTurns = 0;
-        // The model's most recent output. When an instance dies without writing its
-        // own progress note, this becomes the resume note (`ProgressStatus: …`), so
-        // the next instance — and we — see exactly what it was thinking when it stopped.
+        // The model's most recent output, used as the resume note when it wrote none itself.
         string? lastMessage = null;
 
         for (var turn = 1; turn <= _recipe.IterationCap; turn++)
@@ -161,9 +161,7 @@ public sealed class AgentLoop(
                 {
                     Model = model,
                     System = system,
-                    // Snapshot, not the live list: a request is a value, and an
-                    // adapter that queues or retries must not see later turns appear
-                    // inside a request it already accepted.
+                    // A snapshot, so a retrying adapter never sees later turns appear in it.
                     Messages = [.. conversation],
                     MaxTokens = _recipe.MaxTokens,
                     Attribution = attribution,
@@ -171,27 +169,21 @@ public sealed class AgentLoop(
             }
             catch (BudgetExhaustedException ex)
             {
-                // The supervisor refused the call; the loop's only job is to stop and say
-                // which budget it was. A task over its own budget goes to TaskRunner.Park
-                // (OutOfBudget, a strike); a spent PROJECT cap pauses the whole build.
+                // The supervisor refused the call; the runner decides what happens to the task.
                 log.Event(EventType.LlmRefused, ex.Message);
                 return Finish(instanceId, EndReason.Budget, iterations, toolset, task, log, ex.Message, lastMessage)
                     with { ProjectBudgetExhausted = ex.ProjectCap };
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Genuine cancellation — Ctrl-C, a shutdown signal — is OUR token being
-                // tripped. Let it propagate and actually stop the run; it is not a crash.
+                // Our own token: the harness is stopping. Not a crash.
                 throw;
             }
             catch (Exception ex)
             {
-                // The provider is a network boundary: auth failures, rate limits, outages —
-                // and timeouts, which the HTTP stack raises as a TaskCanceledException even
-                // though we never cancelled (ct is not tripped, so the guard above passed it
-                // through to here). Treat all of it as a transient crash: park the work with
-                // its workspace and note intact so a fresh instance resumes, rather than
-                // letting a 429 or a timeout escape and kill the whole run.
+                // Any provider failure — auth, rate limit, outage, or an HTTP timeout raised as
+                // a TaskCanceledException — ends the instance as a crash, leaving the workspace
+                // and note intact for a fresh instance to resume from.
                 log.Event(EventType.ErrorProvider, $"turn {turn}: {ex.Message}");
                 return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
                     $"LLM call failed on turn {turn}: {ex.Message}", lastMessage);
@@ -233,15 +225,14 @@ public sealed class AgentLoop(
                 observations.AppendLine($"[{call.Name}]").AppendLine(outcome.Observation).AppendLine();
                 if (outcome.End is not { } reason) continue;
                 end = reason;
-                break; // the ending tool ends the turn; later calls in the batch are moot.
+                break; // an ending tool ends the turn; later calls in the batch do not run.
             }
 
             if (end is { } finalReason)
                 return Finish(instanceId, finalReason, iterations, toolset, task, log,
                     observations.ToString().Trim(), lastMessage);
 
-            // One accepted call means the model is still acting; only a turn that
-            // achieved nothing at all counts toward the guard.
+            // Only a turn where every call was refused counts toward the guard.
             if (anyAccepted) refusedTurns = 0;
             else if (++refusedTurns >= MaxRefusedTurns)
             {
@@ -264,8 +255,8 @@ public sealed class AgentLoop(
     }
 
     /// <summary>
-    /// Deliver anything the harness queued for this role mid-loop — most importantly
-    /// the supervisor's 70% budget nudge, which is useless if it only lands in a table.
+    /// Appends any messages the harness queued for this role and task — the supervisor's budget
+    /// nudge among them — to this turn's observations, and marks them received.
     /// </summary>
     private void AppendPendingMessages(long? taskId, StringBuilder observations, ForgeLogger log)
     {
@@ -282,16 +273,6 @@ public sealed class AgentLoop(
         }
     }
 
-    /// <summary>
-    /// The turn-budget counterpart of the 70% token nudge. Tokens are metered by
-    /// the supervisor, which can inject a nudge from outside the loop; turns are
-    /// counted here, so the loop must warn about them itself. Without this the model
-    /// gets no signal that it is running out of turns and is simply cut off cold at
-    /// the cap — the exact failure that stranded a finished-but-undeclared scaffold
-    /// in `blocked` (it had built and tested, but spent its last turns exploring
-    /// instead of calling `done`). We fire twice: once on crossing the 70% mark
-    /// ("wrap up"), and a hard warning on the final turn ("land the plane now").
-    /// </summary>
     /// <summary>The first <paramref name="count"/> non-blank lines, joined with " / ".</summary>
     private static string FirstLines(string text, int count)
     {
@@ -301,6 +282,10 @@ public sealed class AgentLoop(
         return string.Join(" / ", lines);
     }
 
+    /// <summary>
+    /// Warns the agent that its turns are running out: once on crossing the 70% mark, and
+    /// again on the final turn, telling it to end cleanly with done, progress_note or escalate.
+    /// </summary>
     private void AppendIterationNudge(int turn, StringBuilder observations, ForgeLogger log)
     {
         var cap = _recipe.IterationCap;
@@ -328,9 +313,8 @@ public sealed class AgentLoop(
     private static int NudgeTurn(int cap) => Math.Max(1, (int)Math.Ceiling(cap * IterationNudgeThreshold));
 
     /// <summary>
-    /// Close out the instance. For task work a progress note is written
-    /// unconditionally: the resume path depends on one existing, so it cannot be
-    /// left to the model's discretion (Principle 6 — the harness enforces).
+    /// Closes out the instance: records its end, and for task work guarantees a progress note
+    /// exists — the agent's own, the caller's override, or one built from its last output.
     /// </summary>
     private AgentRunResult Finish(
         string instanceId, EndReason end, int iterations,
@@ -340,18 +324,13 @@ public sealed class AgentLoop(
         var note = toolset.LastProgressNote;
         if (note is null && noteOverride is not null && task is not null)
         {
-            // Some failures make the model's last words the worst possible note: a
-            // refusal loop would hand the successor the exact malformed call to copy.
-            // The caller supplies the note instead.
+            // The caller's note wins where the model's last words would mislead a successor.
             note = noteOverride;
             _tasks.SetProgressNote(task.Id, note);
         }
         else if (note is null && task is not null)
         {
-            // The instance died without ending its own turn (budget/iteration/crash).
-            // If it left any final words, keep them verbatim as the resume note — a
-            // `ProgressStatus:` from the model beats a generic harness sentence, and
-            // it's the only record of what it was doing (the conversation is discarded).
+            // Ended without writing a note: keep its last output verbatim as the resume note.
             note = lastMessage is { Length: > 0 }
                 ? $"ProgressStatus [ended {SnakeCaseEnum.ToSnakeCase(end)} after {iterations} turns]: {lastMessage.Trim()}"
                 : $"Instance {instanceId} ended ({SnakeCaseEnum.ToSnakeCase(end)}) after {iterations} turns " +

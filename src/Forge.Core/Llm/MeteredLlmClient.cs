@@ -6,21 +6,13 @@ using Forge.Core.Model;
 namespace Forge.Core.Llm;
 
 /// <summary>
-/// The supervisor as a decorator, not a convention (spec §11). Wraps any
-/// provider adapter and:
-///  - refuses the call outright once the task (or project) budget is spent, by
-///    throwing — the task's terminal state (OutOfBudget → the Principal's queue,
-///    with a strike counted) is decided in one place, TaskRunner.Park, not here;
-///  - escalates a project-wide budget cap to the PM (a client money decision);
-///  - writes a token_ledger row and bumps tasks.tokens_spent after every call;
-///  - injects a system_nudge message when a call crosses 70% of the task budget.
+/// Wraps a provider adapter and supervises every call: refuses it by throwing once the
+/// project's dollar cap or the task's token budget is spent, escalates a spent project cap
+/// to the PM once, writes a token_ledger row and bumps tasks.tokens_spent after each call,
+/// and injects a system_nudge at 70% of the task budget.
 ///
-/// The two budgets are deliberately different units, because they do different jobs.
-/// The *project* budget is dollars: it is the client's real spend, priced from all
-/// four token buckets against a live rate table. The *task* budget stays tokens: it
-/// exists to stop one agent looping forever, and is an approximation — it counts the
-/// uncached prompt remainder plus output, so it undercounts real traffic by a wide
-/// margin. That is tolerated knowingly; money safety comes from the dollar cap.
+/// The project budget is USD, priced from all four token buckets. The task budget is tokens,
+/// measured per agent instance.
 /// </summary>
 public sealed class MeteredLlmClient(
     ILlmClient inner,
@@ -37,6 +29,7 @@ public sealed class MeteredLlmClient(
 
     public string ModelFor(ModelTier tier) => inner.ModelFor(tier);
 
+    /// <summary>Checks the budgets, makes the call, then ledgers what it cost.</summary>
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         RefuseIfExhausted(request.Attribution);
@@ -47,19 +40,19 @@ public sealed class MeteredLlmClient(
         return response;
     }
 
+    /// <summary>
+    /// Throws when the project's dollar cap or this instance's token budget is spent.
+    /// The fixed CLI budget wins; otherwise the live source is re-read on every call, so a
+    /// cap raised mid-build applies to the next one.
+    /// </summary>
     private void RefuseIfExhausted(LlmAttribution attribution)
     {
-        // Re-read per call when a live source is wired (the board passes the project's
-        // stored settings): the client raising the cap mid-build must take effect on the
-        // NEXT call, not after a restart. A fixed value (the CLI flag) still wins.
         if ((projectBudgetUsd ?? liveBudgetUsd?.Invoke()) is { } budget)
         {
             var spent = _ledger.ProjectTotals().CostUsd;
             if (spent >= budget)
             {
-                // Escalate once, not once per refused call: after the cap trips, every
-                // task the loop touches is refused, and each refusal landing its own
-                // escalation would bury the PM in identical messages.
+                // One escalation per exhausted cap, not one per refused call.
                 if (!_messages.Pending("pm").Any(m =>
                         m.Type == MessageType.Escalation && m.Payload.StartsWith("Project budget exhausted")))
                 {
@@ -71,20 +64,16 @@ public sealed class MeteredLlmClient(
 
         if (attribution.TaskId is not { } taskId) return;
 
-        // Measured against this instance, not the task: the budget exists to stop one
-        // agent running away, and a task legitimately passes through several agents.
-        // Counting every bucket keeps the number meaning the same amount of work on a
-        // provider that caches and one that does not.
+        // Totalled per agent instance, over all four token buckets.
         var task = _tasks.Get(taskId);
         var processed = _ledger.InstanceTotals(attribution.AgentInstanceId).TotalTokens;
         if (processed < task.TokenBudget) return;
 
-        // Enforcement is not making the call. Parking the task — OutOfBudget, a strike,
-        // the workspace kept, the Principal notified — is TaskRunner.Park's job, so it
-        // isn't split across two owners that could disagree.
+        // Throwing is the whole enforcement; TaskRunner.Park decides what happens to the task.
         throw BudgetExhaustedException.Tokens($"Task {taskId}", processed, task.TokenBudget);
     }
 
+    /// <summary>Files a pending escalation to the PM naming the spent cap and the refused call.</summary>
     private void QueueBudgetEscalation(LlmAttribution attribution, string scope, string spent, string budget) =>
         _messages.Insert(Message.Create(
             MessageType.Escalation, "system", "pm",
@@ -93,13 +82,15 @@ public sealed class MeteredLlmClient(
             (attribution.TaskId is { } t ? $"; task {t} blocked." : "."),
             attribution.TaskId));
 
+    /// <summary>
+    /// Writes the call to the token ledger, adds its tokens to the task's running total, and
+    /// nudges the agent when it crosses 70% of the task budget.
+    /// </summary>
     private void Record(LlmRequest request, LlmUsage usage)
     {
         var attribution = request.Attribution;
 
-        // Priced here rather than at read time so the ledger records what the call cost
-        // when it was made. All four buckets are stored alongside, so a row can still be
-        // re-derived later if the rate table is corrected.
+        // Priced at call time; the four buckets are stored alongside so a row stays recomputable.
         var price = prices.For(request.Model);
 
         _ledger.Append(new TokenLedgerEntry
@@ -118,14 +109,12 @@ public sealed class MeteredLlmClient(
 
         if (attribution.TaskId is not { } taskId) return;
 
-        // tasks.tokens_spent is the task's running total, for the board and the ledger's
-        // own reporting. Enforcement reads the ledger per instance; this column no longer
-        // gates anything, so it counts every bucket too and the two agree.
+        // tasks.tokens_spent is a reporting total for the board; it gates nothing.
         var processed = usage.TokensIn + usage.TokensOut + usage.CacheReadTokens + usage.CacheWriteTokens;
         var task = _tasks.Get(taskId);
         _tasks.AddTokensSpent(taskId, (int)processed);
 
-        // The nudge is the instance's own 70% mark, matching what the cap will refuse on.
+        // The nudge fires on the instance's 70% mark, the same total the cap refuses on.
         var before = _ledger.InstanceTotals(attribution.AgentInstanceId).TotalTokens - processed;
         var threshold = task.TokenBudget * NudgeThreshold;
         if (before < threshold && before + processed >= threshold)

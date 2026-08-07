@@ -5,15 +5,20 @@ using Forge.Core.Secrets;
 
 namespace Forge.Core.Tools;
 
+/// <summary>What one finished command produced.</summary>
+/// <param name="ExitCode">The process exit code.</param>
+/// <param name="Stdout">Standard output, secrets redacted.</param>
+/// <param name="Stderr">Standard error, secrets redacted.</param>
+/// <param name="TimedOut">Whether the harness killed it at the timeout.</param>
 public sealed record ToolResult(int ExitCode, string Stdout, string Stderr, bool TimedOut);
 
+/// <summary>Thrown when a tool call reaches outside its jail, its scope, or the binary allowlist.</summary>
 public sealed class ToolJailViolationException(string message) : InvalidOperationException(message);
 
 /// <summary>
-/// A process still running under the harness's supervision — what <see cref="ToolExecutor.Start"/>
-/// returns. Output is captured continuously into a buffer rather than read at the end, because the
-/// interesting part of a server's log (the port it bound, the stack trace behind a 500) is written
-/// while it runs, and a process that never exits would otherwise never surrender a line of it.
+/// A process the harness started and left running, returned by <see cref="ToolExecutor.Start"/>.
+/// Its output is captured line by line as it is written, so a server that never exits can still
+/// be read from.
 /// </summary>
 public sealed class ServerHandle : IDisposable
 {
@@ -21,23 +26,23 @@ public sealed class ServerHandle : IDisposable
     private readonly Func<string, string> _redact;
     private readonly StringBuilder _output = new();
 
-    /// <summary>Output arrives on threadpool threads while the agent's turn reads it.</summary>
+    /// <summary>Guards the buffer: output arrives on threadpool threads while a turn reads it.</summary>
     private readonly object _gate = new();
 
     /// <summary>How much of <see cref="_output"/> has already been shown, so each read is a delta.</summary>
     private int _shown;
 
+    /// <summary>Private: instances come from <see cref="Launch"/>, which starts the process.</summary>
     private ServerHandle(string command, Process process, Func<string, string> redact) =>
         (Command, _process, _redact) = (command, process, redact);
 
+    /// <summary>Starts the process and begins capturing its output.</summary>
     internal static ServerHandle Launch(string command, ProcessStartInfo psi, Func<string, string> redact)
     {
         var process = new Process { StartInfo = psi };
         var handle = new ServerHandle(command, process, redact);
 
-        // Event-driven rather than ReadToEnd: those calls only complete at exit, which for a
-        // server is never. This delivers each line as it is written, which is what makes
-        // "wait until it says it is listening" possible.
+        // Event-driven, so each line is available while the process is still running.
         process.OutputDataReceived += (_, e) => handle.Capture(e.Data);
         process.ErrorDataReceived += (_, e) => handle.Capture(e.Data);
         process.Start();
@@ -46,9 +51,10 @@ public sealed class ServerHandle : IDisposable
         return handle;
     }
 
-    /// <summary>The command as the agent typed it — what how_to_run is checked against.</summary>
+    /// <summary>The command as the agent typed it.</summary>
     public string Command { get; }
 
+    /// <summary>Whether the process has ended.</summary>
     public bool HasExited => _process.HasExited;
 
     /// <summary>Meaningful only once <see cref="HasExited"/>; -1 while it is still running.</summary>
@@ -60,10 +66,7 @@ public sealed class ServerHandle : IDisposable
         get { lock (_gate) return _redact(_output.ToString()); }
     }
 
-    /// <summary>
-    /// Output written since the last call — the server's side of whatever just happened.
-    /// Consuming it is what keeps a long-lived log from being re-shown on every request.
-    /// </summary>
+    /// <summary>Output written since the previous call, and marks it consumed.</summary>
     public string OutputSinceLastRead()
     {
         lock (_gate)
@@ -75,6 +78,7 @@ public sealed class ServerHandle : IDisposable
         }
     }
 
+    /// <summary>Appends one captured output line to the buffer.</summary>
     private void Capture(string? line)
     {
         if (line is null) return;
@@ -82,9 +86,8 @@ public sealed class ServerHandle : IDisposable
     }
 
     /// <summary>
-    /// Kills the whole tree, not just the process we started: `dotnet run` is a launcher whose
-    /// child holds the port, so killing the parent alone leaves the socket bound and the next
-    /// serve() fails on an address already in use.
+    /// Kills the process and its whole tree — `dotnet run` is a launcher whose child holds the
+    /// port — and waits briefly for it to exit.
     /// </summary>
     public void Dispose()
     {
@@ -102,11 +105,10 @@ public sealed class ServerHandle : IDisposable
 }
 
 /// <summary>
-/// Executes agent-requested commands under mechanical supervision (spec §11):
-/// no shell, allowlisted binaries only, working directory jailed to the task
-/// workspace, per-command timeout, {{secret:NAME}} substituted at exec time.
-/// Secret values are redacted from captured output so they never reach the
-/// model, the DB, or logs.
+/// Runs agent-requested commands under supervision: no shell, allowlisted binaries only, the
+/// working directory jailed to the task workspace, a per-command timeout, an environment built
+/// from an allowlist rather than inherited, and {{secret:NAME}} substituted at exec time.
+/// Secret values are redacted from captured output.
 /// </summary>
 public sealed partial class ToolExecutor(
     string jailRoot,
@@ -122,11 +124,17 @@ public sealed partial class ToolExecutor(
     private readonly IReadOnlyDictionary<string, string> _environment =
         environment ?? new Dictionary<string, string>();
 
+    /// <summary>The workspace every path in a command is resolved against.</summary>
     public PathJail Jail => _jail;
 
+    /// <summary>Matches a `{{secret:NAME}}` placeholder, capturing the name.</summary>
     [GeneratedRegex(@"\{\{secret:([A-Za-z0-9_]+)\}\}")]
     private static partial Regex SecretRef();
 
+    /// <summary>
+    /// Runs one command to completion and returns its exit code and output. A command that
+    /// outlives the timeout is killed with its process tree and reported as timed out.
+    /// </summary>
     public async Task<ToolResult> RunAsync(
         string command,
         string? workingSubdir = null,
@@ -160,17 +168,10 @@ public sealed partial class ToolExecutor(
     }
 
     /// <summary>
-    /// Starts a process and hands back a live handle instead of waiting for it to exit —
-    /// the one thing <see cref="RunAsync"/> structurally cannot do, since its timeout kills
-    /// whatever is still alive. A server has to outlive the call that started it to be worth
-    /// starting at all, so testing one through its own port needs this.
+    /// Starts a process and returns a live handle rather than waiting for it to exit, for
+    /// servers. Same allowlist, jail, environment and secret handling as <see cref="RunAsync"/>;
+    /// the caller owns the handle's lifetime, and an undisposed handle is a leaked process.
     /// </summary>
-    /// <remarks>
-    /// Every guarantee RunAsync makes still holds: same allowlist, same jail, same scrubbed
-    /// environment, same secret substitution and redaction — because both go through
-    /// <see cref="Prepare"/>. The difference is only who decides when the process dies, and
-    /// that is the caller's job now: an undisposed handle is a leaked process.
-    /// </remarks>
     public ServerHandle Start(string command, string? workingSubdir = null)
     {
         var (psi, secretsUsed) = Prepare(command, workingSubdir);
@@ -178,10 +179,9 @@ public sealed partial class ToolExecutor(
     }
 
     /// <summary>
-    /// Everything that has to be true before a child process starts: the binary is on the
-    /// allowlist, no argument points outside the jail, the environment is built rather than
-    /// inherited, and {{secret:NAME}} is resolved at exec time. Shared by both start paths so
-    /// a second one cannot quietly acquire weaker supervision than the first.
+    /// Builds the ProcessStartInfo both start paths use: checks the binary against the
+    /// allowlist, resolves the working directory inside the jail, builds the environment, and
+    /// substitutes any {{secret:NAME}} placeholders. Returns the secrets used, for redaction.
     /// </summary>
     private (ProcessStartInfo Psi, Dictionary<string, string> SecretsUsed) Prepare(
         string command, string? workingSubdir)
@@ -219,15 +219,9 @@ public sealed partial class ToolExecutor(
     }
 
     /// <summary>
-    /// Child processes would otherwise inherit Forge's whole environment — which
-    /// holds the harness's own provider keys. An agent's `dotnet run` on code it
-    /// just wrote is arbitrary code execution, so inheritance is a credential leak.
-    /// Build the environment from an allowlist instead: a key added to forge_env
-    /// tomorrow is invisible to agents by default, with nothing to remember.
-    ///
-    /// HOME points at the workspace so a child cannot read ~/forge_env either.
-    /// This raises the bar; it is not a sandbox. Real isolation is a container,
-    /// and that is a later problem than M1.
+    /// Replaces the child's environment with one built from an allowlist instead of inherited,
+    /// so Forge's own provider keys are never visible to it, and points HOME at the workspace.
+    /// Raises the bar; it is not a sandbox.
     /// </summary>
     private void ScrubEnvironment(ProcessStartInfo psi)
     {
@@ -237,8 +231,7 @@ public sealed partial class ToolExecutor(
             if (inherited.TryGetValue(name, out var value) && value is not null)
                 passThrough[name] = value;
 
-        // Toolchain caches are shared on purpose: re-downloading NuGet packages
-        // for every task would make the jail expensive rather than safe.
+        // DOTNET_/NUGET_ pass through so toolchain caches are shared across tasks.
         foreach (var (name, value) in inherited)
             if (value is not null && (name.StartsWith("DOTNET_", StringComparison.Ordinal) ||
                                       name.StartsWith("NUGET_", StringComparison.Ordinal)))
@@ -251,9 +244,11 @@ public sealed partial class ToolExecutor(
         psi.Environment["USERPROFILE"] = _jail.Root;
     }
 
+    /// <summary>Environment variables a child process may inherit.</summary>
     private static readonly string[] PassThroughNames =
         ["PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM", "SystemRoot", "ComSpec"];
 
+    /// <summary>Resolves the command's working directory inside the jail; throws if it is missing.</summary>
     private string ResolveWorkingDir(string? subdir)
     {
         var dir = subdir is null ? _jail.Root : _jail.Resolve(subdir);
@@ -263,9 +258,8 @@ public sealed partial class ToolExecutor(
     }
 
     /// <summary>
-    /// Heuristic path guard on arguments: anything that syntactically points
-    /// outside the jail (absolute paths, ~, or ..-escapes) is refused. Flags in
-    /// --name=value form are checked on their value part.
+    /// Refuses an argument that points outside the jail — an absolute path, a `~`, or a
+    /// `..` escape. Flags in --name=value form are checked on their value.
     /// </summary>
     private void RejectJailEscape(string arg, string workingDir)
     {
@@ -286,6 +280,7 @@ public sealed partial class ToolExecutor(
                 $"Argument '{arg}' resolves outside the task workspace ({resolved}).");
     }
 
+    /// <summary>Replaces {{secret:NAME}} with its value, recording which secrets were used.</summary>
     private string SubstituteSecrets(string arg, Dictionary<string, string> secretsUsed) =>
         SecretRef().Replace(arg, m =>
         {
@@ -295,6 +290,7 @@ public sealed partial class ToolExecutor(
             return value;
         });
 
+    /// <summary>Replaces any secret value in captured output with its {{secret:NAME}} placeholder.</summary>
     private static string Redact(string output, Dictionary<string, string> secretsUsed)
     {
         foreach (var (name, value) in secretsUsed)
@@ -302,8 +298,10 @@ public sealed partial class ToolExecutor(
         return output;
     }
 
-    /// <summary>Quote-aware tokenizer. No shell is involved, so shell operators are refused loudly
-    /// rather than silently passed to the binary as literal arguments.</summary>
+    /// <summary>
+    /// Splits a command into argv, honouring single and double quotes and backslash escapes.
+    /// Shell operators are refused rather than passed to the binary as literal arguments.
+    /// </summary>
     internal static List<string> Tokenize(string command)
     {
         List<string> tokens = [];

@@ -5,23 +5,23 @@ using Microsoft.OpenApi.Readers;
 
 namespace Forge.Core.Design;
 
-/// <summary>One operation in the contract: an endpoint, its id, and the requirement it serves.</summary>
+/// <summary>One operation in the contract.</summary>
+/// <param name="OperationId">Its stable id, named by tasks and by acceptance tests.</param>
+/// <param name="Method">The HTTP method, upper-case.</param>
+/// <param name="Path">The URL template, e.g. `/api/polls/{id}`.</param>
+/// <param name="Requirement">The requirement file it serves, from `x-requirement`.</param>
 public sealed record ContractOperation(string OperationId, string Method, string Path, string Requirement)
 {
+    /// <summary>`POST /api/polls` — the operation as a human reads it.</summary>
     public string Signature => $"{Method} {Path}";
 }
 
 /// <summary>
-/// The project's observable HTTP contract, read from the OpenAPI document the Principal
-/// writes. Everything downstream keys off <see cref="ContractOperation.OperationId"/>: a
-/// task names the operations it implements, an acceptance test names the operation it
-/// exercises, and the coverage gates are set comparisons between those names.
+/// The project's observable HTTP contract, parsed from the OpenAPI document at
+/// <see cref="Path"/>. Everything downstream refers to operations by
+/// <see cref="ContractOperation.OperationId"/>: a task names the operations it implements, an
+/// acceptance test names the operation it exercises, and the coverage gates compare those sets.
 /// </summary>
-/// <remarks>
-/// Parsed, never pattern-matched. A contract the harness cannot read is one it cannot
-/// gate against, so <see cref="Validate"/> refuses a document at the moment it is written
-/// rather than letting a malformed one reach the engineers who build from it.
-/// </remarks>
 public sealed class ApiContract
 {
     /// <summary>Repo-relative path of the contract. One document per project.</summary>
@@ -32,14 +32,17 @@ public sealed class ApiContract
 
     private readonly OpenApiDocument _document;
 
+    /// <summary>Private: an instance exists only if <see cref="Validate"/> accepted the document.</summary>
     private ApiContract(OpenApiDocument document, IReadOnlyList<ContractOperation> operations)
     {
         _document = document;
         Operations = operations;
     }
 
+    /// <summary>Every operation the document declares, in document order.</summary>
     public IReadOnlyList<ContractOperation> Operations { get; }
 
+    /// <summary>Just their ids.</summary>
     public IEnumerable<string> OperationIds => Operations.Select(o => o.OperationId);
 
     /// <summary>The contract on trunk, or null when the project has no HTTP surface.</summary>
@@ -52,8 +55,9 @@ public sealed class ApiContract
     }
 
     /// <summary>
-    /// Parses and structurally checks a contract. Errors are written for the model that
-    /// produced the document — they name the operation and what is missing from it.
+    /// Parses a contract and checks its structure: valid OpenAPI, and every operation carrying
+    /// an operationId, at least one 4xx or 5xx response, and an `x-requirement`. Returns the
+    /// contract, or the errors naming each operation and what it is missing.
     /// </summary>
     public static (ApiContract? Contract, IReadOnlyList<string> Errors) Validate(string yaml)
     {
@@ -81,8 +85,6 @@ public sealed class ApiContract
 
                 if (string.IsNullOrWhiteSpace(operation.OperationId))
                 {
-                    // Without an id the operation cannot be named by a task or a test, so it
-                    // would sit outside every gate — the one defect worth refusing outright.
                     errors.Add($"{where}: no operationId. Every operation needs a stable id "
                              + "(kebab-case, e.g. shorten-create) — tasks and tests refer to it by that name.");
                     continue;
@@ -120,9 +122,8 @@ public sealed class ApiContract
     }
 
     /// <summary>
-    /// The named operations rendered as a standalone OpenAPI document, for a task packet.
-    /// Components are carried whole rather than resolved: a schema the engineer needs must
-    /// be present, and an unresolved `$ref` in a packet is worse than a few extra lines.
+    /// Renders the named operations as a standalone OpenAPI document, for a task packet.
+    /// The whole components section is carried across, so every `$ref` in the slice resolves.
     /// </summary>
     public string Slice(IEnumerable<string> operationIds)
     {
@@ -156,16 +157,18 @@ public sealed class ApiContract
     public IReadOnlyCollection<string> CoveredRequirements =>
         Operations.Select(o => o.Requirement).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Ids named here that the contract does not define — a typo or an invention.</summary>
+    /// <summary>Of the ids given, those the contract does not define.</summary>
     public IReadOnlyList<string> Unknown(IEnumerable<string> operationIds)
     {
         var known = OperationIds.ToHashSet(StringComparer.Ordinal);
         return [.. operationIds.Where(id => !known.Contains(id))];
     }
 
+    /// <summary>Whether a response key is an error status: 4xx, 5xx, or `default`.</summary>
     private static bool IsFailure(string status) =>
         status.StartsWith('4') || status.StartsWith('5') || status.Equals("default", StringComparison.Ordinal);
 
+    /// <summary>The operation's `x-requirement` value, or null when it carries none.</summary>
     private static string? Requirement(OpenApiOperation operation) =>
         operation.Extensions.TryGetValue(RequirementExtension, out var value) && value is OpenApiString text
             ? text.Value?.Trim()

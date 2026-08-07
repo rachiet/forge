@@ -6,27 +6,25 @@ using Forge.Core.Agents;
 
 namespace Forge.Core.Qa;
 
-/// <summary>One acceptance run: whether the suite passed, and what it printed.</summary>
-/// <param name="Ran">
-/// False when there was nothing to run — no suite, or no app to start. The distinction
-/// matters: a suite that did not run is not a suite that passed.
-/// </param>
+/// <summary>One acceptance run.</summary>
+/// <param name="Passed">Whether the suite's process exited zero.</param>
+/// <param name="Ran">Whether it ran at all. False when there is no suite or no app to start.</param>
+/// <param name="Output">The test output, or why nothing ran.</param>
 public sealed record AcceptanceResult(bool Passed, bool Ran, string Output)
 {
+    /// <summary>A result for a suite that never executed. Not a pass.</summary>
     public static AcceptanceResult NotRun(string why) => new(false, false, why);
 }
 
 /// <summary>
-/// The project's acceptance suite: black-box tests QA writes against the OpenAPI contract,
-/// living in the client repo and run by the harness rather than by an agent. The verdict on
-/// a finished project is this suite's exit code.
+/// Runs the project's acceptance suite — black-box tests QA writes against the OpenAPI
+/// contract, living in the client repo under <see cref="Directory"/>. The harness starts the
+/// application, runs the suite against it over HTTP, and the exit code is the verdict on the
+/// finished project.
+///
+/// The suite is kept out of the solution file, so the engineers' CI never runs it, and reaches
+/// the application only at <see cref="BaseUrlVariable"/>, so it cannot reference its assemblies.
 /// </summary>
-/// <remarks>
-/// Two properties keep it honest. It is not in the solution file, so the engineer's CI —
-/// which builds and tests the .sln — never runs it and never goes red on a half-built
-/// feature. And it reaches the app only over HTTP at <see cref="BaseUrlVariable"/>, so it
-/// cannot reference the application's own assemblies and quietly become a white-box test.
-/// </remarks>
 public static partial class AcceptanceSuite
 {
     /// <summary>Repo-relative directory holding the suite.</summary>
@@ -42,9 +40,8 @@ public static partial class AcceptanceSuite
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>
-    /// Which contract operations the suite claims to cover, read from the source rather
-    /// than by running anything — a coverage gap has to be reportable before the suite is
-    /// trusted enough to execute.
+    /// The contract operations the suite claims to cover, read from the `[Trait("operation",
+    /// …)]` attributes in its source without building or running anything.
     /// </summary>
     public static IReadOnlyCollection<string> DeclaredOperations(string workspaceDir)
     {
@@ -58,14 +55,15 @@ public static partial class AcceptanceSuite
             .ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <summary>Whether this repo has an acceptance suite directory.</summary>
     public static bool Exists(string workspaceDir) =>
         System.IO.Directory.Exists(
             Path.Combine(workspaceDir, Directory.Replace('/', Path.DirectorySeparatorChar)));
 
     /// <summary>
-    /// Starts the application, runs the suite against it, and stops it again. Trusted code
-    /// like <see cref="Ci.CiRunner"/>: it runs dotnet directly, so what comes back is process
-    /// output rather than an agent's account of it.
+    /// Starts the application on a free port, runs the suite against it, and stops it again.
+    /// Returns a not-run result when there is no suite, no runnable app, or the app never
+    /// starts listening.
     /// </summary>
     public static AcceptanceResult Run(string workspaceDir)
     {
@@ -87,7 +85,7 @@ public static partial class AcceptanceSuite
         return result;
     }
 
-    /// <summary>A port the OS says is free right now; the app is told to bind exactly it.</summary>
+    /// <summary>A loopback port the OS reports as free.</summary>
     private static int FreePort()
     {
         using var probe = new TcpListener(System.Net.IPAddress.Loopback, 0);
@@ -97,6 +95,7 @@ public static partial class AcceptanceSuite
         return port;
     }
 
+    /// <summary>Starts the application bound to the given base URL, or null if it will not start.</summary>
     private static RunningApp? StartApp(string workspaceDir, string project, string baseUrl)
     {
         var psi = new ProcessStartInfo
@@ -110,14 +109,14 @@ public static partial class AcceptanceSuite
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--project");
         psi.ArgumentList.Add(project);
-        // ASPNETCORE_URLS rather than a launch profile: the profile is the engineer's to
-        // change, and a port the harness did not choose is a port it cannot address.
+        // Bind the port the harness chose, ignoring whatever the launch profile says.
         psi.Environment["ASPNETCORE_URLS"] = baseUrl;
 
         var process = Process.Start(psi);
         return process is null ? null : new RunningApp(process);
     }
 
+    /// <summary>Polls the port until something accepts a connection, or the startup timeout passes.</summary>
     private static bool WaitForPort(int port)
     {
         var deadline = DateTime.UtcNow + StartupTimeout;
@@ -135,6 +134,10 @@ public static partial class AcceptanceSuite
         return false;
     }
 
+    /// <summary>
+    /// Runs one dotnet command with the base URL in the environment and captures its output.
+    /// A command that outlives the timeout is killed with its process tree and reported as failed.
+    /// </summary>
     private static AcceptanceResult Dotnet(string dir, string baseUrl, params string[] args)
     {
         var psi = new ProcessStartInfo
@@ -166,9 +169,10 @@ public static partial class AcceptanceSuite
         return new AcceptanceResult(process.ExitCode == 0, true, output.ToString().Trim());
     }
 
-    /// <summary>Nothing the harness starts outlives the round, however the round ends.</summary>
+    /// <summary>An application the harness started, killed on Stop or Dispose.</summary>
     private sealed class RunningApp(Process process) : IDisposable
     {
+        /// <summary>Kills the process and its children if it is still alive.</summary>
         public void Stop()
         {
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
@@ -182,6 +186,7 @@ public static partial class AcceptanceSuite
         }
     }
 
+    /// <summary>Matches `[Trait("operation", "<id>")]`, capturing the operationId.</summary>
     [GeneratedRegex($"""Trait\s*\(\s*"{OperationTrait}"\s*,\s*"([^"]+)"\s*\)""")]
     private static partial Regex OperationTraitPattern();
 }
