@@ -68,6 +68,7 @@ public enum EventType
 /// <summary>Wire rendering for <see cref="EventType"/>, and back again.</summary>
 public static class EventTypes
 {
+    /// <summary>Each event's `domain.action` text.</summary>
     private static readonly IReadOnlyDictionary<EventType, string> ToWire =
         new Dictionary<EventType, string>
         {
@@ -111,14 +112,17 @@ public static class EventTypes
             [EventType.ErrorInternal] = "error.internal",
         };
 
+    /// <summary>The reverse lookup, built from <see cref="ToWire"/>.</summary>
     private static readonly IReadOnlyDictionary<string, EventType> FromWire =
         ToWire.ToDictionary(kv => kv.Value, kv => kv.Key, StringComparer.Ordinal);
 
+    /// <summary>The event's `domain.action` text.</summary>
     public static string Wire(this EventType type) =>
         ToWire.TryGetValue(type, out var wire)
             ? wire
             : throw new ArgumentOutOfRangeException(nameof(type), type, "No wire form — add it to EventTypes.");
 
+    /// <summary>The event for a `domain.action` string; throws on an unknown one.</summary>
     public static EventType Parse(string wire) =>
         FromWire.TryGetValue(wire, out var type)
             ? type

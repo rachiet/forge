@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace Forge.Core.Agents;
 
+/// <summary>Thrown when a tool block cannot be parsed at all.</summary>
 public sealed class ToolCallException(string message) : Exception(message);
 
 /// <summary>One parsed tool invocation.</summary>
@@ -10,14 +11,17 @@ public sealed class ToolCallException(string message) : Exception(message);
 /// <param name="Raw">The original text the call was parsed from, for logging a refusal.</param>
 public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> Args, string Raw = "")
 {
+    /// <summary>A required argument; throws when the call did not carry it.</summary>
     public string Arg(string name) =>
         Args.TryGetValue(name, out var v) && !string.IsNullOrWhiteSpace(v)
             ? v
             : throw new ToolCallException($"Tool '{Name}' requires a non-empty <arg name=\"{name}\">.");
 
+    /// <summary>An optional argument, or null when the call did not carry it.</summary>
     public string? Optional(string name) =>
         Args.TryGetValue(name, out var v) && !string.IsNullOrWhiteSpace(v) ? v : null;
 
+    /// <summary>An optional argument as an integer, or null when absent or unparseable.</summary>
     public int? OptionalInt(string name)
     {
         var raw = Optional(name);
@@ -42,11 +46,14 @@ public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> A
 public static partial class ToolCallParser
 {
     [GeneratedRegex(@"<tool\s+name\s*=\s*""([a-z_]+)""\s*>(.*?)</tool\s*>", RegexOptions.Singleline)]
+    /// <summary>Matches one tool block.</summary>
     private static partial Regex ToolBlock();
 
     [GeneratedRegex(@"<arg\s+name\s*=\s*""([a-z_]+)""\s*>(.*?)</arg\s*>", RegexOptions.Singleline)]
+    /// <summary>Matches one argument inside a tool block.</summary>
     private static partial Regex ArgBlock();
 
+    /// <summary>Every tool call in a model turn, in the order it emitted them.</summary>
     public static IReadOnlyList<ToolCall> Parse(string content)
     {
         List<ToolCall> calls = [];
@@ -67,6 +74,7 @@ public static partial class ToolCallParser
     /// byte-for-byte, then removes any wrapper the model added around it. Cleanups are
     /// applied here, in order, so every tool and every provider gets the same value.
     /// </summary>
+    /// <summary>Trims an argument's surrounding layout newlines and unwraps any CDATA.</summary>
     private static string Normalize(string raw)
     {
         var value = raw;
@@ -101,6 +109,7 @@ public static partial class ToolCallParser
     /// file holding two sections also starts with the opener and ends with the closer, and
     /// stripping its outer markers would silently corrupt it.
     /// </remarks>
+    /// <summary>Strips a CDATA wrapper, which models sometimes add around file contents.</summary>
     private static string UnwrapCdata(string value)
     {
         const string open = "<![CDATA[";

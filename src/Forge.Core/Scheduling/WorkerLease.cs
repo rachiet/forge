@@ -6,8 +6,10 @@ namespace Forge.Core.Scheduling;
 public sealed record WorkerStatus(string Project, int Pid, DateTimeOffset StartedAt, DateTimeOffset HeartbeatAt)
 {
     /// <summary>How long without a heartbeat before a worker is presumed dead.</summary>
+    /// <summary>How long a heartbeat stays valid.</summary>
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>Whether the holder has checked in recently enough to be presumed alive.</summary>
     public bool IsLive(DateTimeOffset now) => now - HeartbeatAt <= Timeout;
 }
 

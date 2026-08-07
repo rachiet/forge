@@ -11,6 +11,7 @@ namespace Forge.Core.Db;
 /// </summary>
 public sealed class DiscussionRepository(IDbConnection conn)
 {
+    /// <summary>One discussions row as the database returns it.</summary>
     private sealed record Row
     {
         public long Id { get; init; }
@@ -37,6 +38,7 @@ public sealed class DiscussionRepository(IDbConnection conn)
         };
     }
 
+    /// <summary>The column list every read shares.</summary>
     private const string SelectColumns = """
         SELECT id AS Id, task_id AS TaskId, parent_id AS ParentId, author AS Author,
                body AS Body, file_path AS FilePath, line_number AS LineNumber,
@@ -44,6 +46,7 @@ public sealed class DiscussionRepository(IDbConnection conn)
         FROM discussions
         """;
 
+    /// <summary>Opens a discussion on a task, optionally anchored to a file and line.</summary>
     public DiscussionRecord Open(long taskId, string author, string body,
         string? filePath = null, int? lineNumber = null)
     {
@@ -59,6 +62,7 @@ public sealed class DiscussionRepository(IDbConnection conn)
         return Get(id);
     }
 
+    /// <summary>The discussion with this id; throws if there is none.</summary>
     public DiscussionRecord Get(long id) =>
         conn.QuerySingle<Row>($"{SelectColumns} WHERE id = @id", new { id }).ToRecord();
 
@@ -77,13 +81,16 @@ public sealed class DiscussionRepository(IDbConnection conn)
             .Select(b => b["[client guidance]".Length..].Trim())
             .ToList();
 
+    /// <summary>Every discussion on a task, oldest first.</summary>
     public IReadOnlyList<DiscussionRecord> ForTask(long taskId) =>
         conn.Query<Row>($"{SelectColumns} WHERE task_id = @taskId ORDER BY created_at, id", new { taskId })
             .Select(r => r.ToRecord()).ToList();
 
+    /// <summary>Marks a discussion resolved.</summary>
     public void Resolve(long id) =>
         conn.Execute("UPDATE discussions SET status = 'resolved' WHERE id = @id", new { id });
 
+    /// <summary>How many discussions on a task are still open.</summary>
     public int OpenCount(long taskId) =>
         conn.ExecuteScalar<int>(
             "SELECT COUNT(*) FROM discussions WHERE task_id = @taskId AND status = 'open'", new { taskId });

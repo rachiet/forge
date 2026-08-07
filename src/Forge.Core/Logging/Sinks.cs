@@ -10,8 +10,10 @@ public sealed class FileLogSink : ILogSink
     private readonly object _gate = new();
     private readonly StreamWriter _writer;
 
+    /// <summary>The file being written to.</summary>
     public string Path { get; }
 
+    /// <summary>Opens the log file for appending, creating its directory if needed.</summary>
     public FileLogSink(string path)
     {
         Path = path;
@@ -24,12 +26,14 @@ public sealed class FileLogSink : ILogSink
             path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
     }
 
+    /// <summary>Appends one entry and flushes it.</summary>
     public void Write(LogEntry entry)
     {
         // Serialize concurrent writers: a project could have more than one worker later.
         lock (_gate) _writer.WriteLine(entry.Serialize());
     }
 
+    /// <summary>Closes the file.</summary>
     public void Dispose() => _writer.Dispose();
 }
 
@@ -38,6 +42,7 @@ public sealed class ConsoleLogSink(TextWriter? writer = null) : ILogSink
 {
     private readonly TextWriter _out = writer ?? Console.Out;
 
+    /// <summary>Prints one entry.</summary>
     public void Write(LogEntry entry) => _out.WriteLine(entry.Display());
 
     public void Dispose() { }
@@ -50,6 +55,7 @@ public sealed class ConsoleLogSink(TextWriter? writer = null) : ILogSink
 /// </summary>
 public sealed class CompositeLogSink(params ILogSink[] sinks) : ILogSink
 {
+    /// <summary>Appends one entry and flushes it.</summary>
     public void Write(LogEntry entry)
     {
         foreach (var sink in sinks)
@@ -68,6 +74,7 @@ public sealed class CompositeLogSink(params ILogSink[] sinks) : ILogSink
 /// <summary>Discards everything. The default when no sink is wired.</summary>
 public sealed class NullLogSink : ILogSink
 {
+    /// <summary>The shared instance; it holds no state.</summary>
     public static readonly NullLogSink Instance = new();
 
     public void Write(LogEntry entry) { }

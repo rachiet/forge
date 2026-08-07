@@ -15,6 +15,7 @@ public sealed class SecretsVault
     private readonly string _keyPath;
     private readonly string _storePath;
 
+    /// <summary>Opens the vault in a directory, creating it if it does not exist.</summary>
     public SecretsVault(string vaultDir)
     {
         Directory.CreateDirectory(vaultDir);
@@ -22,6 +23,7 @@ public sealed class SecretsVault
         _storePath = Path.Combine(vaultDir, "secrets.json");
     }
 
+    /// <summary>Stores a secret, replacing any value already held under that name.</summary>
     public void Set(string name, string value)
     {
         ValidateName(name);
@@ -31,6 +33,7 @@ public sealed class SecretsVault
         WriteOwnerOnly(_storePath, Encoding.UTF8.GetBytes(json));
     }
 
+    /// <summary>The value of a stored secret; throws when there is none by that name.</summary>
     public string Get(string name)
     {
         ValidateName(name);
@@ -39,11 +42,14 @@ public sealed class SecretsVault
             : throw new KeyNotFoundException($"Secret '{name}' is not in the vault.");
     }
 
+    /// <summary>Whether a secret is stored under this name.</summary>
     public bool Contains(string name) => LoadStore().ContainsKey(name);
 
+    /// <summary>The names of every stored secret, alphabetically. Never their values.</summary>
     public IReadOnlyList<string> Names() => LoadStore().Keys.OrderBy(n => n).ToList();
 
     /// <summary>Secret names appear in agent context as {{secret:NAME}}; keep them shell-safe.</summary>
+    /// <summary>Throws unless the name is one a {{secret:NAME}} placeholder could reference.</summary>
     public static void ValidateName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) ||
@@ -54,11 +60,13 @@ public sealed class SecretsVault
         }
     }
 
+    /// <summary>The decrypted store, or an empty one when the vault is new.</summary>
     private Dictionary<string, string> LoadStore() =>
         File.Exists(_storePath)
             ? JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(_storePath)) ?? []
             : [];
 
+    /// <summary>Encrypts the store with the machine-local key.</summary>
     private string Encrypt(string plaintext)
     {
         var key = GetOrCreateKey();
@@ -71,6 +79,7 @@ public sealed class SecretsVault
         return Convert.ToBase64String([.. nonce, .. tag, .. cipher]);
     }
 
+    /// <summary>Decrypts a stored blob with the machine-local key.</summary>
     private string Decrypt(string blob)
     {
         var key = GetOrCreateKey();
@@ -86,6 +95,7 @@ public sealed class SecretsVault
         return Encoding.UTF8.GetString(plain);
     }
 
+    /// <summary>The vault's key, generating and writing one on first use.</summary>
     private byte[] GetOrCreateKey()
     {
         if (!File.Exists(_keyPath))
@@ -93,6 +103,7 @@ public sealed class SecretsVault
         return File.ReadAllBytes(_keyPath);
     }
 
+    /// <summary>Writes a file only its owner can read.</summary>
     private static void WriteOwnerOnly(string path, byte[] content)
     {
         File.WriteAllBytes(path, content);

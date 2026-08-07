@@ -9,6 +9,7 @@ public sealed record LedgerTotals(
     long TokensIn, long TokensOut, long CacheReadTokens, long CacheWriteTokens, decimal CostUsd)
 {
     /// <summary>Everything actually sent or received — the real traffic, not the uncached remainder.</summary>
+    /// <summary>Every bucket added together, which is what task budgets are measured against.</summary>
     public long TotalTokens => TokensIn + TokensOut + CacheReadTokens + CacheWriteTokens;
 }
 
@@ -22,12 +23,16 @@ public sealed class LedgerRepository(IDbConnection conn)
     /// single cache-read token still lands in the hundreds of nanos — plenty of
     /// resolution — while SUM() over the column stays exact integer arithmetic.
     /// </summary>
+    /// <summary>How many stored units make one dollar.</summary>
     private const decimal NanosPerUsd = 1_000_000_000m;
 
+    /// <summary>Dollars as the integer nano-dollars the ledger stores.</summary>
     internal static long ToNanos(decimal usd) => (long)decimal.Round(usd * NanosPerUsd, 0);
 
+    /// <summary>Stored nano-dollars back as dollars.</summary>
     internal static decimal FromNanos(long nanos) => nanos / NanosPerUsd;
 
+    /// <summary>Records one LLM call and returns it with the id the database assigned.</summary>
     public TokenLedgerEntry Append(TokenLedgerEntry entry)
     {
         var id = conn.ExecuteScalar<long>("""
@@ -54,8 +59,10 @@ public sealed class LedgerRepository(IDbConnection conn)
         return entry with { Id = id };
     }
 
+    /// <summary>Everything the project has spent, in tokens and dollars.</summary>
     public LedgerTotals ProjectTotals() => Totals("");
 
+    /// <summary>What one task has spent across every instance that worked it.</summary>
     public LedgerTotals TaskTotals(long taskId) => Totals("WHERE task_id = @taskId", new { taskId });
 
     /// <summary>What one agent instance has processed so far.</summary>
@@ -64,9 +71,11 @@ public sealed class LedgerRepository(IDbConnection conn)
     /// rather than per task — a task legitimately passes through an engineer, a reviewer
     /// and a revision, and charging them all to one allowance starved whichever came last.
     /// </remarks>
+    /// <summary>What one agent instance has spent. Task budgets are enforced against this.</summary>
     public LedgerTotals InstanceTotals(string agentInstanceId) =>
         Totals("WHERE agent_instance_id = @agentInstanceId", new { agentInstanceId });
 
+    /// <summary>Sums the four buckets and the cost over the rows a filter selects.</summary>
     private LedgerTotals Totals(string where, object? param = null)
     {
         var row = conn.QuerySingle<(long In, long Out, long Read, long Write, long Nanos)>($"""
@@ -83,6 +92,7 @@ public sealed class LedgerRepository(IDbConnection conn)
     /// agent_instance_id on every row since M0, so attribution needed nothing new —
     /// only a cost column to sum.
     /// </summary>
+    /// <summary>What each role has cost, most expensive first.</summary>
     public IReadOnlyList<RoleSpend> SpendByRole()
     {
         var rows = conn.Query<(string Role, long Calls, long Total, long Nanos)>("""
@@ -99,6 +109,7 @@ public sealed class LedgerRepository(IDbConnection conn)
             .ToList();
     }
 
+    /// <summary>Every ledger row, or every row for one task, oldest first.</summary>
     public IReadOnlyList<TokenLedgerEntry> List(long? taskId = null)
     {
         var rows = conn.Query<(long Id, string AgentInstanceId, string Role, long? TaskId,
