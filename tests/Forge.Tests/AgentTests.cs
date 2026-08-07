@@ -212,11 +212,10 @@ public class AgentRecipeTests
     }
 
     [Fact]
-    public void Roles_that_arrive_in_a_later_milestone_fail_loudly_rather_than_half_working()
+    public void A_role_with_no_recipe_throws_rather_than_half_working()
     {
-        // QA arrived in M5; Researcher has not yet.
         var ex = Assert.Throws<NotSupportedException>(() => AgentRecipe.For(AgentRole.Researcher));
-        Assert.Contains("§12", ex.Message);
+        Assert.Contains("Researcher", ex.Message);
     }
 
     [Fact]
