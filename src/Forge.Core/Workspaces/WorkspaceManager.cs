@@ -177,6 +177,7 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         if (branch is { Length: > 0 }) Git.Run(BareRepo, "branch", "-D", branch);
     }
 
+    /// <summary>A task title reduced to a branch-safe slug.</summary>
     private static string Slug(string title)
     {
         var slug = new string(title.ToLowerInvariant()

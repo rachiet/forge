@@ -134,6 +134,7 @@ public static class TaskTransitions
             [TaskStatus.Cancelled] = [],
         };
 
+    /// <summary>Whether this status change is allowed.</summary>
     public static bool IsLegal(TaskStatus from, TaskStatus to) => Legal[from].Contains(to);
 
     public static void Require(TaskStatus from, TaskStatus to)

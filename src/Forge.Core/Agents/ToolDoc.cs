@@ -35,7 +35,9 @@ public sealed record ToolDoc(string Summary, params ToolArg[] Args)
         return sb.ToString();
     }
 
+    /// <summary>A required argument.</summary>
     public static ToolArg Required(string name, string description) => new(name, true, description);
 
+    /// <summary>An optional argument.</summary>
     public static ToolArg Optional(string name, string description) => new(name, false, description);
 }

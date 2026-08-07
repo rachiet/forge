@@ -305,6 +305,7 @@ public sealed class TaskRepository(IDbConnection conn)
             SELECT COUNT(*) FROM tasks WHERE type != 'bug' AND status = 'done'
             """) > 0;
 
+    /// <summary>Replaces a task's progress note, which is what its next instance resumes from.</summary>
     public void SetProgressNote(long taskId, string note) =>
         conn.Execute("""
             UPDATE tasks SET progress_note = @note, updated_at = datetime('now')

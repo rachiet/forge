@@ -218,6 +218,7 @@ public sealed partial class AgentToolset(
                 Required("reason", "what you are blocked on and what decision is needed.")),
         }).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
 
+    /// <summary>Runs one tool call and logs what it did.</summary>
     public async Task<ToolOutcome> ExecuteAsync(ToolCall call, CancellationToken ct = default)
     {
         var outcome = await DispatchAsync(call, ct).ConfigureAwait(false);
@@ -225,6 +226,7 @@ public sealed partial class AgentToolset(
         return outcome;
     }
 
+    /// <summary>Checks the call names a tool this recipe has, then runs it. Any failure becomes a refusal.</summary>
     private async Task<ToolOutcome> DispatchAsync(ToolCall call, CancellationToken ct)
     {
         if (!recipe.Tools.Contains(call.Name, StringComparer.Ordinal))
@@ -307,6 +309,7 @@ public sealed partial class AgentToolset(
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRun();
 
+    /// <summary>The first line of some text, for a log summary.</summary>
     private static string FirstLine(string text)
     {
         var line = text.ReplaceLineEndings("\n").Split('\n', 2)[0].Trim();
@@ -324,6 +327,7 @@ public sealed partial class AgentToolset(
         return full;
     }
 
+    /// <summary>Reads a file, or a line range of one, with the lines numbered.</summary>
     private ToolOutcome ReadFile(ToolCall call)
     {
         var path = Resolve(call.Arg("path"));
@@ -339,6 +343,7 @@ public sealed partial class AgentToolset(
         return new ToolOutcome(Truncate(sb.ToString()));
     }
 
+    /// <summary>Lists a directory's entries, or reports a file's size when given one.</summary>
     private ToolOutcome ListDir(ToolCall call)
     {
         var dir = Resolve(call.Optional("path") ?? ".");
@@ -352,6 +357,7 @@ public sealed partial class AgentToolset(
         return new ToolOutcome(Truncate(string.Join('\n', entries) is { Length: > 0 } s ? s : "(nothing in scope here)"));
     }
 
+    /// <summary>Searches the workspace for a regular expression and returns the matching lines.</summary>
     private ToolOutcome Grep(ToolCall call)
     {
         var pattern = call.Arg("pattern");
@@ -381,6 +387,7 @@ public sealed partial class AgentToolset(
         return new ToolOutcome(count == 0 ? $"No matches for '{pattern}'." : Truncate(hits.ToString()));
     }
 
+    /// <summary>Writes a file whole, after validating it if it is the contract.</summary>
     private ToolOutcome WriteFile(ToolCall call)
     {
         var path = Resolve(call.Arg("path"));

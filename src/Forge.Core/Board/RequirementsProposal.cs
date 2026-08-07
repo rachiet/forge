@@ -36,9 +36,11 @@ public sealed record RequirementsProposal(
             ? JsonSerializer.Deserialize<RequirementsProposal>(json)
             : null;
 
+    /// <summary>Stages this proposal, replacing any already waiting.</summary>
     public void Save(IDbConnection conn) =>
         new ProjectMetaRepository(conn).Set(MetaKey, JsonSerializer.Serialize(this));
 
+    /// <summary>Discards the staged proposal.</summary>
     public static void Clear(IDbConnection conn) =>
         new ProjectMetaRepository(conn).Set(MetaKey, "");
 
