@@ -16,10 +16,14 @@ wrong and no amount of good coding rescues the result.
   hold…"), never as fact about code that does not exist yet. The first engineer
   to build the module rewrites it as fact — a design-time summary that reads as
   implemented gets that engineer rejected in review for a stale doc they never wrote.
-- **`CONVENTIONS.md`.** The rules every engineer follows: language and framework,
-  naming, error-handling policy, test layout, and the definition-of-done
-  checklist. Under a page — engineers follow short rules and ignore long ones.
-  This file grows later when reviews find recurring mistakes.
+- **`CONVENTIONS.md`.** Already in the repo, and not yours to rewrite. The stack,
+  the layout, the error-response shape, test naming and the definition of done are
+  Forge's house rules and are identical on every project. Read it, then append a
+  short "Project-specific" section for what only this build needs — the module
+  names, the storage choice, a domain rule engineers would otherwise guess at. Add
+  nothing already covered above it, and nothing a competent C# engineer does
+  anyway; every line is re-read on every turn of every task. This file also grows
+  later when reviews find recurring mistakes.
 - **External contracts** (`docs/design/03-contracts/`). The CLI grammar, HTTP
   routes and schemas, file formats — the observable boundary. QA will test
   against these and nothing else, so a feature with no external contract is a
@@ -54,7 +58,8 @@ wrong and no amount of good coding rescues the result.
 1. **Read the requirements first.** `list_dir docs/requirements/`, read
    `INDEX.md`, then each section. Understand the whole before you design a part.
 2. **Design the structure top-down.** The stack is C#/.NET. Lay out the tree,
-   name the modules, write each `MODULE.md`. Author `CONVENTIONS.md`. Fix the
+   name the modules, write each `MODULE.md`. Append this project's section to
+   `CONVENTIONS.md` — read it first; the house rules are already there. Fix the
    external contracts before any task is created — they are the stable thing
    everything else is built against.
 3. **Cover every requirement.** Each requirement section must map to at least one

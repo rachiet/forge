@@ -1,6 +1,8 @@
 using Forge.Core;
+using Forge.Core.Agents;
 using Forge.Core.Board;
 using Forge.Core.Db;
+using Forge.Core.Workspaces;
 using Forge.Core.Llm;
 using Forge.Core.Model;
 using Forge.Core.Scheduling;
@@ -29,6 +31,23 @@ public class ProjectLifecycleTests : IDisposable
         try { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); }
         catch (IOException) { /* a git handle on Windows; the temp dir is disposable */ }
         GC.SuppressFinalize(this);
+    }
+
+    // ---------- what a new repo is born with ----------
+
+    [Fact]
+    public void A_new_repo_is_born_with_the_house_conventions()
+    {
+        // Seeded by the harness, not authored per project: two finished projects had
+        // disagreed on their error shape and test naming for no reason, and the second
+        // started without any of the rules the first had paid for in failed tasks.
+        ProjectBootstrap.Init(_paths, "alpha");
+
+        var onTrunk = Git.Run(_paths.ProjectBareRepo("alpha"),
+            "show", $"{WorkspaceManager.TrunkBranch}:{ProjectBootstrap.ConventionsFile}");
+
+        Assert.True(onTrunk.Ok);
+        Assert.Equal(PromptLibrary.Resolve().Template(ProjectBootstrap.ConventionsFile), onTrunk.Stdout);
     }
 
     // ---------- per-project settings ----------

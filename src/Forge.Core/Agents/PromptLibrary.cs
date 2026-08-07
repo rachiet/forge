@@ -28,6 +28,14 @@ public sealed class PromptLibrary(string root)
     public string TaskType(TaskType type) =>
         Read(Path.Combine(Root, "tasks", $"{SnakeCaseEnum.ToSnakeCase(type)}.md"));
 
+    /// <summary>
+    /// A file Forge writes into the client's repo rather than into a prompt — currently
+    /// the base CONVENTIONS.md every project starts from. It lives here for the same
+    /// reason the prompts do: editing one versioned file improves every future project,
+    /// where a copy authored per project drifts and re-learns what the last one paid for.
+    /// </summary>
+    public string Template(string name) => Read(Path.Combine(Root, "templates", name));
+
     private static string Read(string path) =>
         File.Exists(path)
             ? File.ReadAllText(path)

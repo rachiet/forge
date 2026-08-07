@@ -1,4 +1,5 @@
 using Dapper;
+using Forge.Core.Agents;
 using Forge.Core.Db;
 using Forge.Core.Model;
 using Forge.Core.Workspaces;
@@ -16,6 +17,9 @@ public static class ProjectBootstrap
         "You'll see progress here as it happens, and you can message me any time to change something or add an idea.\n\n" +
         "Don't worry about being technical, that's our job. Just describe the idea that's on your mind.\n\n" +
         "What would you like to forge today?";
+
+    /// <summary>Same name in Forge's templates/ and in the client repo's root.</summary>
+    public const string ConventionsFile = "CONVENTIONS.md";
 
     public static void Init(ForgePaths paths, string name)
     {
@@ -55,6 +59,14 @@ public static class ProjectBootstrap
     /// special-case "is this the first task?". One commit at init removes the case.
     /// PROJECT.md is a stub here; the PM authors the real one in M2.
     /// </summary>
+    /// <remarks>
+    /// CONVENTIONS.md is seeded from Forge's own template for the same reason .gitignore
+    /// is: it is knowledge the harness already has, and a model asked to re-derive it every
+    /// project produces a different answer each time. Two finished projects disagreed on
+    /// their error-response shape and their test naming for no reason, and the second began
+    /// with none of the rules the first had paid for in failed tasks. The Principal appends
+    /// what is genuinely project-specific; the house rules arrive before it runs.
+    /// </remarks>
     private static void InitBareRepo(string repoPath, string project)
     {
         Git.Require(Path.GetDirectoryName(repoPath)!,
@@ -67,6 +79,8 @@ public static class ProjectBootstrap
             Git.Require(seed, "init", "--initial-branch", WorkspaceManager.TrunkBranch);
             File.WriteAllText(Path.Combine(seed, "PROJECT.md"),
                 $"# {project}\n\nCreated by Forge. Requirements and design not yet authored.\n");
+            File.WriteAllText(Path.Combine(seed, ConventionsFile),
+                PromptLibrary.Resolve().Template(ConventionsFile));
             // The tool executor points HOME at the task workspace (so agents can't
             // read ~/forge_env), which makes the .NET SDK drop its caches —
             // .dotnet/, .nuget/, .local/ — inside the jail. Without this file the
