@@ -5,10 +5,9 @@ using Forge.Core.Model;
 namespace Forge.Core.Db;
 
 /// <summary>
-/// The discussions table (spec §6, §8): one object serving both PR review comments
-/// (file_path/line_number set) and general task Q&A (null). The review rejection
-/// loop records its reasons here, so a task carries the history of why it was sent
-/// back, not just its current state.
+/// Reads and writes the discussions table: review comments anchored to a file and line, and
+/// unanchored notes on a task. Review rejections and client guidance are recorded here, so a
+/// task carries the history of why it was sent back and not only its current state.
 /// </summary>
 public sealed class DiscussionRepository(IDbConnection conn)
 {

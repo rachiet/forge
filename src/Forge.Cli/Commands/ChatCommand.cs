@@ -12,9 +12,8 @@ using Spectre.Console.Cli;
 namespace Forge.Cli.Commands;
 
 /// <summary>
-/// The client's interface to the whole system (spec §7): they talk to the PM and
-/// to nobody else. Conversation state lives in the messages table, so this can be
-/// closed and reopened without losing the thread.
+/// `forge chat <project>` — the client's conversation with the PM, interactively or one message
+/// at a time. The thread lives in the messages table, so it survives closing the session.
 /// </summary>
 public sealed class ChatCommand : AsyncCommand<ChatCommand.Settings>
 {

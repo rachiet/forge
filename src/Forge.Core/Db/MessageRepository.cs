@@ -52,7 +52,6 @@ public sealed class MessageRepository(IDbConnection conn)
         return message with { Id = id };
     }
 
-    /// <summary>Queue read: pending messages for one receiver, oldest first (spec §6 semantics).</summary>
     /// <summary>Messages addressed to a role that it has not yet been shown, oldest first.</summary>
     public IReadOnlyList<Message> Pending(string toAgent) =>
         conn.Query<Row>(

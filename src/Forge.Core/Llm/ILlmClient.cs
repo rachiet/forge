@@ -4,7 +4,7 @@ namespace Forge.Core.Llm;
 
 public sealed record LlmMessage(string Role, string Content);
 
-/// <summary>Attribution is per task (finds tarpits), not just per agent (spec §4.3).</summary>
+/// <summary>Who a call belongs to: the instance, its role, and the task it works.</summary>
 public sealed record LlmAttribution(string AgentInstanceId, AgentRole Role, long? TaskId);
 
 public sealed record LlmRequest
@@ -20,9 +20,8 @@ public sealed record LlmRequest
 /// Cache-aware usage, as the provider reported it — these are the counts it bills
 /// on, not an estimate. TokensIn is the *uncached* input remainder; CacheReadTokens
 /// were served from cache and CacheWriteTokens written to it, so the whole prompt
-/// sent = TokensIn + CacheReadTokens + CacheWriteTokens. A run with CacheReadTokens
-/// sitting at zero across turns means a prefix invalidator is at work
-/// (spec §prompt-caching).
+/// sent = TokensIn + CacheReadTokens + CacheWriteTokens. CacheReadTokens sitting at zero
+/// across a run's turns means something is invalidating the prompt prefix.
 /// </summary>
 public sealed record LlmUsage(int TokensIn, int TokensOut, int CacheReadTokens = 0, int CacheWriteTokens = 0);
 

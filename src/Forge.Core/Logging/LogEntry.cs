@@ -1,14 +1,9 @@
 namespace Forge.Core.Logging;
 
 /// <summary>
-/// One log line. Five columns (CLAUDE.md — logging shape):
-///   timestamp | project | task | eventType | message
-///
-/// `project` is on every line (the story); `task` is the unit within it and is
-/// null for project-level events (intake chat, milestone planning). A task line
-/// still names its project, so filtering by project sweeps in every task —
-/// "all logs for the project" and "logs for one task" are the same rows, one
-/// filter apart.
+/// One log line: timestamp, project, task, event type and message. Every line names its
+/// project; `task` is null for project-level events, so filtering by project includes every
+/// task's lines and filtering by task narrows within them.
 /// </summary>
 public sealed record LogEntry(
     DateTimeOffset Timestamp,

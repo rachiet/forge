@@ -1,9 +1,7 @@
 namespace Forge.Core.Agents;
 
 /// <summary>
-/// A role's file-access scope inside its workspace — spec Principle 6 lists
-/// file-access scopes alongside budgets and timeouts as things the harness
-/// enforces mechanically rather than trusting the model to respect.
+/// A role's file-access scope inside its workspace, enforced by the toolset on every path.
 ///
 /// This is how "the PM never sees code" becomes true rather than aspirational:
 /// the PM's recipe scopes it to PROJECT.md, STATUS.md and docs/, so a request to

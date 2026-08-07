@@ -8,7 +8,7 @@ namespace Forge.Core.Secrets;
 /// Encrypted-at-rest secret store under ForgeDataRoot/vault. Values are AES-GCM
 /// encrypted with a machine-local key file (owner-only permissions). Secret
 /// VALUES exist only here and in process arguments at exec time — never in the
-/// DB, agent context, or logs (spec Principle 10).
+/// database, agent context, or logs.
 /// </summary>
 public sealed class SecretsVault
 {

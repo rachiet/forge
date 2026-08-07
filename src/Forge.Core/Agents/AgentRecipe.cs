@@ -4,9 +4,9 @@ using Forge.Core.Model;
 namespace Forge.Core.Agents;
 
 /// <summary>
-/// Personas are data, not classes (spec §11). An "agent" is a model choice, a
-/// system prompt, context-assembly rules, a tool allowlist and a file-access
-/// scope — nothing more. Adding a role is adding a record and a prompt file.
+/// What one role is: a model tier, a role prompt, the files it always carries, its tools and
+/// binaries, its file-access scope, and its budget and turn caps. Roles are data, so adding one
+/// is a record here and a prompt file.
 /// </summary>
 public sealed record AgentRecipe
 {
@@ -206,7 +206,7 @@ public sealed record AgentRecipe
         AgentRole.Principal => Principal,
         AgentRole.Qa => Qa,
         _ => throw new NotSupportedException(
-            $"No recipe for {role} yet — roles are introduced one milestone at a time (spec §12)."),
+            $"No recipe for {role}."),
     };
 
     /// <summary>

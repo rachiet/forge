@@ -13,8 +13,8 @@ using Spectre.Console.Cli;
 namespace Forge.Cli.Commands;
 
 /// <summary>
-/// The worker. v1 is one serial worker (spec §1) — it claims one task, runs the
-/// agent loop against it, and integrates or parks the result.
+/// `forge run <project>` — runs the build worker, either for one step or in a loop until the
+/// board has nothing left. Takes the machine-wide lease, so only one build runs at a time.
 /// </summary>
 public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
 {
