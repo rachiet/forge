@@ -1,11 +1,9 @@
 namespace Forge.Core.Logging;
 
 /// <summary>
-/// The closed vocabulary of loggable events, rendered as <c>domain.action</c> on
-/// the wire (e.g. <c>tool.write_file</c>, <c>git.merge</c>). An enum, not free
-/// strings, so a call site cannot invent <c>tool.writefile</c> or <c>git.merged</c>
-/// and quietly fragment the log — every event that can be recorded is listed here,
-/// and prefix filters (<c>eventType LIKE 'tool.%'</c>) stay reliable.
+/// Every event that can be logged, written as <c>domain.action</c> — <c>tool.write_file</c>,
+/// <c>git.merge</c>. An enum rather than free strings, so no call site can invent a spelling
+/// and fragment the log.
 /// </summary>
 public enum EventType
 {
@@ -126,8 +124,7 @@ public static class EventTypes
             ? type
             : throw new FormatException($"'{wire}' is not a known eventType.");
 
-    /// <summary>The domain column — the part before the dot (`tool`, `git`), or the
-    /// whole token for the single-level `message` channel.</summary>
+    /// <summary>The part before the dot, or the whole token for the single-level `message`.</summary>
     public static string Domain(this EventType type)
     {
         var wire = type.Wire();
@@ -135,8 +132,7 @@ public static class EventTypes
         return dot < 0 ? wire : wire[..dot];
     }
 
-    /// <summary>The action column — the part after the dot (`write_file`, `merge`),
-    /// or empty for `message`, which has no action.</summary>
+    /// <summary>The part after the dot, or empty for `message`, which has no action.</summary>
     public static string Action(this EventType type)
     {
         var wire = type.Wire();
@@ -144,11 +140,11 @@ public static class EventTypes
         return dot < 0 ? "" : wire[(dot + 1)..];
     }
 
-    /// <summary>Reassemble the enum from its two stored columns — the read-back side of the split.</summary>
+    /// <summary>Rebuilds the enum from the two stored columns.</summary>
     public static EventType FromColumns(string domain, string action) =>
         Parse(action.Length == 0 ? domain : $"{domain}.{action}");
 
-    /// <summary>The tool a call named ⇒ its event, so the toolset logs consistently.</summary>
+    /// <summary>The event type for a tool name, so tool calls are never tagged by hand.</summary>
     public static EventType? ForTool(string toolName) => toolName switch
     {
         "list_dir" => EventType.ToolListDir,

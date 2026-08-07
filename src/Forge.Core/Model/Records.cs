@@ -1,6 +1,6 @@
 namespace Forge.Core.Model;
 
-/// <summary>token_ledger row: one entry per LLM call, written by MeteredLlmClient.</summary>
+/// <summary>One token_ledger row: what a single LLM call used and cost.</summary>
 public sealed record TokenLedgerEntry
 {
     public long Id { get; init; }
@@ -14,9 +14,8 @@ public sealed record TokenLedgerEntry
     public int CacheWriteTokens { get; init; }
 
     /// <summary>
-    /// What this one call cost, priced from all four buckets. Stored as integer
-    /// nano-dollars; decimal here because money should not round-trip through binary
-    /// floating point.
+    /// What this call cost, priced from all four token buckets. Stored as integer nano-dollars,
+    /// and decimal here so money never round-trips through binary floating point.
     /// </summary>
     public decimal CostUsd { get; init; }
 
@@ -34,7 +33,7 @@ public sealed record MilestoneRecord
     public required int Ordinal { get; init; }
 }
 
-/// <summary>agent_instances row. Id convention: 'eng-20260718-093012'.</summary>
+/// <summary>One agent_instances row: a single agent run, e.g. `eng-20260718-093012`.</summary>
 public sealed record AgentInstanceRecord
 {
     public required string Id { get; init; }
@@ -59,7 +58,7 @@ public sealed record DiscussionRecord
     public string? CreatedAt { get; init; }
 }
 
-/// <summary>secrets_registry row (global DB): names and metadata ONLY — values live in the vault.</summary>
+/// <summary>One secrets_registry row in the global database: a secret's name and metadata, never its value.</summary>
 public sealed record SecretRegistryEntry
 {
     public required string Name { get; init; }

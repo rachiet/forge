@@ -1,9 +1,9 @@
 namespace Forge.Core.Model;
 
 /// <summary>
-/// One row of the messages table (queue AND log, by design). Abstract, with one
-/// sealed subtype per message type so routing can switch exhaustively.
-/// Senders/receivers are role names, "client", or "system" — hence string.
+/// One row of the messages table, which is both the queue and the log. Abstract, with a sealed
+/// subtype per message type so routing can switch exhaustively. Senders and receivers are role
+/// names, "client", or "system".
 /// </summary>
 public abstract record Message
 {
@@ -27,9 +27,8 @@ public abstract record Message
             throw new ArgumentException("Receiver must be non-empty.", nameof(toAgent));
         if (string.IsNullOrWhiteSpace(payload))
             throw new ArgumentException("Payload must be non-empty.", nameof(payload));
-        // Artifact anchoring stops freeform agent-to-agent chat. Client chat is
-        // unanchored by design; the harness ("system") may also report project-level
-        // events (e.g. project budget exhaustion) that have no task to anchor to.
+        // Agent-to-agent messages must name a task. Client chat and the harness's own
+        // project-level reports have nothing to anchor to.
         if (taskId is null && fromAgent is not ("client" or "system") && toAgent != "client")
             throw new ArgumentException(
                 "Messages must be task-anchored; task_id may be null only for client chat or system notices.",

@@ -1,16 +1,15 @@
 namespace Forge.Core.Db;
 
 /// <summary>
-/// Schema DDL. CHECK constraints mirror the enums in Model/Enums.cs — keep both
-/// layers in sync. Anything the harness must query or enforce is a real column;
-/// LLM-only payloads (context_paths) may be JSON TEXT.
+/// The DDL for both databases. CHECK constraints mirror the enums in Model/Enums.cs, and both
+/// layers are kept in sync by hand. Anything the harness queries or enforces is a real column;
+/// payloads only an agent reads may be JSON TEXT.
 /// </summary>
 public static class Schema
 {
-    /// <summary>Global forge.db: project registry + secret names. Values live in the vault, never here.</summary>
+    /// <summary>The global forge.db: the project registry and secret names, never secret values.</summary>
     public const string GlobalDdl = """
-        -- A bare registry. Per-project settings (budget, provider) live in that
-        -- project's own project_meta — the project directory is self-contained.
+        -- A bare registry; per-project settings live in that project's own project_meta.
         CREATE TABLE IF NOT EXISTS projects (
           name TEXT PRIMARY KEY,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -28,9 +27,7 @@ public static class Schema
         CREATE TABLE IF NOT EXISTS tasks (
           id INTEGER PRIMARY KEY,
           milestone_id INTEGER REFERENCES milestones(id),
-          -- The parent Feature this task decomposes (self-reference). NULL for a
-          -- top-level task (a Feature itself, or a standalone task). Children the
-          -- Principal creates from a Feature carry that Feature's id here.
+          -- The Feature this task belongs to. NULL on a Feature itself or a standalone task.
           parent_id INTEGER REFERENCES tasks(id),
           type TEXT NOT NULL CHECK(type IN ('feature','task','bug','chore')),
           title TEXT NOT NULL CHECK(length(title) > 0),
@@ -51,14 +48,11 @@ public static class Schema
              'needs_human','cancelled')),
           token_budget INTEGER NOT NULL CHECK(token_budget > 0),
           tokens_spent INTEGER NOT NULL DEFAULT 0 CHECK(tokens_spent >= 0),
-          -- How many times this task ran out of resources (budget/iteration) after
-          -- the forced last-turn message. At the second strike the harness stops
-          -- handing it back to an engineer and the Principal implements it directly.
+          -- How many times this task has run out of budget or turns. At the second strike
+          -- the Principal implements it instead of the engineer.
           out_of_budget_count INTEGER NOT NULL DEFAULT 0 CHECK(out_of_budget_count >= 0),
           -- How many splits deep this task is: 0 if the Principal planned it, 1 if it
-          -- replaced a task that was too big, and so on. `break_and_relink` refuses above
-          -- the cap, which is what bounds splitting — otherwise each replacement could be
-          -- split again and the ladder would never reach a human.
+          -- replaced a task that was too big. break_and_relink refuses above its cap.
           split_depth INTEGER NOT NULL DEFAULT 0 CHECK(split_depth >= 0),
           progress_note TEXT,
           branch_name TEXT,
@@ -68,7 +62,7 @@ public static class Schema
         );
         """;
 
-    /// <summary>Per-project project.db: queue + board + ledger + audit log in one file.</summary>
+    /// <summary>A project's project.db: its queue, board, ledger and audit log in one file.</summary>
     public const string ProjectDdl = $"""
         CREATE TABLE IF NOT EXISTS messages (
           id INTEGER PRIMARY KEY,
@@ -92,9 +86,8 @@ public static class Schema
           PRIMARY KEY (task_id, depends_on)
         );
 
-        -- Small key/value store for project-level orchestration state — currently the
-        -- QA gate's watermark (how many bug-fixes QA has already verified), which is
-        -- what stops the QA↔fix loop once a cycle accepts nothing new.
+        -- Key/value store for project-level orchestration state: the QA watermark and round
+        -- count, the project's settings, and the handover flag.
         CREATE TABLE IF NOT EXISTS project_meta (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
@@ -118,21 +111,16 @@ public static class Schema
           role TEXT NOT NULL CHECK(role IN ('pm','principal','engineer','qa','researcher')),
           task_id INTEGER REFERENCES tasks(id),
           model TEXT NOT NULL,
-          -- The four buckets a provider reports separately. tokens_in is the
-          -- *uncached* prompt remainder, so the real prompt size is the sum of
-          -- tokens_in + cache_read + cache_write. All four are stored because cost
-          -- prices them at different rates — and because keeping them makes a row's
-          -- cost recomputable when the price table changes.
+          -- The four buckets a provider reports separately. tokens_in is the UNCACHED prompt
+          -- remainder, so the whole prompt is tokens_in + cache_read + cache_write. All four
+          -- are stored: each is priced differently, and keeping them makes cost recomputable.
           tokens_in INTEGER NOT NULL CHECK(tokens_in >= 0),
           tokens_out INTEGER NOT NULL CHECK(tokens_out >= 0),
           cache_read_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_read_tokens >= 0),
           cache_write_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_write_tokens >= 0),
-          -- USD × 1e-9. An integer so SUM() stays exact: budget enforcement is a
-          -- SUM comparison, and float drift across thousands of rows is not a
-          -- property money should have.
+          -- USD × 1e-9, as an integer so SUM() stays exact across thousands of rows.
           cost_nanos INTEGER NOT NULL DEFAULT 0 CHECK(cost_nanos >= 0),
-          -- Which price snapshot produced cost_nanos, so a re-priced row can be told
-          -- apart from an original one.
+          -- Which price snapshot produced cost_nanos.
           priced_with TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -140,10 +128,7 @@ public static class Schema
         CREATE INDEX IF NOT EXISTS ix_ledger_task ON token_ledger(task_id);
         CREATE INDEX IF NOT EXISTS ix_ledger_role ON token_ledger(role);
 
-        -- No status column, deliberately: a milestone's state is DERIVED from its
-        -- tasks (the board's rule for every state it shows). The old column was dead
-        -- weight nothing ever advanced past 'planned' — a stored status beside a
-        -- derived one is exactly the two-sources-of-truth this schema forbids.
+        -- No status column: a milestone's state is derived from its tasks.
         CREATE TABLE IF NOT EXISTS milestones (
           id INTEGER PRIMARY KEY,
           name TEXT NOT NULL,

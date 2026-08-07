@@ -1,19 +1,16 @@
 namespace Forge.Core.Model;
 
 /// <summary>
-/// One row of the tasks table. Construct new tasks via <see cref="Create"/> —
-/// never insert a naked record — and change status only through
-/// <see cref="TaskTransitions"/> (repositories enforce this).
+/// One row of the tasks table. New tasks are built with <see cref="Create"/>, which enforces
+/// the invariants, and their status changes only through <see cref="TaskTransitions"/>.
 /// </summary>
 public sealed record TaskRecord
 {
     public long Id { get; init; }
     public long? MilestoneId { get; init; }
     /// <summary>
-    /// The Feature this task belongs to: a self-reference to the parent Feature's
-    /// task id. Null on a top-level task (a Feature itself, or any task created
-    /// outside a Feature). The Principal decomposes a Feature into child tasks that
-    /// carry its id here — that linkage is what "the Feature is complete" is read from.
+    /// The id of the Feature this task belongs to, or null on a Feature itself and on any task
+    /// created outside one. A Feature is complete when every task carrying its id is finished.
     /// </summary>
     public long? ParentId { get; init; }
     public required TaskType Type { get; init; }
@@ -28,12 +25,11 @@ public sealed record TaskRecord
     public TaskStatus Status { get; init; } = TaskStatus.Created;
     public required int TokenBudget { get; init; }
     public int TokensSpent { get; init; }
-    /// <summary>Times this task exhausted its budget/iterations. At 2 the Principal takes it over.</summary>
+    /// <summary>How many times this task has exhausted its budget or turns.</summary>
     public int OutOfBudgetCount { get; init; }
     /// <summary>
     /// How many splits deep this task is: 0 if the Principal planned it, 1 if it replaced a
-    /// task too big to land. `break_and_relink` refuses to split past the cap, which is what
-    /// keeps the ladder finite — without it every replacement could be split again.
+    /// task too big to land. `break_and_relink` refuses to split past its cap.
     /// </summary>
     public int SplitDepth { get; init; }
     public string? ProgressNote { get; init; }
@@ -93,8 +89,8 @@ public sealed class IllegalTaskTransitionException(TaskStatus from, TaskStatus t
 }
 
 /// <summary>
-/// The only way a task status may change. Routing ("who acts next") is derived
-/// from status via <see cref="RoleFor"/>, never stored — no "next actor" column.
+/// The legal task status transitions, and which role owns each status. Ownership is derived
+/// from status here rather than stored, so there is no second copy to disagree.
 /// </summary>
 public static class TaskTransitions
 {
@@ -102,8 +98,7 @@ public static class TaskTransitions
         new Dictionary<TaskStatus, TaskStatus[]>
         {
             [TaskStatus.Created] = [TaskStatus.Ready, TaskStatus.Cancelled],
-            // Ready → NeedsHuman is how a task out of engineer attempts leaves the board:
-            // the cap is checked before the claim, so it is still Ready when it gives up.
+            // Ready → NeedsHuman is how a task out of engineer attempts leaves the board.
             [TaskStatus.Ready] =
                 [TaskStatus.Claimed, TaskStatus.Blocked, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.Claimed] =
@@ -112,37 +107,28 @@ public static class TaskTransitions
             [TaskStatus.InProgress] =
                 [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.OutOfBudget,
                  TaskStatus.NeedsHuman, TaskStatus.Cancelled],
-            // Rejected is reachable from InReview too: a reviewer of a bug-fix can reject
-            // the underlying bug when it turns out not to be a real defect.
+            // A reviewer of a bug-fix can reject the underlying bug from InReview.
             [TaskStatus.InReview] =
                 [TaskStatus.Merging, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Rejected, TaskStatus.Cancelled],
             [TaskStatus.Merging] = [TaskStatus.Qa, TaskStatus.InProgress, TaskStatus.Blocked],
             [TaskStatus.Qa] = [TaskStatus.Done, TaskStatus.InProgress, TaskStatus.Blocked],
-            // Blocked and OutOfBudget are Principal-owned. The Principal triages them
-            // back to the engineer (→ Ready), takes them over to implement directly
-            // (→ Claimed/InProgress), or gives up (→ Blocked/Cancelled).
-            // Triage/Rejected are reachable from Blocked so the PM can act on a bug the
-            // human reviewed: re-triage it (back to the Principal) or reject it outright.
+            // Blocked and OutOfBudget are the Principal's: it redirects them to the engineer,
+            // takes them over, or gives up. Triage and Rejected are reachable so the PM can act
+            // on a bug the client reviewed.
             [TaskStatus.Blocked] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Triage,
                  TaskStatus.Rejected, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.OutOfBudget] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked,
                  TaskStatus.NeedsHuman, TaskStatus.Cancelled],
-            // The Principal is out of options and the PM has put the task to the client.
-            // Their answer either sends it back for another triage or drops it.
+            // Parked on the client: their answer sends it back for triage, or drops it.
             [TaskStatus.NeedsHuman] = [TaskStatus.Triage, TaskStatus.Cancelled],
-            // Triage is entered by two kinds of task. A QA-filed bug: the Principal
-            // accepts it (→ Ready, an engineer fixes it) or rejects it (→ Rejected).
-            // A PM-opened Feature: the Principal decomposes it (→ Active) once its
-            // child tasks exist.
+            // A bug in triage is accepted or rejected; a Feature is decomposed and activated.
             [TaskStatus.Triage] =
                 [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Active, TaskStatus.Claimed,
                  TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.Rejected] = [],
-            // A Feature sits Active while its children build. The harness closes it
-            // (→ Done) when every child is terminal; a decomposition failure can block
-            // or cancel it. Nothing claims an Active task, so the loop never re-pulls it.
+            // A Feature stays Active while its children build; nothing claims it.
             [TaskStatus.Active] = [TaskStatus.Done, TaskStatus.Blocked, TaskStatus.Cancelled],
             [TaskStatus.Done] = [],
             [TaskStatus.Cancelled] = [],
@@ -155,22 +141,20 @@ public static class TaskTransitions
         if (!IsLegal(from, to)) throw new IllegalTaskTransitionException(from, to);
     }
 
-    /// <summary>Static handoff map: which role acts on a task in this status.
-    /// Null means the harness itself (or nobody) owns the state.</summary>
+    /// <summary>
+    /// Which role acts on a task in this status. Null when the harness itself owns it, or
+    /// nobody does.
+    /// </summary>
     public static AgentRole? RoleFor(TaskStatus status) => status switch
     {
         TaskStatus.InReview => AgentRole.Principal,
         TaskStatus.Qa => AgentRole.Qa,
-        // The Principal authored the task DAG, structure and contracts, so a stalled
-        // or blocked task is theirs to triage — not the PM's, who can neither set a
-        // budget nor make a technical call. Escalations climb engineer → principal →
-        // pm → client; the PM is only the client-facing rung.
+        // Stuck work goes to the Principal, which authored the plan and can re-scope it.
         TaskStatus.Blocked => AgentRole.Principal,
         TaskStatus.OutOfBudget => AgentRole.Principal,
         // A filed bug is the Principal's to accept or reject before any engineer touches it.
         TaskStatus.Triage => AgentRole.Principal,
-        // The one status the autonomous loop cannot clear: only the client can, and the
-        // PM is the rung that talks to them.
+        // The one status the loop cannot clear; the PM is the rung that talks to the client.
         TaskStatus.NeedsHuman => AgentRole.Pm,
         TaskStatus.Created => AgentRole.Pm,
         _ => null,
