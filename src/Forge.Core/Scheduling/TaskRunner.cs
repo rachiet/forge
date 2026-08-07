@@ -18,21 +18,20 @@ using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Core.Scheduling;
 
+/// <summary>What one step of the runner did: the task it touched, how it ended, and a summary.</summary>
 public sealed record TaskRunOutcome(
     long TaskId, EndReason End, TaskStatus Status, string Summary,
-    // The project's dollar cap refused a call. Nothing on the board failed; the loop
-    // must stop pulling work until the client raises the cap.
+    // The project's dollar cap refused a call; the loop stops pulling work until it is raised.
     bool ProjectBudgetExhausted = false);
 
 /// <summary>
-/// One serial worker (spec §1: v1 is one worker; the cap is config, not
-/// architecture). Claims a task, gives an agent instance a jailed workspace,
-/// then decides what actually happened by looking at git — not by believing the
-/// agent's report. From M4 the "what happened" includes harness-run CI and a
-/// Principal review before merge, with a bounded revision loop back to the engineer.
+/// The serial worker that drives a project. Claims a task, gives an agent instance a jailed
+/// workspace, then decides what happened from git and process output rather than from the
+/// agent's report: CI, a Principal review, then merge, with a bounded revision loop back to
+/// the engineer. It also decomposes Features, triages stuck tasks and bugs, runs QA once the
+/// board is complete, and hands the finished project over.
 ///
-/// The CI step is injectable so orchestration tests can drive the gates without a
-/// real .NET toolchain; production uses CiRunner.Run.
+/// The CI step is injectable so orchestration tests can run without a .NET toolchain.
 /// </summary>
 public sealed class TaskRunner(
     ForgePaths paths,
@@ -44,7 +43,7 @@ public sealed class TaskRunner(
     ForgeLogger? logger = null,
     Func<string, CiResult>? ci = null)
 {
-    /// <summary>Bound the engineer↔review loop: a task that can't pass is escalated, not retried forever.</summary>
+    /// <summary>Engineer attempts on one task before it is blocked and escalated.</summary>
     private const int RevisionCap = 5;
 
     /// <summary>How many times a provider crash auto-resumes before the task is handed to the Principal.</summary>
@@ -68,9 +67,9 @@ public sealed class TaskRunner(
     private readonly Func<string, CiResult> _ci = ci ?? CiRunner.Run;
 
     /// <summary>
-    /// Resume before claim, deliberately: a task left in_progress is a task whose
-    /// worker was killed, and its workspace is still on disk. Picking up new work
-    /// while abandoned work exists is how a queue leaks tasks.
+    /// Runs the given task, or the next claimable one. Abandoned work — a task left
+    /// in_progress by a killed worker, with its workspace still on disk — is resumed before
+    /// anything new is claimed.
     /// </summary>
     public TaskRecord? NextTask(AgentRole role)
     {
@@ -93,6 +92,7 @@ public sealed class TaskRunner(
         return row is { } id ? _tasks.Get(id) : null;
     }
 
+    /// <summary>Runs the next task for a role, or returns null when it has none.</summary>
     public async Task<TaskRunOutcome?> RunNextAsync(AgentRole role, CancellationToken ct = default)
     {
         var task = NextTask(role);
@@ -100,16 +100,14 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// One step of the autonomous loop, by priority: a Principal-owned task
-    /// (blocked/out-of-budget) is cleared first — it usually gates the DAG — and only
-    /// then does the engineer advance. Returns null when neither has claimable work,
-    /// which is what drains the board.
+    /// Runs one step of the autonomous loop, in priority order: work already part-way through
+    /// the pipeline, then Principal-owned tasks, then claimable engineer work, then closing
+    /// finished Features, then QA. Returns null when nothing is left to do.
     /// </summary>
     public async Task<TaskRunOutcome?> RunNextByPriorityAsync(CancellationToken ct = default)
     {
         DiscardCancelledWork();
-        // Work already part-way through the pipeline is finished before anything new is
-        // started, so a task cannot sit one step from done while fresh work piles up.
+        // Finish part-done work before starting anything new.
         if (_tasks.NextInStatus(TaskStatus.Merging) is { } approved)
             return MergeApproved(approved);
         if (_tasks.NextInStatus(TaskStatus.InReview) is { } submitted)
@@ -120,24 +118,21 @@ public sealed class TaskRunner(
             return asked;
         if (NextTask(AgentRole.Engineer) is { } next)
             return await RunAsync(next, ct).ConfigureAwait(false);
-        // No task work left. First close any Feature whose children have all finished —
-        // that transition (active → done) is what makes the board quiescent — then, if
-        // the board is complete but not yet QA-verified, run QA; otherwise done → null.
+        // No task work left: close any finished Feature, which is what makes the board
+        // quiescent, then run QA if there is new completed work to verify.
         CloseFinishedFeatures();
         return await MaybeRunQaAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// The Principal's two-strike ladder for a stuck task. Strike 1 (or a plain
-    /// blocked task): triage — diagnose and redirect/decompose/escalate. Strike 2 on
-    /// an out-of-budget task: implement it directly. Past that: give up to a human.
-    /// A filed bug in `triage` is a different job: accept or reject it.
+    /// Runs whatever the Principal owns on this task. A Feature is decomposed and a bug is
+    /// triaged; a stuck task climbs a ladder — triage, then the Principal implementing it
+    /// directly, then a final triage with `redirect` withheld.
     /// </summary>
     private async Task<TaskRunOutcome> TriageOrImplementAsync(TaskRecord task, CancellationToken ct)
     {
         var log = _log.For(task.Id);
-        // Triage is entered by two kinds of task, routed by type: a PM-opened Feature is
-        // decomposed into child tasks; a QA-filed bug is accepted or rejected.
+        // Dispatch on type: a Feature decomposes, a bug is accepted or rejected.
         if (task.Status == TaskStatus.Triage)
             return task.Type switch
             {
@@ -148,10 +143,8 @@ public sealed class TaskRunner(
             };
         if (task.Status == TaskStatus.OutOfBudget)
         {
-            // Past the last strike the engineer and the Principal have both failed on this
-            // task, which is the strongest evidence available that it is too big rather than
-            // merely hard. One final triage with `redirect` taken away: split it or give the
-            // client the decision. GiveUp still catches a triage that resolves nothing.
+            // Past the last strike: one final triage whose only options are splitting the
+            // task or handing it to the client.
             if (task.OutOfBudgetCount > DirectImplementStrike)
                 return await TriageAsync(task, ct, AgentRecipe.PrincipalFinalTriage).ConfigureAwait(false);
             if (task.OutOfBudgetCount >= DirectImplementStrike)
@@ -161,12 +154,9 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// A PM-opened Feature sits in `triage` until the loop hands it here. The Principal
-    /// decomposes it — reusing the design phase, which already picks the greenfield vs
-    /// change-request brief — and then the harness back-fills `parent_id` on the tasks
-    /// that were just created and releases them to `ready` (autonomous: no client
-    /// sign-off step), and moves the Feature to `active` so the loop never re-pulls it.
-    /// The Feature closes to `done` later, when every child has finished (the sweep).
+    /// Decomposes a Feature into tasks by running the design phase, then makes each new task a
+    /// child of it, gives it the Feature's milestone, and releases it to `ready`. The Feature
+    /// moves to `active`, and closes to `done` later when every child has finished.
     /// </summary>
     private async Task<TaskRunOutcome> DecomposeFeatureAsync(TaskRecord feature, CancellationToken ct)
     {
@@ -182,10 +172,8 @@ public sealed class TaskRunner(
                 $"Feature {feature.Id} decomposition paused — project budget exhausted.",
                 ProjectBudgetExhausted: true);
 
-        // No tasks means the Principal pushed back (an ill-advised CR ends in escalate,
-        // which leaves a pending pm message that NextPrincipalOwned skips) or the design
-        // run crashed. Either way, leave the Feature in triage rather than activating an
-        // empty Feature; an escalation parks it on a human, a crash retries next tick.
+        // No tasks means the Principal escalated or the run crashed; leave the Feature in
+        // triage rather than activating an empty one.
         if (outcome.TasksCreated == 0)
         {
             var note = $"Feature {feature.Id} produced no tasks ({SnakeCaseEnum.ToSnakeCase(outcome.End)}): {outcome.Summary}";
@@ -193,10 +181,8 @@ public sealed class TaskRunner(
             return new TaskRunOutcome(feature.Id, outcome.End, feature.Status, note);
         }
 
-        // An unlinked plan does not go to engineering. A requirement no operation serves can
-        // never be verified — QA tests the contract — and an operation no task claims is an
-        // endpoint nobody will build. The tasks already exist, so re-running design would
-        // duplicate them; the Feature is parked on the client instead, naming the gap.
+        // An unlinked plan is parked on the client rather than released. Design is not
+        // idempotent, so re-running it would duplicate the tasks it already created.
         if (!outcome.Contract.Complete)
         {
             var gap = $"Design is incomplete: {outcome.Contract.Describe()}.";
@@ -206,16 +192,13 @@ public sealed class TaskRunner(
             return new TaskRunOutcome(feature.Id, EndReason.Escalated, TaskStatus.NeedsHuman, gap);
         }
 
-        // Back-fill the linkage the harness owns: every task created in this run becomes
-        // a child of the Feature and is released to the board (created → ready).
+        // Every task created in this run becomes a child of the Feature and is released.
         foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
         {
             _tasks.SetParent(child.Id, feature.Id);
 
-            // A child inherits the Feature's milestone unless the Principal named one
-            // itself. Mechanical rather than asked-for: the client's progress view groups
-            // by milestone, and a child that quietly lands with none would silently drop
-            // its cost out of that view (Principle 6 — the harness enforces).
+            // A child inherits the Feature's milestone unless it was given one of its own,
+            // so its cost appears in the client's per-milestone view.
             if (feature.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
                 _tasks.SetMilestone(child.Id, milestone);
 
@@ -249,11 +232,9 @@ public sealed class TaskRunner(
     /// <summary>
     /// Runs one PM turn to put the tasks waiting on the client into the chat, and returns
     /// its outcome. Null when nothing is waiting or the client has already been asked.
+    /// The set of waiting task ids is recorded in project_meta, so each distinct set is
+    /// asked about once.
     /// </summary>
-    /// <remarks>
-    /// The question is composed once per distinct set of waiting tasks, tracked in
-    /// project_meta, so a loop that runs repeatedly does not re-ask the same thing.
-    /// </remarks>
     private async Task<TaskRunOutcome?> AskClientAboutStuckWorkAsync(CancellationToken ct)
     {
         var waiting = _tasks.AwaitingClient();
@@ -276,11 +257,8 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Harness-owned Feature completion (spec Principle 6 — never an agent's claim): a
-    /// Feature in `active` whose children have all reached a terminal state is closed to
-    /// `done`. Read from the board via `parent_id`, so "the last child finished" is
-    /// derived, not tracked. Closing the Feature is what makes the board quiescent and
-    /// arms QA, so this runs just before the QA gate.
+    /// Closes any active Feature whose children have all reached a terminal state, read from
+    /// the board via parent_id. This is what makes the board quiescent and arms QA.
     /// </summary>
     private void CloseFinishedFeatures()
     {
@@ -293,15 +271,13 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// A fresh Principal reads the stuck task's WIP and note, then resolves it with a
-    /// tool: redirect (back to the engineer with direction), break_and_relink (replace it
-    /// with the smaller tasks it just created), or escalate (a requirements question for
-    /// the PM). If it resolves nothing — runs out of its own turns — the task is escalated
-    /// to a human so the autonomous loop cannot spin on it.
+    /// Runs a fresh Principal over a stuck task's work-in-progress and note, to resolve it with
+    /// redirect, break_and_relink or escalate. A triage that resolves nothing hands the task to
+    /// a human, so the loop cannot spin on it.
     /// </summary>
-    /// <param name="recipe">
-    /// <see cref="AgentRecipe.PrincipalFinalTriage"/> on the last strike, which drops
-    /// `redirect` so another attempt at the same task is not on the menu.
+    /// <param name="finalTriage">
+    /// <see cref="AgentRecipe.PrincipalFinalTriage"/> on the last strike, which has no
+    /// `redirect`.
     /// </param>
     private async Task<TaskRunOutcome> TriageAsync(
         TaskRecord task, CancellationToken ct, AgentRecipe? finalTriage = null)
@@ -310,8 +286,7 @@ public sealed class TaskRunner(
         var recipe = finalTriage ?? AgentRecipe.PrincipalTriage;
         log.Message($"Principal triaging {SnakeCaseEnum.ToSnakeCase(task.Status)} task {task.Id}: {task.Title}");
 
-        // No headroom to arrange: the budget is per instance, so this triage starts at
-        // zero however much the engineer that got stuck had already spent.
+        // Budgets are per instance, so this triage starts at zero whatever the engineer spent.
         var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
         if (task.BranchName is null) SetBranch(task.Id, branch);
         _workspaces.Prepare(task, branch);
@@ -329,8 +304,8 @@ public sealed class TaskRunner(
         if (result.ProjectBudgetExhausted)
             return new TaskRunOutcome(task.Id, result.End, status,
                 $"Triage of task {task.Id} paused — project budget exhausted.", ProjectBudgetExhausted: true);
-        // redirect → Ready (resolved). escalate → the Principal wants the client, so the
-        // task parks on them. Anything else means triage itself failed to resolve it.
+        // Ready means redirect resolved it; an escalation parks it on the client; anything
+        // else means the triage itself resolved nothing.
         if (result.End == EndReason.Escalated)
             return ParkOnClient(task.Id, result.ProgressNote ?? "Escalated to the client.", log);
         if (status is TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage)
@@ -341,22 +316,15 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Adopt and release whatever tasks the Principal created while triaging a stuck
-    /// task. Without this they were born `created` and STAYED there — the only release
-    /// paths were design sign-off and Feature decomposition, neither of which runs after
-    /// a triage — so a "break it down" verdict quietly deadlocked the board with work
-    /// nobody could claim. Same harness-owned back-fill as decomposition: parent them to
-    /// the task they decompose, inherit its milestone, and flip them claimable.
+    /// Parents and releases the tasks a triage created. A task created by break_and_relink
+    /// keeps the parent and milestone that verdict gave it; anything else is filed under the
+    /// task being triaged and inherits its milestone. Both are released to `ready`.
     /// </summary>
     private void ReleaseTriageSubtasks(TaskRecord triaged, IReadOnlySet<long> before, ForgeLogger log)
     {
         foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
         {
-            // A replacement from break_and_relink keeps the parent and milestone that verdict
-            // gave it: it files them under the SPLIT task's own feature, because the split task
-            // is cancelled and a child of a cancelled task drops out of the board's feature view.
-            // It still needs releasing, though — that is this method's real job, and skipping it
-            // is what left "break it down" work unclaimable before.
+            // Depth 0 means the task did not come from break_and_relink, which files its own.
             if (_tasks.Get(child.Id).SplitDepth == 0)
             {
                 _tasks.SetParent(child.Id, triaged.Id);
@@ -370,9 +338,8 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// The second strike: redirecting did not land it, so the Principal implements the
-    /// task itself. A fresh, generous budget and the implementer recipe (opus + run),
-    /// through the normal CI + review + merge path — the result is still verified.
+    /// Has the Principal implement a task itself, on a fresh budget, after redirecting the
+    /// engineer failed. The result still goes through CI, review and merge.
     /// </summary>
     private async Task<TaskRunOutcome> ImplementDirectlyAsync(TaskRecord task, CancellationToken ct)
     {
@@ -380,13 +347,12 @@ public sealed class TaskRunner(
         var recipe = AgentRecipe.PrincipalImplementer;
         log.Message($"Principal implementing task {task.Id} directly (strike {task.OutOfBudgetCount}).");
 
-        // The task's own budget may have been set for an engineer; this attempt is the
-        // Principal's and gets the room its recipe asks for.
+        // Raise the task's budget to what the Principal's recipe asks for, if it is lower.
         if (task.TokenBudget < recipe.DefaultBudget) _tasks.SetBudget(task.Id, recipe.DefaultBudget);
         return await RunAsync(_tasks.Get(task.Id), recipe, ct).ConfigureAwait(false);
     }
 
-    /// <summary>Even the Principal could not land it: block it and put the decision to a human (the PM).</summary>
+    /// <summary>Blocks a task nothing could land and puts the decision to the client via the PM.</summary>
     private TaskRunOutcome GiveUp(TaskRecord task, ForgeLogger log)
     {
         var note = $"Task {task.Id} still unresolved after Principal triage/implementation — needs a human decision.";
@@ -396,27 +362,24 @@ public sealed class TaskRunner(
         return ParkOnClient(task.Id, note, log);
     }
 
-    /// <summary>Moves a task to needs_human and reports it as escalated.</summary>
-    /// <remarks>
-    /// The status is what takes the task out of the autonomous queue, so the loop drains
-    /// the rest of the board instead of re-triaging something only the client can answer.
-    /// </remarks>
+    /// <summary>
+    /// Moves a task to needs_human, which takes it out of every queue so the loop drains the
+    /// rest of the board, and reports it as escalated.
+    /// </summary>
     private TaskRunOutcome ParkOnClient(long taskId, string note, ForgeLogger log)
     {
         var current = _tasks.Get(taskId).Status;
         if (current != TaskStatus.NeedsHuman && TaskTransitions.IsLegal(current, TaskStatus.NeedsHuman))
             Transition(taskId, TaskStatus.NeedsHuman, log);
 
-        // A task arriving here is something new to raise, even if the client was asked
-        // about this same id before — clearing the watermark makes the PM ask again.
+        // Clear the watermark so the PM raises this task even if it asked about it before.
         _meta.Set(AskedKey, "");
         return new TaskRunOutcome(taskId, EndReason.Escalated, _tasks.Get(taskId).Status, note);
     }
 
     /// <summary>
-    /// The just-in-time triage briefing — injected as the Principal's opening turn, not
-    /// baked into the role prompt. Names the concrete block and the allowed resolutions,
-    /// mirroring how the last-turn message is injected into the engineer loop.
+    /// The triage briefing used as the Principal's opening turn: what the task is, how it is
+    /// blocked, and which verdicts are available.
     /// </summary>
     /// <param name="canRedirect">
     /// False on the final triage, whose recipe has no `redirect`. The menu must match the
@@ -469,10 +432,8 @@ public sealed class TaskRunner(
     private int MetaInt(string key) => int.TryParse(_meta.Get(key), out var v) ? v : 0;
 
     /// <summary>
-    /// Run a triage/QA phase, retrying a provider crash in place (up to the crash cap)
-    /// rather than escalating to a human on the first blip — the resilience task runs
-    /// already get from Park, which these phases otherwise lacked. Returns the last
-    /// result; if it never cleared, that result is still a Crash and the caller escalates.
+    /// Runs a phase that has no task to park, retrying a provider crash in place up to the
+    /// crash cap. Returns the last result, which is still a Crash if it never cleared.
     /// </summary>
     private async Task<AgentRunResult> RunWithCrashRetryAsync(Func<Task<AgentRunResult>> run)
     {
@@ -484,11 +445,9 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Run QA iff the board is complete and there is new completed work to verify — the
-    /// first build, a bug-fix, or a change request's tasks (any done task counts). The
-    /// project is done (returns null) once a QA round produces nothing new: a round that
-    /// files zero bugs, or whose bugs are all rejected, never raises the done count past
-    /// the watermark. A non-converging project escalates to the client after the cap.
+    /// Runs QA when the board is quiescent and more work has finished than the watermark
+    /// records as verified. Once a round leaves the count unchanged the project is complete
+    /// and this hands it over; a project that never converges escalates after the round cap.
     /// </summary>
     private async Task<TaskRunOutcome?> MaybeRunQaAsync(CancellationToken ct)
     {
@@ -497,8 +456,7 @@ public sealed class TaskRunner(
 
         var rounds = MetaInt("qa_rounds");
         var newWorkToVerify = _tasks.CountDone() > MetaInt("qa_verified_count");
-        // Verified, and nothing has finished since: the project is complete. Hand it over
-        // once, then this returns null on every later tick and the loop drains.
+        // Verified with nothing finished since: the project is complete.
         if (rounds > 0 && !newWorkToVerify) return await DeliverAsync(ct).ConfigureAwait(false);
 
         if (rounds >= QaRoundCap)
@@ -514,14 +472,10 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Checks the finished project out where the client can run it and has the PM tell them
-    /// how. Returns null when the handover has already been done.
+    /// Clones trunk to a build directory the client can open and run, records the run command,
+    /// and has the PM tell them. Returns null when the handover has already happened; it is
+    /// re-armed when a new Feature is decomposed.
     /// </summary>
-    /// <remarks>
-    /// A bare repo cannot be run and task workspaces are deleted after merge, so without
-    /// this the finished project has no directory the client could open. Re-armed by
-    /// <see cref="DecomposeFeatureAsync"/>, so a change request is handed over again.
-    /// </remarks>
     private async Task<TaskRunOutcome?> DeliverAsync(CancellationToken ct)
     {
         if (MetaInt(DeliveredKey) == 1) return null;
@@ -529,8 +483,7 @@ public sealed class TaskRunner(
         var checkout = paths.ProjectBuild(project);
         _workspaces.PrepareTrunkClone(checkout);
 
-        // QA's command wins when it recorded one: it started the app for real, which the
-        // project files alone cannot tell us (a port, for instance).
+        // QA's recorded command wins, since it really started the app and knows its port.
         var delivery = _meta.Get("run_command") is { Length: > 0 } recorded
             ? new Delivery(checkout, recorded, _meta.Get("run_url"))
             : DeliveryPlan.For(checkout);
@@ -552,10 +505,9 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Black-box QA on the finished project: a QA instance reads the requirements and the
-    /// contract, exercises the project through its observable side-channel, and files a bug
-    /// for each requirement not met — seeded with the ledger so it does not re-file. Project-
-    /// scoped (no task); runs on a fresh trunk clone like the design/PM phases.
+    /// Runs one QA round on a fresh trunk clone: a QA instance writes or updates the acceptance
+    /// suite against the contract, the harness runs it, and the result decides the round. The
+    /// instance is project-scoped, with no task attached.
     /// </summary>
     private async Task<TaskRunOutcome> RunQaAsync(CancellationToken ct)
     {
@@ -570,16 +522,14 @@ public sealed class TaskRunner(
         var result = await RunWithCrashRetryAsync(() =>
             loop.RunChatAsync([new LlmMessage("user", QaBrief(workspace))], executor, ct)).ConfigureAwait(false);
 
-        // A spent project cap refused QA's calls: the round never really ran, so the
-        // watermark must not move (that would falsely mark the project verified) and no
-        // qa_escalated flag is set — raising the budget re-runs QA as if nothing happened.
+        // The round never ran, so the watermark must not move and nothing is escalated:
+        // raising the budget re-runs QA as if this had not happened.
         if (result.ProjectBudgetExhausted)
             return new TaskRunOutcome(0, result.End, TaskStatus.Qa,
                 "QA paused — project budget exhausted.", ProjectBudgetExhausted: true);
 
-        // A provider outage that outlasts the retries: don't advance the watermark (that
-        // would falsely mark the project QA-verified) and stop the loop; surface it to the
-        // human via the PM. qa_escalated is cleared on the next design sign-off.
+        // A provider outage that outlasted the retries: the watermark stays put and the
+        // client is told. The flag is cleared when a new Feature is decomposed.
         if (result.End == EndReason.Crash)
         {
             var crashNote = "QA could not complete — the provider failed after retries. Re-run once it's healthy.";
@@ -589,28 +539,24 @@ public sealed class TaskRunner(
             return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, crashNote);
         }
 
-        // The suite QA just wrote is part of the project, not scratch work: it has to
-        // survive the round to be re-run against the next change.
+        // The suite is part of the project, and is re-run against every later change.
         if (_workspaces.CommitAndPushTrunk(workspace, "test(qa): acceptance suite"))
             _log.Event(EventType.GitCommit, "committed the acceptance suite to trunk");
 
         _meta.Set("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
 
-        // A project with an HTTP contract is judged by its suite; one without has no
-        // operations to cover and nothing mechanical to run, so it keeps the older rule —
-        // QA exercised it and filed what failed.
+        // A project with a contract is judged by its suite. One without has no operations to
+        // cover, so it keeps the older rule: QA exercised it and filed what failed.
         if (ApiContract.Load(workspace) is not null
             && SuiteVerdict(workspace) is { } incomplete)
         {
-            // No verdict: the watermark stays put, so the next tick re-runs QA and
-            // QaRoundCap bounds the retries before it reaches the client.
+            // No verdict, so the watermark stays put and the next tick re-runs QA.
             _log.Message(incomplete);
             return new TaskRunOutcome(0, result.End, TaskStatus.Qa, incomplete);
         }
 
-        // Advance the watermark to the count of finished work QA has now verified. Newly
-        // filed bugs are still in triage (not done), so it only rises again when an accepted
-        // bug is fixed or a change request's tasks complete — exactly what re-triggers QA.
+        // The watermark records how much finished work QA has now verified. Newly filed bugs
+        // are not done, so it rises again only when a fix or a change request lands.
         _meta.Set("qa_verified_count", _tasks.CountDone().ToString());
 
         var filed = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
@@ -622,14 +568,14 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Runs the acceptance suite and returns why the round produced no verdict, or null when
-    /// it did. A red suite IS a verdict — it becomes a bug — so only "not covered" and "did
-    /// not run" stop the round, and neither may be mistaken for a pass.
+    /// Checks the suite covers every contract operation and runs it, filing a bug if it is red.
+    /// Returns why the round produced no verdict — uncovered operations, or a suite that did
+    /// not run — or null when it did.
     /// </summary>
     private string? SuiteVerdict(string workspace)
     {
-        // Coverage first, from the test source: a suite that covers half the contract can
-        // go green while verifying half the project, which is the false pass this replaces.
+        // Coverage first, read from the test source: a partial suite can go green while
+        // leaving half the contract unverified.
         var contract = ApiContract.Load(workspace)!;
         var declared = AcceptanceSuite.DeclaredOperations(workspace);
         if (contract.OperationIds.Where(id => !declared.Contains(id)).ToList() is { Count: > 0 } uncovered)
@@ -649,11 +595,7 @@ public sealed class TaskRunner(
         return null;
     }
 
-    /// <summary>
-    /// A red suite becomes one bug carrying the test output verbatim. Filed by the harness
-    /// rather than by QA: the failure is process output, and a verdict that depends on the
-    /// model remembering to report it is the verdict this design replaces.
-    /// </summary>
+    /// <summary>Files one bug for a red acceptance suite, carrying the test output verbatim.</summary>
     private void FileAcceptanceFailure(AcceptanceResult acceptance)
     {
         var objective = $"""
@@ -682,7 +624,7 @@ public sealed class TaskRunner(
         _log.Message($"Bug {bug.Id} filed from the acceptance run.");
     }
 
-    /// <summary>Keeps the END of a test log: the failure summary is at the bottom.</summary>
+    /// <summary>Truncates to the last <paramref name="max"/> characters, where the failure summary sits.</summary>
     private static string Truncate(string output, int max = 6_000) =>
         output.Length <= max ? output : $"... [{output.Length - max} earlier chars omitted]\n{output[^max..]}";
 
@@ -735,8 +677,8 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// The operations the suite must cover, listed from the contract itself so QA is
-    /// working from the same set the coverage gate will check it against.
+    /// The contract section of QA's brief: the path to the document and every operation it must
+    /// cover. Explains instead that there is nothing to cover when the project has no contract.
     /// </summary>
     private static string ContractSection(string workspace)
     {
@@ -759,14 +701,9 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Tells QA exactly what to start, read out of the checkout by <see cref="AgentToolset.Discover"/>.
+    /// The startup section of QA's brief: the project to run and the port it declares, read out
+    /// of the checkout by <see cref="AgentToolset.Discover"/>.
     /// </summary>
-    /// <remarks>
-    /// Handed over rather than left to be worked out, because a guessed project path fails as a
-    /// BUILD error — indistinguishable, to the model, from a broken project — and there is no
-    /// layout convention to fall back on: one project here is `src/BillSplitter.Web`, another is
-    /// `src/Weatherboard`. A round that guessed wrong once filed four bugs it never observed.
-    /// </remarks>
     private static string StartupSection(string workspace)
     {
         if (AgentToolset.Discover(workspace) is not { } target)
@@ -862,17 +799,13 @@ public sealed class TaskRunner(
     {
         var log = _log.For(task.Id);
 
-        // A task that keeps failing CI or review is a tarpit; stop feeding it. Only
-        // engineer instances that ended `done` count — those are submissions that
-        // reached the gates and were sent back. A budget kill, crash or iteration cap
-        // is a park-and-resume, not a failed revision. The Principal implementing
-        // directly is the escalation past this cap, so it is exempt.
+        // Only engineer instances that ended `done` count as revisions — those reached the
+        // gates and were sent back. A budget kill, crash or iteration cap is a park-and-resume.
+        // The Principal implementing directly is the escalation past this cap, so it is exempt.
         if (recipe.Role == AgentRole.Engineer)
         {
-            // Counted since the last time someone gave new direction — a Principal triage,
-            // or the client answering — not for the life of the task. All-time counting
-            // made the cap unclearable: new guidance arrived, the next claim re-blocked on
-            // attempts nobody could undo, and the task bounced straight back out.
+            // Counted since the last new direction — a triage, or the client answering — not
+            // for the life of the task, so fresh guidance clears the count.
             var instances = _instances.ForTask(task.Id);
             var lastDirection = instances
                 .Where(i => i.Role == AgentRole.Principal)
@@ -905,14 +838,12 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Claiming is a status transition guarded by the legal-transition map and an
-    /// optimistic UPDATE, which is what makes it safe when the worker count rises
-    /// above one without any change here.
+    /// Claims a task for work: a guarded status transition, so it stays safe with more than
+    /// one worker. A task already in_progress is being resumed and is left alone.
     /// </summary>
     private TaskRecord Claim(TaskRecord task, ForgeLogger log)
     {
-        // Ready is the normal claim; OutOfBudget/Blocked is the Principal taking a stuck
-        // task over. A task already in_progress is a resume — leave it, don't re-transition.
+        // Ready is the normal claim; OutOfBudget or Blocked is the Principal taking it over.
         var status = _tasks.Get(task.Id).Status;
         if (status is TaskStatus.Ready or TaskStatus.OutOfBudget or TaskStatus.Blocked)
             Transition(task.Id, TaskStatus.Claimed, log);
@@ -921,7 +852,7 @@ public sealed class TaskRunner(
         return _tasks.Get(task.Id);
     }
 
-    /// <summary>Every status change is one log line, so the task's walk through the board is legible.</summary>
+    /// <summary>Transitions a task and writes one log line for it.</summary>
     private void Transition(long taskId, TaskStatus to, ForgeLogger log)
     {
         var from = _tasks.Get(taskId).Status;
@@ -934,13 +865,10 @@ public sealed class TaskRunner(
         conn.Execute("UPDATE tasks SET branch_name = @branch WHERE id = @taskId", new { taskId, branch });
 
     /// <summary>
-    /// Commits, pushes and CI-checks what the engineer produced, then submits it for
-    /// review. Returns the task to the board rather than reviewing it here.
+    /// Commits and pushes what the agent produced, runs CI over it, and hands it to review by
+    /// leaving it in_review for the next tick. Whether it advances is read from git and from
+    /// CI's exit code, not from the agent's claim.
     /// </summary>
-    /// <remarks>
-    /// Whether the work advances is decided from ground truth, never the agent's claim:
-    /// git says whether there are commits, harness-run CI says whether it builds.
-    /// </remarks>
     private TaskRunOutcome Submit(
         TaskRecord task, string branch, AgentRunResult result, ForgeLogger log)
     {
@@ -961,8 +889,7 @@ public sealed class TaskRunner(
 
         try
         {
-            // CI is harness-run and zero tokens, so it stays attached to the engineer's
-            // turn: the Principal never reviews code that does not build.
+            // CI runs before review, so the Principal never reviews code that does not build.
             log.Event(EventType.CiRun, "dotnet build/test");
             var ci = _ci(_workspaces.Path(task.Id));
             if (!ci.Passed)
@@ -973,8 +900,7 @@ public sealed class TaskRunner(
             }
             log.Event(EventType.CiPassed, ci.Summary);
 
-            // Hand off and stop. Review is the next tick's work, claimed from the board,
-            // so a worker that dies here resumes instead of stranding the task.
+            // Review is the next tick's work, so a worker that dies here strands nothing.
             Transition(task.Id, TaskStatus.InReview, log);
             var handoff = $"Submitted for review. {result.ProgressNote}".Trim();
             _tasks.SetProgressNote(task.Id, handoff);
@@ -1001,9 +927,7 @@ public sealed class TaskRunner(
             var verdict = await new ReviewPhase(conn, llm, vault, prompts, _log)
                 .RunAsync(task, branch, _workspaces, ct).ConfigureAwait(false);
 
-            // The reviewer judged the bug not a real defect (already transitioned to
-            // Rejected). Nothing to merge or revise — discard the branch and close it.
-            // This is what breaks the "fix a non-bug forever" loop.
+            // The reviewer rejected the bug itself, so there is nothing to merge or revise.
             if (verdict.RejectedBugReason is { } rejectReason)
             {
                 _workspaces.Discard(task.Id);
@@ -1011,10 +935,8 @@ public sealed class TaskRunner(
                 return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.Rejected, $"Bug rejected: {rejectReason}");
             }
 
-            // A review that never reached a verdict says nothing about the code. Leave the
-            // task in in_review so the next tick reviews it again: sending it back to the
-            // engineer would spend a whole implementation run answering feedback that no
-            // reviewer ever gave.
+            // No verdict says nothing about the code: leave it in_review for another attempt
+            // rather than sending the engineer feedback no reviewer gave.
             if (verdict.End is EndReason.Crash or EndReason.Iterations or EndReason.Budget)
             {
                 var failed = _instances.ForTask(task.Id).Count(i =>
@@ -1048,11 +970,10 @@ public sealed class TaskRunner(
         }
     }
 
-    /// <summary>Merges an approved task to trunk and closes it. No agent, no tokens.</summary>
-    /// <remarks>
-    /// Re-running is safe: merging a branch already in trunk is a no-op, so a worker that
-    /// died between the merge and the transition simply repeats it on the next tick.
-    /// </remarks>
+    /// <summary>
+    /// Merges an approved task to trunk, deletes its workspace and closes it. No agent is
+    /// involved, and re-running is a no-op, so a worker that dies mid-merge simply repeats it.
+    /// </summary>
     private TaskRunOutcome MergeApproved(TaskRecord task)
     {
         var log = _log.For(task.Id);
@@ -1064,8 +985,7 @@ public sealed class TaskRunner(
             var shortSha = sha[..Math.Min(8, sha.Length)];
             log.Event(EventType.GitMerge, $"{branch} → {WorkspaceManager.TrunkBranch} @ {shortSha}");
 
-            // The per-task QA hop decides nothing (real QA is project-level, once the
-            // board is quiescent); it survives as the documented path from merging to done.
+            // The per-task QA hop decides nothing; real QA is project-level.
             Transition(task.Id, TaskStatus.Qa, log);
             Transition(task.Id, TaskStatus.Done, log);
             _workspaces.Discard(task.Id);
@@ -1096,15 +1016,13 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Send the task back to the engineer. The feedback goes into the progress note
-    /// so the resuming instance sees it in its packet immediately (the same resume
-    /// mechanism as a kill), and a review discussion records why. The workspace is
-    /// kept — the engineer revises the branch it already built.
+    /// Sends a task back to the engineer with feedback, written into the progress note so the
+    /// resuming instance sees it, and recorded as a discussion. The workspace and branch are
+    /// kept for it to revise.
     /// </summary>
     private TaskRunOutcome RequestRevision(TaskRecord task, ForgeLogger log, string stage, string feedback)
     {
-        // CI failure leaves the task in_progress; a rejected review already stepped
-        // it back to in_progress. Either way it must end claimable for the next run.
+        // Both paths leave the task in_progress, which is what makes it claimable again.
         var current = _tasks.Get(task.Id).Status;
         if (current == TaskStatus.InReview) Transition(task.Id, TaskStatus.InProgress, log);
 
@@ -1114,11 +1032,7 @@ public sealed class TaskRunner(
         return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.InProgress, $"Changes requested ({stage}).");
     }
 
-    /// <summary>
-    /// The self-improving loop (spec §7): a reviewer's recurring-mistake rule is
-    /// appended to CONVENTIONS.md on trunk, so it is in every future engineer's
-    /// standing context — the same mistake is ruled out once, not caught repeatedly.
-    /// </summary>
+    /// <summary>Appends a reviewer's rule to CONVENTIONS.md on trunk, where every engineer reads it.</summary>
     private void WriteConvention(string convention, ForgeLogger log)
     {
         var wrote = _workspaces.AppendToTrunkFile(
@@ -1127,14 +1041,10 @@ public sealed class TaskRunner(
         if (wrote) log.Event(EventType.GitCommit, $"convention added from review: {Shorten(convention, 80)}");
     }
 
-    /// <summary>Bounded revision loop tripped: hand the task to the Principal to triage.</summary>
-    /// <summary>Parks a task on the client once the engineer has run out of attempts.</summary>
-    /// <remarks>
-    /// Deliberately not `blocked`: the attempt count only ever rises, so a blocked task the
-    /// Principal redirects is re-blocked by the very next engineer claim, and the loop spends
-    /// a triage instance per cycle forever. Five failed attempts is a scope question, which
-    /// is the client's to answer.
-    /// </remarks>
+    /// <summary>
+    /// Parks a task on the client once the engineer has used every attempt. Not `blocked`,
+    /// because the attempt count only rises: a redirected task would re-block on the next claim.
+    /// </summary>
     private TaskRunOutcome BlockExhausted(TaskRecord task, ForgeLogger log, int attempts)
     {
         var note = $"Task stopped after {attempts} engineer attempts that could not pass CI and review. " +
@@ -1149,12 +1059,9 @@ public sealed class TaskRunner(
         text.Length <= max ? text : text[..max] + "…";
 
     /// <summary>
-    /// A non-`done` instance ended. The workspace is left on disk — it plus the
-    /// progress note are what the next instance resumes from — and the failure class
-    /// decides where the task goes:
-    ///   - crash (transient): stay claimable (in_progress) and auto-resume, bounded;
-    ///   - budget/iteration (out of resources): OutOfBudget → the Principal's queue;
-    ///   - escalate (needs a decision): Blocked → the Principal's queue.
+    /// Parks a task whose instance ended without finishing, keeping the workspace and progress
+    /// note for the next one. A crash stays claimable and auto-resumes up to the crash cap; a
+    /// spent budget or iteration cap goes to out_of_budget; an escalation goes to blocked.
     /// </summary>
     private TaskRunOutcome Park(
         TaskRecord task, AgentRunResult result, ForgeLogger log, TaskStatus statusBeforeClaim)
@@ -1163,8 +1070,7 @@ public sealed class TaskRunner(
 
         return result switch
         {
-            // The PROJECT cap, not this task's budget: the task did nothing wrong, so it
-            // is neither struck nor transitioned — the whole build pauses instead.
+            // The project cap, not this task's budget: the build pauses, the task is untouched.
             { ProjectBudgetExhausted: true } => PauseForProjectBudget(task, result, log, statusBeforeClaim),
             { End: EndReason.Crash } when CrashCount(task.Id) <= CrashRetryCap => ResumeAfterCrash(task, result, log),
             { End: EndReason.Budget or EndReason.Iterations or EndReason.Crash } => ParkOutOfBudget(task, result, log),
@@ -1173,15 +1079,10 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Rolls the task back to the status it held before this run claimed it, and reports
-    /// the run as paused rather than failed.
+    /// Rolls the task back to the status it held before this run claimed it, and reports the
+    /// run as paused rather than failed. No strike is counted. Rolling back preserves which
+    /// role owned it, which claiming to in_progress would otherwise erase.
     /// </summary>
-    /// <remarks>
-    /// The cap being spent is a money decision, not the task's fault, so nothing is
-    /// struck. Rolling back matters because claiming already moved the task to
-    /// in_progress: leaving it there discards who owned it — a Principal takeover reads
-    /// back as ordinary engineer work and the next run hands it to the wrong role.
-    /// </remarks>
     private TaskRunOutcome PauseForProjectBudget(
         TaskRecord task, AgentRunResult result, ForgeLogger log, TaskStatus statusBeforeClaim)
     {
@@ -1199,9 +1100,8 @@ public sealed class TaskRunner(
         _instances.ForTask(taskId).Count(i => i.EndReason == EndReason.Crash);
 
     /// <summary>
-    /// A provider crash is transient: a fresh instance gets a fresh network attempt and
-    /// fresh turns, and the WIP is intact. Leave the task `in_progress` (claimable) so the
-    /// next run auto-resumes it — the very path a killed process already uses. No transition.
+    /// Leaves a crashed task in_progress so the next run auto-resumes it, until the crash cap
+    /// is reached, after which it goes to the Principal.
     /// </summary>
     private TaskRunOutcome ResumeAfterCrash(TaskRecord task, AgentRunResult result, ForgeLogger log)
     {
@@ -1212,9 +1112,8 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Out of resources after the forced last-turn message. Count a strike and move the
-    /// task to the Principal's OutOfBudget queue — the Principal sets a new budget and
-    /// direction, or (at the second strike) implements it directly.
+    /// Counts a strike and moves a task that ran out of budget or turns to the Principal's
+    /// out_of_budget queue.
     /// </summary>
     private TaskRunOutcome ParkOutOfBudget(TaskRecord task, AgentRunResult result, ForgeLogger log)
     {
@@ -1231,7 +1130,7 @@ public sealed class TaskRunner(
         return new TaskRunOutcome(task.Id, result.End, TaskStatus.OutOfBudget, summary);
     }
 
-    /// <summary>A deliberate escalate (or exhausted crash retries): the Principal triages.</summary>
+    /// <summary>Blocks a task the agent escalated, or one whose crash retries ran out, for triage.</summary>
     private TaskRunOutcome ParkBlocked(TaskRecord task, AgentRunResult result, ForgeLogger log)
     {
         var current = _tasks.Get(task.Id).Status;
@@ -1240,8 +1139,7 @@ public sealed class TaskRunner(
 
         var summary = $"Instance {result.InstanceId} ended {SnakeCaseEnum.ToSnakeCase(result.End)} " +
                       $"after {result.Iterations} turns. Handed to the Principal (blocked).";
-        // A genuine escalate() already messaged the principal via the escalation ladder;
-        // only self-notify when the harness itself parked it (e.g. exhausted crash retries).
+        // escalate() already messaged the Principal; only notify when the harness parked it.
         if (result.End is not EndReason.Escalated)
             Notify(task.Id, MessageType.Escalation, "principal", $"{summary} {result.Detail}".Trim());
         return new TaskRunOutcome(task.Id, result.End, _tasks.Get(task.Id).Status, summary);
