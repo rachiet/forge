@@ -2,32 +2,21 @@ using System.Text.Json;
 
 namespace Forge.Core.Scheduling;
 
-/// <summary>Who is building right now, and how long ago they said so.</summary>
+/// <summary>The contents of the lease file: who holds it, and when they last checked in.</summary>
 public sealed record WorkerStatus(string Project, int Pid, DateTimeOffset StartedAt, DateTimeOffset HeartbeatAt)
 {
-    /// <summary>
-    /// A worker that has not checked in for this long is presumed dead. Comfortably
-    /// longer than a heartbeat interval, because a single agent turn can be slow and
-    /// a live worker must never be mistaken for a corpse.
-    /// </summary>
+    /// <summary>How long without a heartbeat before a worker is presumed dead.</summary>
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
 
     public bool IsLive(DateTimeOffset now) => now - HeartbeatAt <= Timeout;
 }
 
 /// <summary>
-/// A machine-wide "one build at a time" lease.
-///
-/// Forge has no concurrency guard of its own: two workers on one project corrupt the
-/// shared database and log, and the decision here is that only one project builds at
-/// a time anyway. The lease makes that mechanical rather than remembered — and
-/// because a terminal `forge run` takes it too, a Start button in the browser cannot
-/// collide with a run someone left going in a shell.
-///
-/// A file rather than a table: the lock is machine-scoped and ephemeral, while the
-/// databases are per-project and durable. Staleness is judged by a heartbeat the
-/// holder writes, not by file mtime, so a crashed worker frees the lease by falling
-/// silent rather than needing cleanup.
+/// A machine-wide lease that allows one build at a time. Both a terminal `forge run` and the
+/// board's Start button take it, so they cannot collide on one database. It is a file rather
+/// than a table because the lock is machine-scoped and ephemeral while the databases are
+/// per-project; a holder is judged live by the heartbeat it writes, so a crashed worker frees
+/// the lease by falling silent.
 /// </summary>
 public sealed class WorkerLease : IDisposable
 {
@@ -45,11 +34,8 @@ public sealed class WorkerLease : IDisposable
         _clock = clock;
         Write();
 
-        // The lease beats ITSELF while held. Leaving Beat() to the worker's loop was
-        // the original design and it was wrong: a single task run is many LLM calls and
-        // routinely outlasts the 90s timeout, at which point the lease read as stale
-        // mid-task and a second build could start — the exact collision this type
-        // exists to prevent. A timer is indifferent to how long one task takes.
+        // The lease beats itself on a timer, so it stays live through a task that runs far
+        // longer than the stale timeout.
         var interval = beatEvery ?? TimeSpan.FromTicks(WorkerStatus.Timeout.Ticks / 3);
         _autoBeat = new Timer(_ => Beat(), null, interval, interval);
     }
@@ -65,12 +51,9 @@ public sealed class WorkerLease : IDisposable
     }
 
     /// <summary>
-    /// Take the lease, or return null if someone else holds it. The claim itself is
-    /// atomic — `FileMode.CreateNew` is create-or-fail at the OS level — so two
-    /// processes racing here cannot both win, which a read-then-write check allowed:
-    /// both would read "no live lease" and both would proceed. A stale file (dead
-    /// holder) is deleted and the claim retried; if a rival slips into that gap and
-    /// creates first, our retry fails and we correctly lose.
+    /// Takes the lease, or returns null if a live worker holds it. The claim is atomic —
+    /// create-or-fail at the OS level — so two processes racing cannot both win. A stale file
+    /// from a dead holder is deleted and the claim retried once.
     /// </summary>
     public static WorkerLease? TryAcquire(
         ForgePaths paths, string project, Func<DateTimeOffset>? clock = null, TimeSpan? beatEvery = null)
@@ -103,8 +86,7 @@ public sealed class WorkerLease : IDisposable
         return null;
     }
 
-    /// <summary>Refresh the heartbeat; silence is what frees the lease. The internal
-    /// timer calls this on its own — the manual call is belt-and-braces per loop tick.</summary>
+    /// <summary>Writes a fresh heartbeat. The internal timer calls this on its own.</summary>
     public void Beat()
     {
         lock (_gate)

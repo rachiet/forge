@@ -14,13 +14,9 @@ namespace Forge.Core.Chat;
 public sealed record ChatTurn(string Reply, EndReason End, bool DocumentsChanged, string? Detail = null);
 
 /// <summary>
-/// The client's side of the pipeline (spec §7): one CLI conversation with the PM.
-///
-/// The PM is as stateless as any other agent — each turn spins a fresh instance
-/// whose memory is the messages table replayed into a conversation, plus the docs
-/// on disk. Nothing is held between invocations, which is why `forge chat` can be
-/// closed and reopened, or answered from a different terminal, without losing the
-/// thread.
+/// The client's conversation with the PM. Each turn spins a fresh instance whose memory is the
+/// messages table replayed into a conversation, plus the documents on disk, so the chat can be
+/// closed, reopened, or continued from another terminal without losing the thread.
 /// </summary>
 public sealed class PmChat(
     ForgePaths paths,
@@ -31,7 +27,7 @@ public sealed class PmChat(
     PromptLibrary prompts,
     ForgeLogger? logger = null)
 {
-    /// <summary>How much history to replay. Older turns live in the log and in the docs the PM wrote.</summary>
+    /// <summary>How many past messages are replayed into a turn.</summary>
     private const int HistoryTurns = 40;
 
     private readonly AgentRecipe _recipe = AgentRecipe.Pm;
@@ -49,20 +45,14 @@ public sealed class PmChat(
             .TakeLast(HistoryTurns)
             .ToList();
 
-    /// <summary>
-    /// Items the Principal (or the harness) escalated for a human decision — pending
-    /// escalations addressed to the PM. These are injected into the PM's turn so it
-    /// raises them with the client and resolves them (reject_bug / retriage_bug),
-    /// rather than a task silently stranding on the board.
-    /// </summary>
+    /// <summary>Escalations still pending on the PM, which its next turn is asked to resolve.</summary>
     public IReadOnlyList<Message> OpenEscalations() =>
         _messages.Pending("pm").Where(m => m is EscalationMessage).ToList();
 
-    /// <summary>Runs one PM turn telling the client their project is finished and how to run it.</summary>
-    /// <remarks>
-    /// The directory and command come from the harness, so the PM is writing the covering
-    /// note rather than working out — or inventing — the instructions.
-    /// </remarks>
+    /// <summary>
+    /// Runs one PM turn telling the client the project is finished and how to run it. The
+    /// directory and command come from the harness, so the PM only writes the covering note.
+    /// </summary>
     public async Task<ChatTurn> AnnounceReadyAsync(Delivery delivery, CancellationToken ct = default)
     {
         var brief =
@@ -83,8 +73,7 @@ public sealed class PmChat(
         conversation.Add(new Llm.LlmMessage("user", brief));
         var result = await loop.RunChatAsync(conversation, executor, ct).ConfigureAwait(false);
 
-        // The harness says it plainly if the PM's own turn failed, so a finished project
-        // is never announced only in a log file.
+        // If the PM's own turn failed, the harness says it plainly instead.
         var reply = result.Reply ?? $"Your project is ready. Open {delivery.Directory} and run: {delivery.Command}";
         if (result.Reply is null)
             _messages.Insert(Message.Create(MessageType.Status, "pm", "client", reply));
@@ -93,13 +82,9 @@ public sealed class PmChat(
     }
 
     /// <summary>
-    /// Runs one PM turn that asks the client about the tasks waiting on them, and
-    /// returns what it said.
+    /// Runs one PM turn asking the client about the tasks waiting on them, and returns what it
+    /// said. Started by the harness, so the question is waiting when they next look.
     /// </summary>
-    /// <remarks>
-    /// Started by the harness rather than by the client typing, so the question is
-    /// already in the thread when they next look at the board.
-    /// </remarks>
     public async Task<ChatTurn> AskAboutStuckWorkAsync(
         IReadOnlyList<TaskRecord> waiting, CancellationToken ct = default)
     {
@@ -122,8 +107,7 @@ public sealed class PmChat(
         conversation.Add(new Llm.LlmMessage("user", brief));
         var result = await loop.RunChatAsync(conversation, executor, ct).ConfigureAwait(false);
 
-        // The `reply` tool writes its own message; only a turn that ended without one
-        // needs the harness to say something, or the client is left with silence.
+        // reply writes its own message; only a turn that ended without one needs this.
         var reply = result.Reply ?? Fallback(result);
         if (result.Reply is null)
             _messages.Insert(Message.Create(MessageType.Status, "pm", "client", reply, waiting[0].Id));
@@ -147,10 +131,7 @@ public sealed class PmChat(
         InjectOpenEscalations(conversation);
         var result = await loop.RunChatAsync(conversation, executor, ct).ConfigureAwait(false);
 
-        // Requirements live in git with the code (spec §5) — so a chat turn that
-        // authored documents is a commit, not a file sitting in a scratch directory.
-        // No review gate: these are the PM's own artifacts, and the client is the
-        // reviewer via sign-off.
+        // The PM's documents go straight to trunk; the client reviews them by approving.
         var changed = _workspaces.CommitAndPushTrunk(
             WorkspacePath, $"docs(pm): {Summarise(clientMessage)}");
         if (changed) _log.Event(EventType.GitCommit, "committed requirements to trunk");
@@ -163,11 +144,7 @@ public sealed class PmChat(
         return new ChatTurn(reply, result.End, changed, result.Detail);
     }
 
-    /// <summary>
-    /// The PM ended its turn without saying anything — budget, cap, crash. The
-    /// client is a person waiting at a prompt, so they get told what happened
-    /// rather than silence.
-    /// </summary>
+    /// <summary>What the client is told when a PM turn ended without saying anything.</summary>
     private static string Fallback(AgentRunResult result) => result.End switch
     {
         EndReason.Budget =>
@@ -181,9 +158,8 @@ public sealed class PmChat(
     };
 
     /// <summary>
-    /// Prepend any items awaiting a human decision to the current turn, with instructions
-    /// on how to resolve them. Attached to the turn (not the standing prompt) so the PM
-    /// sees exactly what's open right now and can act on it with the client.
+    /// Prepends the escalations awaiting a decision to this turn, with how to resolve each.
+    /// Attached to the turn rather than the standing prompt, so it reflects what is open now.
     /// </summary>
     private void InjectOpenEscalations(List<Llm.LlmMessage> conversation)
     {

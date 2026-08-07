@@ -3,9 +3,10 @@ using Forge.Core.Model;
 namespace Forge.Core.Workspaces;
 
 /// <summary>
-/// Owns the per-task working clone: the directory that is also the tool
-/// executor's jail. Created on claim, reused on resume, deleted after merge
-/// (CLAUDE.md, directory layout [DECIDED]).
+/// Owns a project's working clones: the per-task directory that is also the tool executor's
+/// jail, created on claim and deleted after merge, and the long-lived clones roles like the PM
+/// and QA work in. Also performs the commits, pushes and merges, so what lands is the
+/// harness's record of the workspace rather than the agent's account of it.
 /// </summary>
 public sealed class WorkspaceManager(ForgePaths paths, string project)
 {
@@ -17,14 +18,12 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
 
     public bool Exists(long taskId) => Directory.Exists(Path(taskId));
 
-    /// <summary>Branch per task (spec §8): task/&lt;id&gt;-&lt;slug&gt;.</summary>
+    /// <summary>A task's branch name: `task/&lt;id&gt;-&lt;slug&gt;`.</summary>
     public static string BranchName(TaskRecord task) => $"task/{task.Id}-{Slug(task.Title)}";
 
     /// <summary>
-    /// Bring the workspace to a state the agent can work in, whether this is a
-    /// first claim or a resume after a kill. Resume is not a special case here:
-    /// an existing clone is simply reused, which is what makes crash recovery and
-    /// context-bloat recovery the same mechanism.
+    /// Brings a task's workspace to a state the agent can work in, cloning it on a first claim
+    /// and reusing the existing clone on a resume.
     /// </summary>
     public string Prepare(TaskRecord task, string branch)
     {
@@ -40,8 +39,7 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
 
         Git.Require(paths.ProjectDir(project), "clone", BareRepo, dir);
 
-        // A branch already on the remote means an earlier instance got as far as
-        // pushing before it died; track it rather than forking a second one.
+        // A branch already on the remote is an earlier instance's; track it, don't fork.
         if (Git.Run(dir, "rev-parse", "--verify", $"origin/{branch}").Ok)
             Git.Require(dir, "checkout", branch);
         else
@@ -50,23 +48,11 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
     }
 
     /// <summary>
-    /// A long-lived clone sitting on trunk, for a role that edits documents rather
-    /// than working tasks. Reused across turns and pulled up to date each time, so
-    /// a conversation spanning days doesn't drift from what the team has merged.
+    /// A long-lived clone sitting on trunk, for a role that edits documents rather than working
+    /// tasks. Reused across turns and pulled up to date each time, and cleaned of untracked
+    /// files so the role sees trunk and nothing left over from an earlier run. Ignored files
+    /// such as bin/ and obj/ are kept, so a role does not pay a full rebuild every turn.
     /// </summary>
-    /// <remarks>
-    /// The reuse path also discards untracked files, so what a role sees is trunk and
-    /// nothing else. A pull leaves untracked files alone, so scratch work outlives the
-    /// run that made it: a QA round once wrote a throwaway console project here, and a
-    /// later round found it still sitting there, decided it was the app under test,
-    /// started it instead of the real one, and filed its failure as a product bug.
-    ///
-    /// `clean -fd` rather than `-fdx`: ignored files are left alone, so bin/obj survive
-    /// and a role does not pay a full rebuild every turn. The cost of this is narrow and
-    /// accepted — a turn that writes a file and then dies before committing loses that
-    /// draft, where before it could be committed by the next turn. Every caller commits
-    /// within the turn that writes, so that only bites a crashed turn.
-    /// </remarks>
     public string PrepareTrunkClone(string dir)
     {
         if (Directory.Exists(System.IO.Path.Combine(dir, ".git")))
@@ -85,9 +71,7 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
     }
 
     /// <summary>
-    /// Append a line to a file on trunk and publish it — used by the review
-    /// write-back to add a convention. It goes to trunk directly, not through a
-    /// task branch, so the rule persists whether or not the rejected task ever merges.
+    /// Appends a line to a file on trunk and pushes it, without going through a task branch.
     /// </summary>
     public bool AppendToTrunkFile(string cloneDir, string relativePath, string line, string message)
     {
@@ -99,7 +83,7 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         return CommitAndPushTrunk(dir, message);
     }
 
-    /// <summary>Commit whatever a doc-writing role changed and publish it. False when nothing changed.</summary>
+    /// <summary>Commits and pushes whatever a role changed in a trunk clone. False if nothing changed.</summary>
     public bool CommitAndPushTrunk(string dir, string message)
     {
         if (Git.Require(dir, "status", "--porcelain").Stdout.Trim().Length == 0) return false;
@@ -109,7 +93,7 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         return true;
     }
 
-    /// <summary>Real state from git, never from the agent: did anything actually change?</summary>
+    /// <summary>Whether the working tree has any change to commit, read from git.</summary>
     public bool HasUncommittedChanges(long taskId) =>
         Git.Require(Path(taskId), "status", "--porcelain").Stdout.Trim().Length > 0;
 
@@ -119,11 +103,7 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         return result.Ok && long.TryParse(result.Output, out var count) && count > 0;
     }
 
-    /// <summary>
-    /// The harness commits, not the agent: the commit is the harness's record of
-    /// what the workspace contains, so it cannot be shaped by a model that would
-    /// rather its diff looked different.
-    /// </summary>
+    /// <summary>Stages everything in a task's workspace and commits it. False if nothing changed.</summary>
     public bool CommitAll(long taskId, string message)
     {
         var dir = Path(taskId);
@@ -137,23 +117,16 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         Git.Require(Path(taskId), "push", "-u", "origin", branch);
 
     /// <summary>
-    /// Merge the task branch into trunk and publish it. Performed in the working
-    /// clone and pushed, because the source of truth is a bare repo with no
-    /// worktree to merge in. Returns the trunk commit sha.
+    /// Merges a task's branch into trunk and pushes it, returning the trunk commit sha. Done in
+    /// the working clone, since the source of truth is a bare repo with no worktree.
     /// </summary>
     public string MergeToTrunk(long taskId, string branch, string message)
     {
         var dir = Path(taskId);
         Git.Require(dir, "fetch", "origin");
         Git.Require(dir, "checkout", TrunkBranch);
-        // Sync local trunk to the real trunk before merging. Trunk can move under a
-        // task while it runs — a review write-back appends a convention and pushes it
-        // straight to trunk (AppendToTrunkFile), so by merge time origin/trunk is
-        // ahead of this clone's stale local trunk. Merging onto the stale copy then
-        // pushes non-fast-forward and is rejected. The working clone is disposable and
-        // the bare repo is the source of truth, so hard-reset to origin/trunk and
-        // merge onto current trunk. (A genuine content overlap surfaces as a merge
-        // conflict here, which is the correct place to see it.)
+        // Trunk can move while a task runs, so reset this disposable clone to origin/trunk
+        // before merging onto it. A real content overlap surfaces here as a merge conflict.
         Git.Require(dir, "reset", "--hard", $"origin/{TrunkBranch}");
         try
         {
@@ -172,9 +145,8 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
     }
 
     /// <summary>
-    /// The diff the reviewer reads: the task branch against trunk, name-status plus
-    /// the patch. Capped so a huge diff can't blow the context window — the reviewer
-    /// reads specific files with read_file when it needs more.
+    /// The task branch's diff against trunk — name-status plus the patch — capped in size. A
+    /// reviewer that needs more reads the files directly.
     /// </summary>
     public string DiffAgainstTrunk(long taskId, string branch, int maxChars = 20_000)
     {
@@ -188,15 +160,17 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
             : body[..maxChars] + $"\n... [diff truncated at {maxChars} chars — read specific files for the rest]";
     }
 
-    /// <summary>Deleted only after the work is safely in the bare repo.</summary>
+    /// <summary>Deletes a task's workspace, once its work is merged into the bare repo.</summary>
     public void Discard(long taskId)
     {
         var dir = Path(taskId);
         if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }
 
-    /// <summary>Deletes the task's workspace and its branch in the bare repo.</summary>
-    /// <remarks>Used when work is abandoned, so the commits are deliberately not kept.</remarks>
+    /// <summary>
+    /// Deletes a task's workspace and its branch in the bare repo, discarding its commits. Used
+    /// when the work is abandoned.
+    /// </summary>
     public void DiscardWithBranch(long taskId, string? branch)
     {
         Discard(taskId);
