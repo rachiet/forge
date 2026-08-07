@@ -5,8 +5,10 @@ using Spectre.Console.Cli;
 
 namespace Forge.Cli.Commands;
 
+/// <summary>`forge init <name>` — creates a project's directory, database and bare repo.</summary>
 public sealed class ProjectInitCommand : Command<ProjectInitCommand.Settings>
 {
+    /// <summary>The command's arguments.</summary>
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "<name>")]

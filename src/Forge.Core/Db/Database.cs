@@ -4,8 +4,10 @@ using Microsoft.Data.Sqlite;
 namespace Forge.Core.Db;
 
 /// <summary>Connection factory + schema bootstrap for the global and per-project DBs.</summary>
+/// <summary>Opens the SQLite databases, applying their schema and any migrations.</summary>
 public static class Database
 {
+    /// <summary>Opens a database, creating its directory and enabling foreign keys and WAL.</summary>
     public static SqliteConnection Open(string dbPath)
     {
         TypeHandlerRegistry.EnsureRegistered();
@@ -19,6 +21,7 @@ public static class Database
         return conn;
     }
 
+    /// <summary>Opens the global forge.db and ensures its schema exists.</summary>
     public static SqliteConnection OpenGlobal(string dbPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -27,6 +30,7 @@ public static class Database
         return conn;
     }
 
+    /// <summary>Opens a project.db, ensures its schema exists, and applies any pending migrations.</summary>
     public static SqliteConnection OpenProject(string dbPath)
     {
         var conn = Open(dbPath);

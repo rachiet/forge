@@ -4,8 +4,10 @@ using Forge.Core.Model;
 
 namespace Forge.Core.Db;
 
+/// <summary>Reads and writes the milestones table, which holds the PM's plan.</summary>
 public sealed class MilestoneRepository(IDbConnection conn)
 {
+    /// <summary>One milestones row as the database returns it.</summary>
     private sealed record Row
     {
         public long Id { get; init; }
@@ -22,11 +24,13 @@ public sealed class MilestoneRepository(IDbConnection conn)
         };
     }
 
+    /// <summary>The column list every read shares.</summary>
     private const string SelectColumns = """
         SELECT id AS Id, name AS Name, description AS Description, ordinal AS Ordinal
         FROM milestones
         """;
 
+    /// <summary>Inserts a milestone and returns it with the id the database assigned.</summary>
     public MilestoneRecord Insert(MilestoneRecord milestone)
     {
         if (string.IsNullOrWhiteSpace(milestone.Name))
@@ -41,13 +45,16 @@ public sealed class MilestoneRepository(IDbConnection conn)
         return milestone with { Id = id };
     }
 
+    /// <summary>Every milestone, in plan order.</summary>
     public IReadOnlyList<MilestoneRecord> List() =>
         conn.Query<Row>($"{SelectColumns} ORDER BY ordinal, id").Select(r => r.ToRecord()).ToList();
 
+    /// <summary>The milestone with this id; throws if there is none.</summary>
     public MilestoneRecord Get(long id) =>
         conn.QuerySingle<Row>($"{SelectColumns} WHERE id = @id", new { id }).ToRecord();
 
     /// <summary>Append position, so an agent that omits an ordinal still gets a sane plan order.</summary>
+    /// <summary>The position a new milestone would take at the end of the plan.</summary>
     public int NextOrdinal() =>
         conn.ExecuteScalar<int>("SELECT COALESCE(MAX(ordinal), 0) + 1 FROM milestones");
 

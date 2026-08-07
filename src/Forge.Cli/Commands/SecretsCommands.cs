@@ -8,8 +8,10 @@ using Spectre.Console.Cli;
 
 namespace Forge.Cli.Commands;
 
+/// <summary>`forge secrets set <name>` — stores a client secret in the encrypted vault, prompting for the value.</summary>
 public sealed class SecretsSetCommand : Command<SecretsSetCommand.Settings>
 {
+    /// <summary>The command's arguments.</summary>
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "<name>")]
@@ -43,6 +45,7 @@ public sealed class SecretsSetCommand : Command<SecretsSetCommand.Settings>
     }
 }
 
+/// <summary>`forge secrets list` — lists the stored secrets by name, never their values.</summary>
 public sealed class SecretsListCommand : Command
 {
     protected override int Execute(CommandContext context, CancellationToken cancellationToken)

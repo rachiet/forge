@@ -5,8 +5,10 @@ namespace Forge.Core.Model;
 // Feature is the PM's unit of scope handed to the Principal — the whole initial
 // build, or one change request — and is never assigned to an engineer. The
 // Principal decomposes a Feature into Task/Bug/Chore units that engineers execute.
+/// <summary>What kind of work a task row holds.</summary>
 public enum TaskType { Feature, Task, Bug, Chore }
 
+/// <summary>Where a task sits on the board. Which role owns each is in TaskTransitions.</summary>
 public enum TaskStatus
 {
     Created, Ready, Claimed, InProgress, InReview, Merging,
@@ -26,20 +28,25 @@ public enum TaskStatus
     Cancelled
 }
 
+/// <summary>The roles an agent instance can run as.</summary>
 public enum AgentRole { Pm, Principal, Engineer, Qa, Researcher }
 
+/// <summary>What a message is for; each has a sealed subtype of Message.</summary>
 public enum MessageType
 {
     Question, Answer, Review, Decision, Escalation, Status, ChangeRequest, SystemNudge
 }
 
+/// <summary>Whether a message has been delivered to its recipient yet.</summary>
 public enum MessageStatus { Pending, Received }
 
+/// <summary>Why an agent instance stopped.</summary>
 public enum EndReason { Done, Budget, Iterations, Crash, Escalated }
 
 /// <summary>Converts an enum member to and from the snake_case TEXT the schema stores.</summary>
 public static class SnakeCaseEnum
 {
+    /// <summary>The snake_case text the schema stores for an enum member.</summary>
     public static string ToSnakeCase<T>(T value) where T : struct, Enum
     {
         var name = value.ToString();
@@ -56,6 +63,7 @@ public static class SnakeCaseEnum
         return sb.ToString();
     }
 
+    /// <summary>The enum member for a stored snake_case value; throws on an unknown one.</summary>
     public static T Parse<T>(string text) where T : struct, Enum
     {
         var candidate = text.Replace("_", "");

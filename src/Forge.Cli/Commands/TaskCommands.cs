@@ -12,8 +12,10 @@ namespace Forge.Cli.Commands;
 /// Puts work on the board by hand. In M3 the Principal generates tasks from the
 /// design; until then this is how a task gets created.
 /// </summary>
+/// <summary>`forge task add` — puts a task on a project's board from the terminal.</summary>
 public sealed class TaskAddCommand : Command<TaskAddCommand.Settings>
 {
+    /// <summary>The command's arguments.</summary>
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "<project>")]
@@ -80,8 +82,10 @@ public sealed class TaskAddCommand : Command<TaskAddCommand.Settings>
     }
 }
 
+/// <summary>`forge task list` — prints a project's board as a table.</summary>
 public sealed class TaskListCommand : Command<TaskListCommand.Settings>
 {
+    /// <summary>The command's arguments.</summary>
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "<project>")]
@@ -128,6 +132,7 @@ public sealed class TaskListCommand : Command<TaskListCommand.Settings>
         return 0;
     }
 
+    /// <summary>A progress note trimmed to one short line for the table.</summary>
     private static string Shorten(string? note) => note switch
     {
         null or "" => "-",
