@@ -161,6 +161,24 @@ public class ApiContractTests : IDisposable
     }
 
     [Fact]
+    public void A_requirement_the_contract_declares_non_http_is_not_a_gap()
+    {
+        // A user interface, a performance target or a refactoring has no endpoint to name it.
+        // The Principal says so in the document rather than inventing an operation, which QA
+        // would then have to write a test against.
+        WriteContract(Valid.Replace(
+            "paths:",
+            $"{ApiContract.NonHttpExtension}:\n  - 03-web-ui.md\npaths:",
+            StringComparison.Ordinal));
+        WriteRequirements("01-url-shortening.md", "02-redirection.md", "03-web-ui.md");
+        using var conn = OpenBoard();
+
+        var report = CoverageGate.CheckContract(conn, _root);
+
+        Assert.Empty(report.RequirementsWithNoOperation);
+    }
+
+    [Fact]
     public void An_operation_no_task_claims_is_reported()
     {
         WriteContract(Valid);

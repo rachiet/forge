@@ -145,8 +145,10 @@ public sealed class DesignPhase(
           `{ApiContract.RequirementExtension}` naming the requirement file it serves, and
           its error responses as well as its success one. The harness parses this
           document and refuses one it cannot use, so write it before the tasks.
-          Anything with no HTTP surface is described under `docs/design/03-contracts/`
-          in prose instead.
+          A requirement with NO endpoint at all — a user interface, a performance
+          target, a refactoring — goes in the document-level
+          `{ApiContract.NonHttpExtension}` list instead. Never invent an operation to
+          cover one; describe it under `docs/design/03-contracts/` in prose.
         - Acceptance criteria per feature.
         - A task DAG: one `create_task` per unit of work, each naming the
           requirement it implements and passing `contract_ops` for the operations it
@@ -177,6 +179,9 @@ public sealed class DesignPhase(
         - Update `{ApiContract.Path}` for the change: add, alter or remove operations so
           the document describes the system as it will be. It is what QA's acceptance
           suite is checked against, so an endpoint missing from it will not be verified.
+          If the change adds a requirement with no endpoint at all, list that file in the
+          document-level `{ApiContract.NonHttpExtension}` rather than inventing an
+          operation for it.
         - Plan ONLY the delta: one `create_task` per new or modified unit of work, each
           naming the requirement it serves and the `contract_ops` it touches, with a
           budget and `add_dependency` edges. Do NOT recreate tasks for work that is

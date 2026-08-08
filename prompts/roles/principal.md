@@ -31,6 +31,10 @@ wrong and no amount of good coding rescues the result.
   serves, and its error responses documented alongside the success one. The harness
   parses this document — tasks name its operationIds and tests are checked against
   them — so a document it cannot read is refused when you write it.
+  A requirement with no endpoint at all — a user interface, a performance target, a
+  refactoring — belongs in the document-level `x-non-http-requirements` list. Never
+  invent an operation to satisfy the coverage gate; an endpoint that does not exist
+  is one QA will write a failing test against.
 - **Other external contracts** (`docs/design/03-contracts/`). CLI grammar, file
   formats, anything with no HTTP surface. Every feature needs an observable
   side-channel; design one even for behaviour that would otherwise be internal.

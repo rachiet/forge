@@ -32,8 +32,8 @@ find are worth making permanent. Nothing above that section is theirs to rewrite
   messages, no stack traces, no type names — it is read by whoever called the API.
 - `400` for bad input, `404` for something that does not exist, `500` for a fault.
   Missing, empty and whitespace-only values are all bad input: `400`, not `500`.
-- Success-response field names match `docs/design/03-contracts/` exactly. When the C#
-  member name differs, use `[JsonPropertyName]` — renaming the contract is not the fix.
+- Success-response field names match `docs/design/contracts/openapi.yaml` exactly. When
+  the C# member name differs, use `[JsonPropertyName]` — renaming the contract is not the fix.
 
 ## Tests
 
@@ -54,8 +54,8 @@ find are worth making permanent. Nothing above that section is theirs to rewrite
   Tasks have been lost this way: half the codebase references the old names and half
   the new, and the resulting build errors read as missing types and cost a whole
   budget to chase. A restructure is its own task.
-- Files under `docs/design/03-contracts/` are read-only to engineers. The
-  implementation conforms to the contract; the contract does not move to fit it.
+- `docs/design/contracts/openapi.yaml` is the HTTP contract and is read-only to engineers.
+  The implementation conforms to it; the contract does not move to fit the implementation.
 
 ## Definition of done
 
@@ -63,4 +63,4 @@ find are worth making permanent. Nothing above that section is theirs to rewrite
 2. `dotnet test` passes.
 3. The `MODULE.md` for what you touched describes the code as it now is, in fact
    rather than intent.
-4. The observable behaviour matches `docs/design/03-contracts/`.
+4. The observable behaviour matches `docs/design/contracts/openapi.yaml`.

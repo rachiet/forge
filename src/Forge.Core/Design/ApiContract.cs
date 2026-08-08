@@ -30,6 +30,13 @@ public sealed class ApiContract
     /// <summary>The extension linking an operation to the requirement file it serves.</summary>
     public const string RequirementExtension = "x-requirement";
 
+    /// <summary>
+    /// The document-level extension listing requirement files that have no HTTP surface at all
+    /// — a user interface, a performance target, a refactoring — so the coverage gate does not
+    /// read them as operations the Principal forgot to design.
+    /// </summary>
+    public const string NonHttpExtension = "x-non-http-requirements";
+
     private readonly OpenApiDocument _document;
 
     /// <summary>Private: an instance exists only if <see cref="Validate"/> accepted the document.</summary>
@@ -156,6 +163,19 @@ public sealed class ApiContract
     /// <summary>Which requirement files the contract claims to cover.</summary>
     public IReadOnlyCollection<string> CoveredRequirements =>
         Operations.Select(o => o.Requirement).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Requirement files the contract declares as having no endpoint. They are exempt from the
+    /// requirement-to-operation gate, and QA reports them as unverified rather than passing
+    /// over them silently.
+    /// </summary>
+    public IReadOnlyCollection<string> NonHttpRequirements =>
+        _document.Extensions.TryGetValue(NonHttpExtension, out var value) && value is OpenApiArray listed
+            ? listed.OfType<OpenApiString>()
+                .Select(entry => entry.Value?.Trim() ?? "")
+                .Where(entry => entry.Length > 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : [];
 
     /// <summary>Of the ids given, those the contract does not define.</summary>
     public IReadOnlyList<string> Unknown(IEnumerable<string> operationIds)

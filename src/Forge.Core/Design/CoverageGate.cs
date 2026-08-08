@@ -83,8 +83,9 @@ public static class CoverageGate
         if (ApiContract.Load(workspaceRoot) is not { } contract) return new ContractReport([], []);
 
         var covered = contract.CoveredRequirements;
+        var exempt = contract.NonHttpRequirements;
         var uncovered = RequirementFiles(workspaceRoot)
-            .Where(file => !covered.Contains(file))
+            .Where(file => !covered.Contains(file) && !exempt.Contains(file))
             .ToList();
 
         var claimed = new TaskRepository(conn).List()
