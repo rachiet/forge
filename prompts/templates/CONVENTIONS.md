@@ -10,6 +10,11 @@ find are worth making permanent. Nothing above that section is theirs to rewrite
 
 - C# / .NET 8. xUnit for tests.
 - `src/<Project>.<Module>/` for code, `tests/<Project>.Tests/` for tests.
+- **Exactly one runnable project per repo.** A user interface is static files — HTML, CSS
+  and JavaScript — under that project's `wwwroot/`, served by it with `UseDefaultFiles` and
+  `UseStaticFiles`. One `dotnet run` then serves the pages and the API on one port, with no
+  second server, no second port and no CORS. Never add a second web or console project for
+  the front end; CI refuses a repo with two.
 - The build is `dotnet build`; the tests are `dotnet test`. Both run from the repo
   root and must work with no arguments, no environment variables and no setup step.
 

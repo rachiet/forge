@@ -378,6 +378,20 @@ public sealed partial class AgentToolset : IDisposable
     /// the test project references the app. The URL comes from launchSettings.json. Returns null
     /// when the checkout holds nothing runnable; ties break on the shortest path.
     /// </summary>
+    /// <summary>
+    /// Every runnable, non-test project in the checkout, as repo-relative paths. A repo may
+    /// hold only one: the UI is static files served by it, never a second .NET project.
+    /// </summary>
+    public static IReadOnlyList<string> RunnableProjects(string checkoutDir)
+    {
+        if (!Directory.Exists(checkoutDir)) return [];
+        return [.. Directory.EnumerateFiles(checkoutDir, "*.csproj", SearchOption.AllDirectories)
+            .Select(Describe)
+            .Where(p => p.Runnable && !p.IsTest)
+            .Select(p => Relative(checkoutDir, p.Path))
+            .OrderBy(p => p, StringComparer.Ordinal)];
+    }
+
     public static RunTarget? Discover(string checkoutDir)
     {
         if (!Directory.Exists(checkoutDir)) return null;

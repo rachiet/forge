@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Forge.Core.Agents;
 
 namespace Forge.Core.Ci;
 
@@ -27,6 +28,9 @@ public static class CiRunner
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(10);
 
+    /// <summary>Where QA's acceptance suite lives; it must never appear in the solution.</summary>
+    private const string AcceptanceDirectory = "tests/acceptance";
+
     /// <summary>
     /// Runs `dotnet build`, then `dotnet test`, in the workspace. Returns at the first failure.
     /// A workspace with no .sln or .csproj is a skip, not a failure.
@@ -39,10 +43,43 @@ public static class CiRunner
         if (!buildable)
             return CiResult.Skip("no .sln/.csproj — nothing to build (docs-only or not yet scaffolded)");
 
+        if (LayoutViolation(workspaceDir) is { } violation)
+            return new CiResult(false, "layout", violation);
+
         var build = Dotnet(workspaceDir, "build", "--nologo");
         if (!build.Passed) return build;
 
         return Dotnet(workspaceDir, "test", "--nologo");
+    }
+
+    /// <summary>
+    /// Why the repo's project layout is unacceptable, or null when it is fine. Two rules, both
+    /// checked before the build so the engineer that broke one is the one told about it: a repo
+    /// has exactly one runnable project, and QA's acceptance suite stays out of the solution.
+    /// The message is what the engineer resumes with, so it names the offending paths.
+    /// </summary>
+    private static string? LayoutViolation(string workspaceDir)
+    {
+        if (AgentToolset.RunnableProjects(workspaceDir) is { Count: > 1 } runnable)
+            return $"This repo has {runnable.Count} runnable projects: {string.Join(", ", runnable)}.\n"
+                 + "A project serves its user interface itself, as static files under its own "
+                 + "wwwroot/, so one `dotnet run` serves both the pages and the API on one port. "
+                 + "Delete the extra project and move its files into the existing one, or make it "
+                 + "a class library.";
+
+        var solution = Directory.EnumerateFiles(workspaceDir, "*.sln", SearchOption.AllDirectories)
+            .FirstOrDefault(p => !p.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}"));
+        // Solution files write paths with backslashes whatever wrote them, so compare on a
+        // normalised copy rather than the separator this machine happens to use.
+        if (solution is not null
+            && File.ReadAllText(solution).Replace('\\', '/')
+                .Contains(AcceptanceDirectory, StringComparison.OrdinalIgnoreCase))
+            return $"{Path.GetFileName(solution)} lists the acceptance suite in {AcceptanceDirectory}.\n"
+                 + "That suite is QA's, and only runs against a started application, so including it "
+                 + "makes `dotnet test` fail for every task. Remove it with "
+                 + $"`dotnet sln remove {AcceptanceDirectory}/…` and leave it out of the solution.";
+
+        return null;
     }
 
     /// <summary>

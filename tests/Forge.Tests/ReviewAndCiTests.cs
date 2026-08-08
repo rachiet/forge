@@ -211,6 +211,73 @@ public class CiRunnerTests : IDisposable
     }
 
     [Fact]
+    public void A_second_runnable_project_fails_ci_before_the_build()
+    {
+        // A repo serves its UI as static files from its one runnable project. A second one
+        // means two servers, and the acceptance runner has no way to know which to start.
+        Web("src/App");
+        Web("src/Web");
+
+        var result = CiRunner.Run(_dir);
+
+        Assert.False(result.Passed);
+        Assert.Equal("layout", result.Step);
+        Assert.Contains("src/App/App.csproj", result.Output, StringComparison.Ordinal);
+        Assert.Contains("src/Web/Web.csproj", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_library_beside_the_runnable_project_is_fine()
+    {
+        Web("src/App");
+        File.WriteAllText(Library("src/Core"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+
+        Assert.NotEqual("layout", CiRunner.Run(_dir).Step);
+    }
+
+    [Fact]
+    public void The_acceptance_suite_in_the_solution_fails_ci()
+    {
+        // It only runs against a started application, so in the solution it would fail
+        // `dotnet test` on every task from then on.
+        Web("src/App");
+        File.WriteAllText(Path.Combine(_dir, "App.sln"),
+            "Project(\"{X}\") = \"AcceptanceTests\", \"tests\\acceptance\\AcceptanceTests.csproj\", \"{Y}\"");
+
+        var result = CiRunner.Run(_dir);
+
+        Assert.False(result.Passed);
+        Assert.Equal("layout", result.Step);
+        Assert.Contains("tests/acceptance", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Writes a runnable web project at a repo-relative directory.</summary>
+    private void Web(string relativeDir)
+    {
+        var name = Path.GetFileName(relativeDir);
+        var dir = Path.Combine(_dir, relativeDir.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, $"{name}.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk.Web">
+              <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+    }
+
+    /// <summary>The path a class library would occupy at a repo-relative directory.</summary>
+    private string Library(string relativeDir)
+    {
+        var name = Path.GetFileName(relativeDir);
+        var dir = Path.Combine(_dir, relativeDir.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, $"{name}.csproj");
+    }
+
+    [Fact]
     public void A_project_that_does_not_compile_fails_ci()
     {
         File.WriteAllText(Path.Combine(_dir, "App.csproj"), """

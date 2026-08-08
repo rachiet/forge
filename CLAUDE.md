@@ -498,6 +498,11 @@ chat → M3 design → M4 review + CI → M5 QA → M6 change requests. Later wo
   (e.g. an X-Cache header for a cache).
 - .NET 8+ console host; Microsoft.Data.Sqlite + Dapper (no EF);
   System.CommandLine or Spectre.Console for the CLI.
+- Generated projects are co-hosted: exactly one runnable project, serving its UI as static
+  files from its own `wwwroot/` alongside its API on one port. Never a separate front-end
+  project or a second server. `CiRunner` refuses a repo with two runnable projects, and
+  refuses a solution that lists `tests/acceptance` (QA's suite needs a started app, so in
+  the solution it fails `dotnet test` for every task).
 
 ## House style (how the code in THIS repo is written)
 Rules that change what gets written. Anything a competent C# author does by
