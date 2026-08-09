@@ -55,6 +55,64 @@ public static partial class AcceptanceSuite
             .ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <summary>The suite's project file, whose name the harness fixes rather than QA choosing it.</summary>
+    public const string ProjectFile = "tests/acceptance/AcceptanceTests.csproj";
+
+    /// <summary>
+    /// Creates the suite's project if it does not exist yet, with `dotnet new xunit` so its
+    /// package versions come from the installed SDK rather than from a model's memory. QA then
+    /// writes only test files. Returns null on success, or why the scaffold could not be built.
+    /// </summary>
+    public static string? EnsureScaffold(string workspaceDir)
+    {
+        var dir = Path.Combine(workspaceDir, Directory.Replace('/', Path.DirectorySeparatorChar));
+        if (System.IO.Directory.Exists(dir)
+            && System.IO.Directory.EnumerateFiles(dir, "*.csproj", SearchOption.AllDirectories).Any())
+            return null;
+
+        if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, recursive: true);
+
+        var created = Dotnet(workspaceDir, baseUrl: "",
+            "new", "xunit", "-o", Directory, "-n", "AcceptanceTests");
+        if (!created.Passed) return "could not scaffold the acceptance suite:\n" + created.Output;
+
+        // The template's placeholder test would be the only one covering nothing.
+        var placeholder = Path.Combine(dir, "UnitTest1.cs");
+        if (File.Exists(placeholder)) File.Delete(placeholder);
+
+        File.WriteAllText(Path.Combine(dir, "Api.cs"), $$"""
+            using System;
+            using System.Net.Http;
+
+            namespace AcceptanceTests;
+
+            /// <summary>The running application, reached over HTTP at the address the harness started it on.</summary>
+            public static class Api
+            {
+                /// <summary>The base URL of the instance under test.</summary>
+                public static string BaseUrl =>
+                    Environment.GetEnvironmentVariable("{{BaseUrlVariable}}")
+                    ?? throw new InvalidOperationException(
+                        "{{BaseUrlVariable}} is not set. The harness starts the application and sets it; "
+                        + "run the suite through the harness rather than by hand.");
+
+                /// <summary>A client pointed at that instance. Redirects are not followed, so a 302 is visible.</summary>
+                public static HttpClient Client() =>
+                    new(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = new Uri(BaseUrl) };
+            }
+
+            """);
+        return null;
+    }
+
+    /// <summary>
+    /// Compiles the suite, separately from running it. A suite that does not build has tested
+    /// nothing, and must never be reported as a suite that failed: a failed run becomes a bug
+    /// against the product, and rejecting that bug completes the project.
+    /// </summary>
+    public static AcceptanceResult Build(string workspaceDir) =>
+        Dotnet(workspaceDir, baseUrl: "", "build", ProjectFile, "--nologo");
+
     /// <summary>Whether this repo has an acceptance suite directory.</summary>
     public static bool Exists(string workspaceDir) =>
         System.IO.Directory.Exists(
@@ -65,17 +123,16 @@ public static partial class AcceptanceSuite
     /// Returns a not-run result when there is no suite, no runnable app, or the app never
     /// starts listening.
     /// </summary>
-    public static AcceptanceResult Run(string workspaceDir)
+    /// <param name="alreadyBuilt">
+    /// True when the caller has just compiled the suite, so it is not built twice.
+    /// </param>
+    public static AcceptanceResult Run(string workspaceDir, bool alreadyBuilt = false)
     {
         if (!Exists(workspaceDir)) return AcceptanceResult.NotRun("no acceptance suite in this repo");
         if (AgentToolset.Discover(workspaceDir) is not { } target)
             return AcceptanceResult.NotRun("no runnable application to test");
 
-        // Compiled before anything is started, and separately from running it. A suite that does
-        // not build has tested nothing, and must not be reported as a suite that failed: a failed
-        // run becomes a bug against the product, and rejecting that bug completes the project.
-        var build = Dotnet(workspaceDir, baseUrl: "", "build", Directory, "--nologo");
-        if (!build.Passed)
+        if (!alreadyBuilt && Build(workspaceDir) is { Passed: false } build)
             return AcceptanceResult.NotRun(
                 "the acceptance suite does not compile, so no test ran:\n" + build.Output);
 
@@ -88,7 +145,7 @@ public static partial class AcceptanceSuite
                 $"the application did not start listening on {baseUrl} within "
                 + $"{StartupTimeout.TotalSeconds:0}s, so the suite was not run");
 
-        var result = Dotnet(workspaceDir, baseUrl, "test", Directory, "--nologo", "--no-build");
+        var result = Dotnet(workspaceDir, baseUrl, "test", ProjectFile, "--nologo", "--no-build");
         app.Stop();
         return result;
     }

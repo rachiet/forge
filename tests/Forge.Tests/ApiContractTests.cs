@@ -287,6 +287,37 @@ public class ApiContractTests : IDisposable
         Assert.Contains("does not compile", result.Output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_harness_scaffolds_the_suite_so_qa_never_picks_a_framework_or_a_package_version()
+    {
+        // A QA round invented a Microsoft.NET.Test.Sdk version that does not exist, and the two
+        // rounds after it wrote differently-named projects beside the broken one.
+        Assert.Null(AcceptanceSuite.EnsureScaffold(_root));
+
+        var dir = Path.Combine(_root, "tests", "acceptance");
+        Assert.True(File.Exists(Path.Combine(dir, "AcceptanceTests.csproj")));
+        // The helper that hands QA a client, so it never has to read the variable itself.
+        Assert.Contains(AcceptanceSuite.BaseUrlVariable, File.ReadAllText(Path.Combine(dir, "Api.cs")));
+        // The template's placeholder would be a test covering no operation.
+        Assert.False(File.Exists(Path.Combine(dir, "UnitTest1.cs")));
+        Assert.Single(Directory.EnumerateFiles(dir, "*.csproj", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void An_existing_suite_is_left_alone()
+    {
+        // Round two must inherit the suite it wrote, not have it replaced underneath it.
+        var dir = Path.Combine(_root, "tests", "acceptance");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Mine.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(dir, "MyTests.cs"), "// written last round");
+
+        Assert.Null(AcceptanceSuite.EnsureScaffold(_root));
+
+        Assert.True(File.Exists(Path.Combine(dir, "MyTests.cs")));
+        Assert.False(File.Exists(Path.Combine(dir, "AcceptanceTests.csproj")));
+    }
+
     /// <summary>A minimal runnable web project, so Discover finds something to start.</summary>
     private void WriteRunnableApp()
     {

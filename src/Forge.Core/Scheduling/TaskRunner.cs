@@ -515,10 +515,40 @@ public sealed class TaskRunner(
         _log.Message("QA phase: verifying the finished project against the client's requirements");
 
         var workspace = _workspaces.PrepareTrunkClone(paths.RoleWorkspace(project, "qa"));
-        var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
-        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
+
+        // The project, its framework and its package versions are the harness's to decide, not
+        // QA's to remember. A round once invented a Microsoft.NET.Test.Sdk version that does not
+        // exist, and the next two wrote a differently-named project beside the broken one.
+        if (AcceptanceSuite.EnsureScaffold(workspace) is { } scaffoldError)
+        {
+            _log.Message($"QA round incomplete — {scaffoldError}");
+            return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, scaffoldError);
+        }
 
         var bugsBefore = _tasks.List().Count(t => t.Type == TaskType.Bug);
+
+        // Nothing to write: the suite already covers the contract and the contract has not moved
+        // since it was written, so this round is a regression run and needs no model at all.
+        if (NothingForQaToWrite(workspace))
+        {
+            _log.Message("QA: the suite already covers the contract; re-running it without an agent.");
+            if (SuiteVerdict(workspace) is { } regressionGap)
+            {
+                _log.Message(regressionGap);
+                return new TaskRunOutcome(0, EndReason.Done, TaskStatus.Qa, regressionGap);
+            }
+            _meta.Set("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
+            _meta.Set("qa_verified_count", _tasks.CountDone().ToString());
+            var filedNow = _tasks.List().Count(t => t.Type == TaskType.Bug) - bugsBefore;
+            var regression = filedNow == 0
+                ? "QA passed — the existing acceptance suite is green against the contract."
+                : $"QA failed — the existing acceptance suite is red; {filedNow} bug(s) to triage.";
+            _log.Message($"QA round complete — {regression}");
+            return new TaskRunOutcome(0, EndReason.Done, TaskStatus.Qa, regression);
+        }
+
+        var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
+        var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
         var result = await RunWithCrashRetryAsync(() =>
             loop.RunChatAsync([new LlmMessage("user", QaBrief(workspace))], executor, ct)).ConfigureAwait(false);
 
@@ -538,10 +568,6 @@ public sealed class TaskRunner(
             _log.Event(EventType.ErrorProvider, crashNote);
             return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, crashNote);
         }
-
-        // The suite is part of the project, and is re-run against every later change.
-        if (_workspaces.CommitAndPushTrunk(workspace, "test(qa): acceptance suite"))
-            _log.Event(EventType.GitCommit, "committed the acceptance suite to trunk");
 
         _meta.Set("qa_rounds", (MetaInt("qa_rounds") + 1).ToString());
 
@@ -567,6 +593,36 @@ public sealed class TaskRunner(
         return new TaskRunOutcome(0, result.End, TaskStatus.Qa, summary);
     }
 
+    /// <summary>project_meta key holding the contract sha the committed suite was written against.</summary>
+    private const string SuiteContractShaKey = "qa_suite_contract_sha";
+
+    /// <summary>
+    /// Whether this round needs a QA instance at all. It does not when a suite already exists,
+    /// covers every operation in the contract, and the contract has not changed since that suite
+    /// was committed — then the round is a regression run and the harness simply re-runs it.
+    /// </summary>
+    private bool NothingForQaToWrite(string workspace)
+    {
+        if (ApiContract.Load(workspace) is not { } contract) return false;
+        if (!AcceptanceSuite.Exists(workspace)) return false;
+
+        var declared = AcceptanceSuite.DeclaredOperations(workspace);
+        if (contract.OperationIds.Any(id => !declared.Contains(id))) return false;
+
+        var written = _meta.Get(SuiteContractShaKey);
+        return written is { Length: > 0 } && written == ContractSha(workspace);
+    }
+
+    /// <summary>
+    /// The sha of the commit that last touched the contract, so a changed contract is told apart
+    /// from an unchanged one. Empty when git cannot answer, which forces a QA instance.
+    /// </summary>
+    private static string ContractSha(string workspace)
+    {
+        var log = Git.Run(workspace, "log", "-1", "--format=%H", "--", ApiContract.Path);
+        return log.Ok ? log.Stdout.Trim() : "";
+    }
+
     /// <summary>
     /// Checks the suite covers every contract operation and runs it, filing a bug if it is red.
     /// Returns why the round produced no verdict — uncovered operations, or a suite that did
@@ -574,14 +630,25 @@ public sealed class TaskRunner(
     /// </summary>
     private string? SuiteVerdict(string workspace)
     {
-        // Coverage first, read from the test source: a partial suite can go green while
-        // leaving half the contract unverified.
+        // Compile first. A suite that does not build is not worth keeping, so nothing is
+        // committed and the next round's clone starts from the scaffold again.
+        if (AcceptanceSuite.Build(workspace) is { Passed: false } broken)
+            return $"QA round incomplete — the acceptance suite does not compile:\n{broken.Output}";
+
+        // It builds, so keep it whatever the run says: a red suite is still the regression
+        // suite, and the next round must not have to write it again.
+        if (_workspaces.CommitAndPushTrunk(workspace, "test(qa): acceptance suite"))
+        {
+            _log.Event(EventType.GitCommit, "committed the acceptance suite to trunk");
+            _meta.Set(SuiteContractShaKey, ContractSha(workspace));
+        }
+
         var contract = ApiContract.Load(workspace)!;
         var declared = AcceptanceSuite.DeclaredOperations(workspace);
         if (contract.OperationIds.Where(id => !declared.Contains(id)).ToList() is { Count: > 0 } uncovered)
             return "QA round incomplete — no acceptance test covers " + string.Join(", ", uncovered);
 
-        var acceptance = AcceptanceSuite.Run(workspace);
+        var acceptance = AcceptanceSuite.Run(workspace, alreadyBuilt: true);
         if (!acceptance.Ran)
             return $"QA round incomplete — the acceptance suite did not run: {acceptance.Output}";
 
