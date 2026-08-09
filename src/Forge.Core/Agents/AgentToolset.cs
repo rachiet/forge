@@ -138,7 +138,9 @@ public sealed partial class AgentToolset(
                                    + "edge that would close a cycle is refused.",
                 Required("task", "the id of the task that must wait."),
                 Required("depends_on", "the id it waits for. That task must be `done` before this one "
-                                     + "can be claimed.")),
+                                     + "can be claimed, so it has to be another task you created — "
+                                     + "never the Feature, which is their parent and is completed by "
+                                     + "the harness once they are all done.")),
 
             ["break_and_relink"] = new(
                 "replace this stuck task with the smaller tasks you have just created. The harness "

@@ -336,13 +336,24 @@ public sealed class TaskRepository(IDbConnection conn)
 
     /// <summary>
     /// Adds a DAG edge: <paramref name="taskId"/> cannot start until <paramref name="dependsOn"/>
-    /// is done. Adding the same edge twice is harmless; a self-edge, or one that would close a
-    /// cycle, is refused.
+    /// is done. Adding the same edge twice is harmless; a self-edge, an edge onto a Feature, or
+    /// one that would close a cycle, is refused.
     /// </summary>
     public void AddDependency(long taskId, long dependsOn)
     {
         if (taskId == dependsOn)
-            throw new ArgumentException($"Task {taskId} cannot depend on itself.");
+            throw new ArgumentException(RefusalCode.Message(
+                RefusalCode.SelfDependency, $"Task {taskId} cannot depend on itself."));
+        // An edge onto an id that does not exist is never satisfied, since only a done task
+        // satisfies one and no task will ever carry that id.
+        if (Find(dependsOn) is not { } dependency)
+            throw new ArgumentException(RefusalCode.Message(RefusalCode.NoSuchTask,
+                $"Task {taskId} cannot depend on task {dependsOn}: there is no task {dependsOn}. "
+                + "Depend on one of the tasks you have created, by the id create_task returned."));
+        // A Feature is the parent of the tasks, not a node among them: it is marked done only
+        // once they are, so a task waiting on one waits forever.
+        if (dependency.Type == TaskType.Feature)
+            throw new FeatureDependencyException(taskId, dependsOn);
         // Refusing the closing edge is the only thing keeping the stored graph acyclic.
         if (DependencyChain(from: dependsOn, to: taskId) is { Count: > 0 } chain)
             throw new DependencyCycleException(taskId, dependsOn, chain);
@@ -415,16 +426,33 @@ public sealed class TaskRepository(IDbConnection conn)
 /// since the agent has no tool to delete an edge and can only revise the plan it is authoring.
 /// </summary>
 public sealed class DependencyCycleException(long taskId, long dependsOn, IReadOnlyList<long> chain)
-    : InvalidOperationException(
+    : InvalidOperationException(RefusalCode.Message(RefusalCode.DependencyCycle,
         $"Task {taskId} cannot depend on task {dependsOn}: {dependsOn} already depends on {taskId} "
         + $"({string.Join(" → ", chain)}). A dependency is satisfied only by a DONE task, so this "
         + "cycle would leave every task in it permanently unclaimable and stall the board. Order "
         + "the work so it flows one way — if two tasks genuinely need each other, the shared part "
-        + "belongs in a third task they both depend on.")
+        + "belongs in a third task they both depend on."))
 {
     public long TaskId { get; } = taskId;
     public long DependsOn { get; } = dependsOn;
 
     /// <summary>The existing path, from <see cref="DependsOn"/> back to <see cref="TaskId"/>.</summary>
     public IReadOnlyList<long> Chain { get; } = chain;
+}
+
+/// <summary>
+/// The edge was refused because it points at a Feature. Written to be read by the Principal as
+/// a tool error: it names the mechanism that makes the edge a deadlock and the edge to draw
+/// instead, since the agent can only revise the plan it is authoring.
+/// </summary>
+public sealed class FeatureDependencyException(long taskId, long dependsOn)
+    : InvalidOperationException(RefusalCode.Message(RefusalCode.DependsOnFeature,
+        $"Task {taskId} cannot depend on task {dependsOn}: task {dependsOn} is the Feature these "
+        + "tasks belong to. Every task you create is already part of it, and the harness marks the "
+        + "Feature done once all of its tasks are done — so a task waiting on the Feature can never "
+        + "be claimed and the board stalls. Depend on the sibling task that produces what this one "
+        + "needs, or add no dependency at all if it can start immediately."))
+{
+    public long TaskId { get; } = taskId;
+    public long DependsOn { get; } = dependsOn;
 }

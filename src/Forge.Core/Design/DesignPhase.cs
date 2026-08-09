@@ -154,6 +154,12 @@ public sealed class DesignPhase(
           requirement it implements and passing `contract_ops` for the operations it
           builds, with `add_dependency` edges for ordering.
 
+        You are decomposing a Feature, which is already on the board — that is why the
+        ids you are given start above 1. The harness makes every task you create a child
+        of it and marks it done once they are all done, so it is not part of your DAG:
+        `add_dependency` edges run between the tasks you create and never point at the
+        Feature.
+
         Two things are checked mechanically before any engineer starts, and design is
         handed back if either fails: every requirement file must be named by at least
         one operation, and every operation must be claimed by at least one task. Call

@@ -208,6 +208,38 @@ public class RepositoryTests : IDisposable
     }
 
     [Fact]
+    public void A_task_cannot_depend_on_the_feature_it_belongs_to()
+    {
+        // The Feature closes only once its tasks are done, so a task waiting on it waits
+        // forever — a deadlock the cycle check cannot see, since the closing rule is the
+        // runner's rather than an edge in task_deps.
+        var repo = new TaskRepository(_conn);
+        var feature = repo.Insert(TaskRecord.Create(
+            TaskType.Feature, "SnipBox", "Build it", 60_000,
+            assignedRole: AgentRole.Principal, createdBy: "pm"));
+        var task = InsertTask();
+
+        var ex = Assert.Throws<FeatureDependencyException>(() => repo.AddDependency(task.Id, feature.Id));
+
+        Assert.Empty(repo.DependenciesOf(task.Id));
+        Assert.Contains(RefusalCode.DependsOnFeature, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("sibling task", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_dependency_on_a_task_that_does_not_exist_is_refused()
+    {
+        // Nothing will ever carry that id, so the edge is another permanent block.
+        var repo = new TaskRepository(_conn);
+        var task = InsertTask();
+
+        var ex = Assert.Throws<ArgumentException>(() => repo.AddDependency(task.Id, 9_999));
+
+        Assert.Empty(repo.DependenciesOf(task.Id));
+        Assert.Contains(RefusalCode.NoSuchTask, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Diamond_is_allowed()
     {
         // Two tasks sharing a dependency, and a fourth waiting on both, is an ordinary
