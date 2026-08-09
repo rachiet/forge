@@ -180,8 +180,8 @@ public sealed partial class AgentToolset(
             ["retriage"] = new("send a task or a bug back to the Principal for another triage, with "
                              + "the client's guidance attached and its attempt counter reset. Use this "
                              + "when the client tells you how they want something handled.",
-                ToolDoc.Required("task", "the id of the task or bug, exactly as it was put to the client."),
-                ToolDoc.Required("note", "what the client said to do, in their own terms.")),
+                Required("task", "the id of the task or bug, exactly as it was put to the client."),
+                Required("note", "what the client said to do, in their own terms.")),
 
             ["cancel_task"] = new("drop a task the client does not want done. Its branch is deleted and "
                                 + "anything depending on it is cancelled too, so tell them what else "
