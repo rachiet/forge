@@ -170,7 +170,10 @@ public sealed record AgentRecipe
         Tier = ModelTier.Coding,
         RolePrompt = "qa",
         InstancePrefix = "qa",
-        AlwaysInContext = ["PROJECT.md", "docs/requirements/INDEX.md"],
+        // CONVENTIONS.md because the suite is code in this repo and follows the same house
+        // rules as the rest of it — a QA round once targeted net6.0 on a .NET 8 machine, so
+        // nothing compiled and nothing was tested.
+        AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md", "docs/requirements/INDEX.md"],
         // serve/stop_server/http are QA's alone; only its processes need managing.
         Tools = ["read_file", "list_dir", "grep", "write_file", "run", "serve", "stop_server", "http",
                  "file_bug", "how_to_run", "done", "escalate"],

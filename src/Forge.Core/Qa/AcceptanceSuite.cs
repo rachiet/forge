@@ -71,6 +71,14 @@ public static partial class AcceptanceSuite
         if (AgentToolset.Discover(workspaceDir) is not { } target)
             return AcceptanceResult.NotRun("no runnable application to test");
 
+        // Compiled before anything is started, and separately from running it. A suite that does
+        // not build has tested nothing, and must not be reported as a suite that failed: a failed
+        // run becomes a bug against the product, and rejecting that bug completes the project.
+        var build = Dotnet(workspaceDir, baseUrl: "", "build", Directory, "--nologo");
+        if (!build.Passed)
+            return AcceptanceResult.NotRun(
+                "the acceptance suite does not compile, so no test ran:\n" + build.Output);
+
         var port = FreePort();
         var baseUrl = $"http://127.0.0.1:{port}";
 
@@ -80,7 +88,7 @@ public static partial class AcceptanceSuite
                 $"the application did not start listening on {baseUrl} within "
                 + $"{StartupTimeout.TotalSeconds:0}s, so the suite was not run");
 
-        var result = Dotnet(workspaceDir, baseUrl, "test", Directory, "--nologo");
+        var result = Dotnet(workspaceDir, baseUrl, "test", Directory, "--nologo", "--no-build");
         app.Stop();
         return result;
     }

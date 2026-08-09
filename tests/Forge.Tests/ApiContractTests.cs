@@ -266,6 +266,40 @@ public class ApiContractTests : IDisposable
     }
 
     [Fact]
+    public void A_suite_that_does_not_compile_is_not_run_rather_than_failed()
+    {
+        // A failed run becomes a bug against the product, and the Principal rejecting that bug
+        // completes the project — so a suite that never compiled must report NotRun instead.
+        WriteRunnableApp();
+        var dir = Path.Combine(_root, "tests", "acceptance");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "AcceptanceTests.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(dir, "Tests.cs"), "this is not valid C#");
+
+        var result = AcceptanceSuite.Run(_root);
+
+        Assert.False(result.Ran);
+        Assert.False(result.Passed);
+        Assert.Contains("does not compile", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>A minimal runnable web project, so Discover finds something to start.</summary>
+    private void WriteRunnableApp()
+    {
+        var dir = Path.Combine(_root, "src", "App");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "App.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk.Web">
+              <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+    }
+
+    [Fact]
     public void A_suite_that_cannot_run_is_not_a_pass()
     {
         // Ran and Passed are deliberately separate: "nothing ran" must never be readable
