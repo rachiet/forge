@@ -241,7 +241,7 @@ public class PmChatTests : IDisposable
     {
         var bugId = ParkedBug();
         var llm = new ScriptedLlmClient(
-            ScriptedLlmClient.Tool("retriage_bug", ("task", bugId.ToString()),
+            ScriptedLlmClient.Tool("retriage", ("task", bugId.ToString()),
                 ("note", "Client says check the endpoint, not the service.")),
             Reply("Sent it back to the Principal with your note."));
 
@@ -251,5 +251,32 @@ public class PmChatTests : IDisposable
         Assert.Equal(TaskStatus.Triage, bug.Status);                 // back on the Principal's queue
         Assert.Contains("check the endpoint", bug.ProgressNote!);     // the client's guidance carried over
         Assert.DoesNotContain(new MessageRepository(_conn).Pending("pm"), m => m.TaskId == bugId);
+    }
+
+    [Fact]
+    public async Task Retriage_sends_a_stuck_task_back_with_the_clients_guidance()
+    {
+        // One tool for both kinds of work: the PM names the id, and the harness decides
+        // whether it is a task or a bug. Two near-identical tools had the PM calling the
+        // wrong one and then telling the client it had succeeded.
+        var tasks = new TaskRepository(_conn);
+        var task = tasks.Insert(TaskRecord.Create(
+            TaskType.Task, "Stuck", "Could not be landed", 60_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.NeedsHuman });
+        tasks.IncrementOutOfBudgetCount(task.Id);
+        tasks.IncrementOutOfBudgetCount(task.Id);
+
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("retriage", ("task", task.Id.ToString()),
+                ("note", "Use the existing repository, do not add a new one.")),
+            Reply("Sent back to the team."));
+
+        await Chat(llm).SendAsync("I fixed the underlying issue, carry on.");
+
+        var after = tasks.Get(task.Id);
+        Assert.Equal(TaskStatus.Triage, after.Status);
+        // Reset, or it returns to the Principal already at its ceiling and is given up at once.
+        Assert.Equal(0, after.OutOfBudgetCount);
+        Assert.Contains("existing repository", after.ProgressNote);
     }
 }

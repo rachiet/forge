@@ -177,17 +177,11 @@ public sealed partial class AgentToolset(
                 Optional("task", "the bug's id. Only the PM passes this, to close one the client "
                                + "reviewed; at triage or review it acts on the bug in front of you.")),
 
-            ["retriage_bug"] = new("send a bug back to the Principal for another triage with the "
-                                 + "client's guidance attached. Use when the client says a flagged bug "
-                                 + "needs more investigation rather than rejection.",
-                Required("task", "the bug's id."),
-                Required("note", "the client's guidance, in their terms.")),
-
-            ["retriage_task"] = new("send a task the client answered back to the Principal, with their "
-                                  + "guidance attached and the attempt counter reset. The build resumes "
-                                  + "on it by itself.",
-                Required("task", "the task's id."),
-                Required("note", "what the client said to do.")),
+            ["retriage"] = new("send a task or a bug back to the Principal for another triage, with "
+                             + "the client's guidance attached and its attempt counter reset. Use this "
+                             + "when the client tells you how they want something handled.",
+                ToolDoc.Required("task", "the id of the task or bug, exactly as it was put to the client."),
+                ToolDoc.Required("note", "what the client said to do, in their own terms.")),
 
             ["cancel_task"] = new("drop a task the client does not want done. Its branch is deleted and "
                                 + "anything depending on it is cancelled too, so tell them what else "
@@ -255,8 +249,7 @@ public sealed partial class AgentToolset(
                 "how_to_run" => HowToRun(call),
                 "accept_bug" => AcceptBug(call),
                 "reject_bug" => RejectBug(call),
-                "retriage_bug" => RetriageBug(call),
-                "retriage_task" => RetriageTask(call),
+                "retriage" => Retriage(call),
                 "cancel_task" => CancelTask(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
@@ -718,37 +711,33 @@ public sealed partial class AgentToolset(
             recipe.Role == AgentRole.Pm ? null : EndReason.Done);
     }
 
-    /// <summary>Sends a bug back to the Principal for another triage with the client's guidance.</summary>
-    private ToolOutcome RetriageBug(ToolCall call)
+    /// <summary>
+    /// Sends a task or a bug back to the Principal for another triage, carrying the client's
+    /// guidance and clearing its attempt counter so it does not arrive at its strike ceiling.
+    /// The harness decides what kind of work it is; the caller does not say.
+    /// </summary>
+    private ToolOutcome Retriage(ToolCall call)
     {
-        if (call.OptionalInt("task") is not { } bugId || _tasks.Find(bugId) is not { } bug)
-            return new ToolOutcome("ERROR: retriage_bug needs a task id of a bug.");
-        if (bug.Type != TaskType.Bug)
-            return new ToolOutcome($"ERROR: retriage_bug only applies to bug tasks; task {bugId} is a {SnakeCaseEnum.ToSnakeCase(bug.Type)}.");
+        if (call.OptionalInt("task") is not { } id || _tasks.Find(id) is not { } target)
+            return new ToolOutcome("ERROR: retriage needs the id of a task or bug that exists.");
+
+        var kind = target.Type == TaskType.Bug ? "Bug" : "Task";
+        if (target.Status != TaskStatus.Triage
+            && !TaskTransitions.IsLegal(target.Status, TaskStatus.Triage))
+            return new ToolOutcome(
+                $"ERROR: {kind.ToLowerInvariant()} {id} is {SnakeCaseEnum.ToSnakeCase(target.Status)} and cannot "
+                + "go back to triage from there. Only work that is waiting on the client, blocked, or rejected can.");
 
         var note = call.Arg("note");
-        _tasks.SetProgressNote(bugId, $"RE-TRIAGE (from the client, via the PM): {note}");
-        if (bug.Status != TaskStatus.Triage && TaskTransitions.IsLegal(bug.Status, TaskStatus.Triage))
-            _tasks.Transition(bugId, TaskStatus.Triage);
-        ResolveEscalations(bugId);
-        new DiscussionRepository(connection).Open(bugId, "pm", $"[re-triage: client guidance] {note}");
-        return new ToolOutcome($"Bug {bugId} sent back to the Principal for triage with the client's guidance.");
-    }
+        _tasks.SetProgressNote(id, $"FROM THE CLIENT (via the PM): {note}");
+        _tasks.ResetOutOfBudgetCount(id);
+        if (target.Status != TaskStatus.Triage) _tasks.Transition(id, TaskStatus.Triage);
+        ResolveEscalations(id);
+        new DiscussionRepository(connection).Open(id, "pm", $"[client guidance] {note}");
 
-    /// <summary>Sends a task awaiting the client back to the Principal with their guidance.</summary>
-    private ToolOutcome RetriageTask(ToolCall call)
-    {
-        if (AwaitingClient(call) is not { } task) return NotAwaitingClient("retriage_task");
-
-        var note = call.Arg("note");
-        _tasks.SetProgressNote(task.Id, $"FROM THE CLIENT (via the PM): {note}");
-        _tasks.ResetOutOfBudgetCount(task.Id);
-        _tasks.Transition(task.Id, TaskStatus.Triage);
-        ResolveEscalations(task.Id);
-        new DiscussionRepository(connection).Open(task.Id, "pm", $"[client guidance] {note}");
         return new ToolOutcome(
-            $"Task {task.Id} sent back to the Principal with the client's guidance. " +
-            "The build resumes on it by itself; the client does not have to start anything.");
+            $"{kind} {id} sent back to the Principal with the client's guidance. "
+            + "The build resumes on it by itself; the client does not have to start anything.");
     }
 
     /// <summary>Cancels a task the client dropped, along with everything depending on it.</summary>

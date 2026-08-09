@@ -96,7 +96,7 @@ public sealed class PmChat(
             + "Write a SHORT message (a few sentences) saying what is stuck, and be specific "
             + "about the decision you need from them: guidance so it can be tried again, or "
             + "drop it. No task ids, token budgets, file names or tooling. Do not call "
-            + "retriage_task or cancel_task yet — you have not heard from them. End with `reply`.]\n"
+            + "retriage or cancel_task yet — you have not heard from them. End with `reply`.]\n"
             + items;
 
         var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);
@@ -170,7 +170,7 @@ public sealed class PmChat(
         var note =
             "[Awaiting your decision — the Principal escalated these for the client. Raise each with the "
             + "client, then resolve it: reject_bug(task, reason) if the client agrees it's not a real defect, "
-            + "or retriage_bug(task, note) to send it back to the Principal with the client's guidance.\n"
+            + "or retriage(task, note) to send it back to the Principal with the client's guidance.\n"
             + items + "]";
         conversation[^1] = conversation[^1] with { Content = $"{note}\n\n{conversation[^1].Content}" };
     }
