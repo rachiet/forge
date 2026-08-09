@@ -630,6 +630,10 @@ public sealed class TaskRunner(
     /// </summary>
     private string? SuiteVerdict(string workspace)
     {
+        // Only the harness's project file is kept, so a project QA wrote beside it is not
+        // committed and cannot make a directory-scoped dotnet command ambiguous.
+        AcceptanceSuite.PruneStrayProjects(workspace);
+
         // Compile first. A suite that does not build is not worth keeping, so nothing is
         // committed and the next round's clone starts from the scaffold again.
         if (AcceptanceSuite.Build(workspace) is { Passed: false } broken)
@@ -711,8 +715,13 @@ public sealed class TaskRunner(
 
             {ContractSection(workspace)}
 
-            Write xUnit tests in `{AcceptanceSuite.Directory}` (its own project, and NOT added
-            to the solution file — the engineers' CI must never run it):
+            The test project already exists: `{AcceptanceSuite.ProjectFile}`, xUnit, on the
+            installed SDK's package versions, and it is not in the solution file. Write `.cs`
+            test files into `{AcceptanceSuite.Directory}` and nothing else — do NOT write a
+            `.csproj` there. A second project file beside it is deleted before the suite is
+            built, so any package you add to one is simply lost.
+
+            Write xUnit tests in `{AcceptanceSuite.Directory}`:
             - Reach the app only over HTTP at the base URL in the `{AcceptanceSuite.BaseUrlVariable}`
               environment variable. Never reference the application's projects; this is
               black-box, and a test that calls the code directly is not an acceptance test.

@@ -59,6 +59,23 @@ public static partial class AcceptanceSuite
     public const string ProjectFile = "tests/acceptance/AcceptanceTests.csproj";
 
     /// <summary>
+    /// Deletes every project file in the suite directory other than <see cref="ProjectFile"/>,
+    /// which the harness owns. A second .csproj beside it makes any directory-scoped dotnet
+    /// command ambiguous, and only the fixed one is ever built.
+    /// </summary>
+    public static void PruneStrayProjects(string workspaceDir)
+    {
+        var dir = Path.Combine(workspaceDir, Directory.Replace('/', Path.DirectorySeparatorChar));
+        if (!System.IO.Directory.Exists(dir)) return;
+
+        var keep = Path.GetFullPath(
+            Path.Combine(workspaceDir, ProjectFile.Replace('/', Path.DirectorySeparatorChar)));
+        foreach (var project in System.IO.Directory.EnumerateFiles(dir, "*.csproj", SearchOption.AllDirectories))
+            if (!string.Equals(Path.GetFullPath(project), keep, StringComparison.Ordinal))
+                File.Delete(project);
+    }
+
+    /// <summary>
     /// Creates the suite's project if it does not exist yet, with `dotnet new xunit` so its
     /// package versions come from the installed SDK rather than from a model's memory. QA then
     /// writes only test files. Returns null on success, or why the scaffold could not be built.
@@ -66,11 +83,15 @@ public static partial class AcceptanceSuite
     public static string? EnsureScaffold(string workspaceDir)
     {
         var dir = Path.Combine(workspaceDir, Directory.Replace('/', Path.DirectorySeparatorChar));
-        if (System.IO.Directory.Exists(dir)
-            && System.IO.Directory.EnumerateFiles(dir, "*.csproj", SearchOption.AllDirectories).Any())
+        PruneStrayProjects(workspaceDir);
+        if (File.Exists(Path.Combine(workspaceDir, ProjectFile.Replace('/', Path.DirectorySeparatorChar))))
             return null;
 
-        if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, recursive: true);
+        // Tests already written are kept and scaffolded around; a directory holding none is
+        // leftover state and is cleared so the template lands in a clean folder.
+        if (System.IO.Directory.Exists(dir)
+            && !System.IO.Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories).Any())
+            System.IO.Directory.Delete(dir, recursive: true);
 
         var created = Dotnet(workspaceDir, baseUrl: "",
             "new", "xunit", "-o", Directory, "-n", "AcceptanceTests");

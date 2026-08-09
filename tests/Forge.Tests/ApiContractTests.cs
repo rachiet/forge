@@ -309,13 +309,43 @@ public class ApiContractTests : IDisposable
         // Round two must inherit the suite it wrote, not have it replaced underneath it.
         var dir = Path.Combine(_root, "tests", "acceptance");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, "Mine.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(dir, "AcceptanceTests.csproj"), "<Project />");
         File.WriteAllText(Path.Combine(dir, "MyTests.cs"), "// written last round");
 
         Assert.Null(AcceptanceSuite.EnsureScaffold(_root));
 
         Assert.True(File.Exists(Path.Combine(dir, "MyTests.cs")));
-        Assert.False(File.Exists(Path.Combine(dir, "AcceptanceTests.csproj")));
+        Assert.Equal("<Project />", File.ReadAllText(Path.Combine(dir, "AcceptanceTests.csproj")));
+    }
+
+    [Fact]
+    public void A_project_file_qa_wrote_beside_the_harness_one_is_deleted_and_its_tests_kept()
+    {
+        var dir = Path.Combine(_root, "tests", "acceptance");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Mine.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(dir, "MyTests.cs"), "// written this round");
+
+        AcceptanceSuite.PruneStrayProjects(_root);
+
+        Assert.False(File.Exists(Path.Combine(dir, "Mine.csproj")));
+        Assert.True(File.Exists(Path.Combine(dir, "MyTests.cs")));
+    }
+
+    [Fact]
+    public void A_suite_whose_only_project_file_qa_named_itself_gets_the_harness_one_and_keeps_its_tests()
+    {
+        // The suite is built by its fixed path, so a project under any other name is not built.
+        var dir = Path.Combine(_root, "tests", "acceptance");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Mine.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(dir, "MyTests.cs"), "// written last round");
+
+        Assert.Null(AcceptanceSuite.EnsureScaffold(_root));
+
+        Assert.False(File.Exists(Path.Combine(dir, "Mine.csproj")));
+        Assert.True(File.Exists(Path.Combine(dir, "AcceptanceTests.csproj")));
+        Assert.True(File.Exists(Path.Combine(dir, "MyTests.cs")));
     }
 
     /// <summary>A minimal runnable web project, so Discover finds something to start.</summary>

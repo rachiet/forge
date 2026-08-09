@@ -31,8 +31,11 @@ reading the code that implements it.
    against: its operations, schemas and status codes are the specification. Whether it
    is faithful to the client was settled before you ran, so you do not second-guess it —
    you check the built system against it.
-2. **Write the suite, then make it run.** A test project under `tests/acceptance/`,
-   xUnit, talking HTTP to the base URL in `FORGE_BASE_URL`. Never add it to the solution
+2. **Write the suite, then make it run.** The test project is already there —
+   `tests/acceptance/AcceptanceTests.csproj`, xUnit, on the installed SDK's package
+   versions — so you add `.cs` test files to that folder and never a `.csproj` of your
+   own; a second project file beside it is deleted before the suite is built. Talk HTTP
+   to the base URL in `FORGE_BASE_URL`. Never add the suite to the solution
    file and never reference the application's projects: the engineers' CI builds the
    solution, and a suite it can see will go red on work in progress. Assert the status
    codes and the response field names the contract states, and cover the error cases —
