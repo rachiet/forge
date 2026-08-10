@@ -13,7 +13,7 @@ namespace Forge.Tests;
 
 /// <summary>
 /// M2 acceptance: the client talks to the PM, requirements land in the project
-/// repo as versioned files, a milestone plan lands in the database, and the
+/// repo as versioned files, and the
 /// conversation survives the instance that produced it.
 ///
 /// Every model turn below is hardcoded — what is under test is the harness
@@ -88,23 +88,6 @@ public class PmChatTests : IDisposable
         Assert.Contains("01-todos.md@v1", ShowFromTrunk("docs/requirements/INDEX.md"));
         Assert.Contains("mark it done", ShowFromTrunk("docs/requirements/01-todos.md"));
         Assert.Contains("first requirement section", turn.Reply);
-    }
-
-    [Fact]
-    public async Task The_milestone_plan_lands_in_the_database_not_only_in_prose()
-    {
-        var llm = new ScriptedLlmClient(
-            ScriptedLlmClient.Tool("add_milestone",
-                ("name", "Working todo list"), ("description", "Add, list and complete todos")),
-            ScriptedLlmClient.Tool("add_milestone",
-                ("name", "Accounts"), ("description", "Sign-up and per-user lists")),
-            Reply("Two milestones: a working todo list first, then accounts."));
-
-        await Chat(llm).SendAsync("Can you sketch a plan?");
-
-        var milestones = new MilestoneRepository(_conn).List();
-        Assert.Equal(["Working todo list", "Accounts"], milestones.Select(m => m.Name));
-        Assert.Equal([1, 2], milestones.Select(m => m.Ordinal));
     }
 
     [Fact]

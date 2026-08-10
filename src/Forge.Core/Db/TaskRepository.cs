@@ -12,7 +12,6 @@ public sealed class TaskRepository(IDbConnection conn)
     private sealed record Row
     {
         public long Id { get; init; }
-        public long? MilestoneId { get; init; }
         public long? ParentId { get; init; }
         public string Type { get; init; } = "";
         public string Title { get; init; } = "";
@@ -36,7 +35,6 @@ public sealed class TaskRepository(IDbConnection conn)
         public TaskRecord ToRecord() => new()
         {
             Id = Id,
-            MilestoneId = MilestoneId,
             ParentId = ParentId,
             Type = SnakeCaseEnum.Parse<TaskType>(Type),
             Title = Title,
@@ -61,7 +59,7 @@ public sealed class TaskRepository(IDbConnection conn)
 
     /// <summary>The column list every read shares, aliased to <see cref="Row"/>'s properties.</summary>
     private const string SelectColumns = """
-        SELECT id AS Id, milestone_id AS MilestoneId, parent_id AS ParentId, type AS Type, title AS Title,
+        SELECT id AS Id, parent_id AS ParentId, type AS Type, title AS Title,
                objective AS Objective, acceptance_criteria AS AcceptanceCriteria,
                context_paths AS ContextPaths, contract_ops AS ContractOps,
                requirements_ref AS RequirementsRef,
@@ -77,18 +75,17 @@ public sealed class TaskRepository(IDbConnection conn)
     public TaskRecord Insert(TaskRecord task)
     {
         var id = conn.ExecuteScalar<long>("""
-            INSERT INTO tasks (milestone_id, parent_id, type, title, objective, acceptance_criteria,
+            INSERT INTO tasks (parent_id, type, title, objective, acceptance_criteria,
                                context_paths, contract_ops, requirements_ref, assigned_role, status,
                                token_budget, tokens_spent, split_depth, progress_note,
                                branch_name, created_by)
-            VALUES (@MilestoneId, @ParentId, @Type, @Title, @Objective, @AcceptanceCriteria,
+            VALUES (@ParentId, @Type, @Title, @Objective, @AcceptanceCriteria,
                     @ContextPaths, @ContractOps, @RequirementsRef, @AssignedRole, @Status,
                     @TokenBudget, @TokensSpent, @SplitDepth, @ProgressNote, @BranchName, @CreatedBy)
             RETURNING id
             """,
             new
             {
-                task.MilestoneId,
                 task.ParentId,
                 Type = SnakeCaseEnum.ToSnakeCase(task.Type),
                 task.Title,
@@ -208,12 +205,6 @@ public sealed class TaskRepository(IDbConnection conn)
         conn.Execute("""
             UPDATE tasks SET split_depth = @depth, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId, depth });
-
-    /// <summary>Attaches a task to a milestone.</summary>
-    public void SetMilestone(long taskId, long milestoneId) =>
-        conn.Execute("""
-            UPDATE tasks SET milestone_id = @milestoneId, updated_at = datetime('now') WHERE id = @taskId
-            """, new { taskId, milestoneId });
 
     /// <summary>
     /// Sets a task's strike count back to zero, so a task the client sent back does not

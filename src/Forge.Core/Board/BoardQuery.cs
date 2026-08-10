@@ -5,9 +5,20 @@ using Forge.Core.Model;
 
 namespace Forge.Core.Board;
 
-/// <summary>What the client sees for one milestone or feature.</summary>
+/// <summary>What the client sees for one feature.</summary>
 public sealed record BoardItem(
     long Id, string Name, string State, decimal CostUsd, int Done, int Total);
+
+/// <summary>
+/// Progress on one requirement, from the tasks naming it in `requirements_ref`. The file is
+/// the group key and the page joins it to the spec for a title; an empty file is the work
+/// that serves no requirement — scaffolding, chores and bug fixes.
+/// </summary>
+public sealed record RequirementProgress(
+    string File, string State, decimal CostUsd, int Done, int Total);
+
+/// <summary>The task a worker has in hand right now, so the client can see what is being built.</summary>
+public sealed record CurrentTask(long TaskId, string Title, string Status, string? Requirement);
 
 public sealed record AgentSpend(string Role, long Calls, decimal CostUsd);
 
@@ -25,8 +36,9 @@ public sealed record BoardSnapshot(
     string? Provider,
     bool Planned,
     bool SpecReady,
-    IReadOnlyList<BoardItem> Milestones,
+    IReadOnlyList<RequirementProgress> Requirements,
     IReadOnlyList<BoardItem> Features,
+    CurrentTask? CurrentTask,
     decimal ProjectLevelCostUsd,
     decimal UnparentedTaskCostUsd,
     IReadOnlyList<AgentSpend> Agents,
@@ -45,7 +57,7 @@ public sealed record BoardSnapshot(
 }
 
 /// <summary>
-/// Builds the board's snapshot. Every figure is derived at query time from tasks, milestones,
+/// Builds the board's snapshot. Every figure is derived at query time from tasks,
 /// token_ledger and messages; nothing is stored or cached, so the page cannot disagree with
 /// the ledger.
 /// </summary>
@@ -71,7 +83,7 @@ public sealed class BoardQuery(IDbConnection conn, string project)
     {
         var settings = new ProjectSettings(conn);
         return (
-            ProjectState(Milestones(), Features()),
+            ProjectState(Features()),
             LedgerRepository.FromNanos(
                 conn.ExecuteScalar<long>("SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger")),
             settings.BudgetUsd,
@@ -80,7 +92,6 @@ public sealed class BoardQuery(IDbConnection conn, string project)
 
     public BoardSnapshot Snapshot(int chatLimit = 200)
     {
-        var milestones = Milestones();
         var features = Features();
         var total = LedgerRepository.FromNanos(
             conn.ExecuteScalar<long>("SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger"));
@@ -108,17 +119,19 @@ public sealed class BoardQuery(IDbConnection conn, string project)
 
         return new BoardSnapshot(
             project,
-            ProjectState(milestones, features),
+            ProjectState(features),
             total,
             settings.BudgetUsd,
             settings.Provider,
-            Planned: milestones.Count > 0 || features.Count > 0,
-            // Shown once the PM has put it to the client: a pending proposal, or an approved
-            // Feature. Before that the requirements are still being drafted.
-            SpecReady: proposal is not null || conn.ExecuteScalar<long>(
+            Planned: features.Count > 0,
+            // Shown only once the client has approved: a Feature exists. A pending proposal is
+            // still a draft and is read in the review dialog instead, so declining leaves the
+            // page as it was.
+            SpecReady: conn.ExecuteScalar<long>(
                 "SELECT COUNT(*) FROM tasks WHERE type = 'feature'") > 0,
-            milestones,
+            Requirements(),
             features,
+            InHand(),
             projectLevel,
             unparented,
             Agents(),
@@ -146,25 +159,66 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             """).ToList();
 
     /// <summary>
-    /// A milestone's state, derived from its tasks: done when all of them are, active when any
-    /// is in flight or finished, pending otherwise. A milestone with no tasks is pending.
+    /// The `requirements_ref` file, with its version stripped: the group a task's progress and
+    /// cost are reported under. Empty for a task that names no requirement.
     /// </summary>
-    private IReadOnlyList<BoardItem> Milestones() =>
-        conn.Query<(long Id, string Name, long Cost, int Done, int Total, int Active)>($"""
-            SELECT m.id, m.name,
-                   COALESCE((SELECT SUM(l.cost_nanos) FROM token_ledger l
-                             JOIN tasks t ON t.id = l.task_id WHERE t.milestone_id = m.id), 0),
-                   (SELECT COUNT(*) FROM tasks t WHERE t.milestone_id = m.id AND t.status = 'done'),
-                   (SELECT COUNT(*) FROM tasks t WHERE t.milestone_id = m.id
-                      AND t.status NOT IN ('rejected','cancelled')),
-                   (SELECT COUNT(*) FROM tasks t WHERE t.milestone_id = m.id
-                      AND t.status IN ('claimed','in_progress','in_review','merging','triage'))
-            FROM milestones m ORDER BY m.ordinal, m.id
+    private const string RequirementFile = """
+        CASE
+          WHEN t.requirements_ref IS NULL OR t.requirements_ref = '' THEN ''
+          WHEN instr(t.requirements_ref, '@') > 0
+            THEN substr(t.requirements_ref, 1, instr(t.requirements_ref, '@') - 1)
+          ELSE t.requirements_ref
+        END
+        """;
+
+    /// <summary>
+    /// Progress per requirement, derived from the tasks naming it: done when all of them are,
+    /// active when any is in flight or finished, pending otherwise. A Feature contributes its
+    /// cost but is not counted as work — it is the container its children are counted in.
+    /// Every task falls in exactly one group, so these costs and the project-level ones
+    /// account for the whole ledger. The unnamed group sorts last, since it is the leftover
+    /// rather than part of the plan.
+    /// </summary>
+    private IReadOnlyList<RequirementProgress> Requirements() =>
+        conn.Query<(string File, long Cost, int Done, int Total, int Active)>($"""
+            SELECT {RequirementFile} AS File,
+                   COALESCE((SELECT SUM(l.cost_nanos) FROM token_ledger l WHERE l.task_id = t.id), 0),
+                   CASE WHEN t.type <> 'feature' AND t.status = 'done' THEN 1 ELSE 0 END,
+                   CASE WHEN t.type <> 'feature'
+                         AND t.status NOT IN ('rejected','cancelled') THEN 1 ELSE 0 END,
+                   CASE WHEN t.type <> 'feature'
+                         AND t.status IN ('claimed','in_progress','in_review','merging','triage')
+                        THEN 1 ELSE 0 END
+            FROM tasks t
             """)
-            .Select(r => new BoardItem(
-                r.Id, r.Name, State(r.Done, r.Total, r.Active),
-                LedgerRepository.FromNanos(r.Cost), r.Done, r.Total))
+            .GroupBy(r => r.File, StringComparer.Ordinal)
+            .OrderBy(g => g.Key.Length == 0)
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => new RequirementProgress(
+                g.Key,
+                State(g.Sum(r => r.Done), g.Sum(r => r.Total), g.Sum(r => r.Active)),
+                LedgerRepository.FromNanos(g.Sum(r => r.Cost)),
+                g.Sum(r => r.Done),
+                g.Sum(r => r.Total)))
+            .Where(r => r.Total > 0 || r.CostUsd > 0)
             .ToList();
+
+    /// <summary>
+    /// The task a worker has in hand, lowest id first. Null when nothing is in flight, which is
+    /// every moment between tasks as well as a project nobody is building.
+    /// </summary>
+    private CurrentTask? InHand() =>
+        conn.Query<(long Id, string Title, string Status, string? Requirement)>($"""
+            SELECT t.id, t.title, t.status, {RequirementFile} AS Requirement
+            FROM tasks t
+            WHERE t.type <> 'feature'
+              AND t.status IN ('claimed','in_progress','in_review','merging','triage')
+            ORDER BY t.id LIMIT 1
+            """)
+            .Select(r => new CurrentTask(
+                r.Id, r.Title, r.Status,
+                r.Requirement is { Length: > 0 } file ? file : null))
+            .FirstOrDefault();
 
     private IReadOnlyList<BoardItem> Features() =>
         conn.Query<(long Id, string Title, string Status, long Cost, int Done, int Total, int Active)>($"""
@@ -200,20 +254,13 @@ public sealed class BoardQuery(IDbConnection conn, string project)
     };
 
     /// <summary>
-    /// How far the plan has got: "planning" before there is anything to build, "complete" once
-    /// every planned item is done, "building" in between. Milestones holding no tasks are
-    /// skipped, since an empty milestone is a row in the plan rather than outstanding work.
+    /// How far the plan has got: "planning" until the client approves something to build,
+    /// "complete" once every Feature is done, "building" in between.
     /// </summary>
-    private static string ProjectState(IReadOnlyList<BoardItem> milestones, IReadOnlyList<BoardItem> features)
-    {
-        if (milestones.Count == 0 && features.Count == 0) return "planning";
-
-        var planned = milestones.Where(m => m.Total > 0).ToList();
-        var items = planned.Count > 0 ? planned : features;
-        if (items.Count == 0) return "planning";
-
-        return items.All(i => i.State == "done") ? "complete" : "building";
-    }
+    private static string ProjectState(IReadOnlyList<BoardItem> features) =>
+        features.Count == 0 ? "planning"
+        : features.All(f => f.State == "done") ? "complete"
+        : "building";
 
     private IReadOnlyList<AgentSpend> Agents() =>
         new LedgerRepository(conn).SpendByRole()

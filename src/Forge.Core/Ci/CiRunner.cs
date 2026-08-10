@@ -37,6 +37,11 @@ public static class CiRunner
     /// </summary>
     public static CiResult Run(string workspaceDir)
     {
+        // Ahead of the buildable gate: a repo of static files has nothing to compile and would
+        // otherwise skip the one check that reads what it ships.
+        if (StaticFileCheck.Check(workspaceDir) is { } unparseable)
+            return new CiResult(false, "static", unparseable);
+
         var buildable = Directory.EnumerateFiles(workspaceDir, "*.sln", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(workspaceDir, "*.csproj", SearchOption.AllDirectories))
             .Any(p => !p.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}"));

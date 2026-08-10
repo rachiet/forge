@@ -120,7 +120,7 @@ public class ProjectLifecycleTests : IDisposable
         Assert.Equal("planning", board.State);
         Assert.False(board.Planned);
         Assert.False(board.SpecReady);
-        Assert.Empty(board.Milestones);
+        Assert.Empty(board.Requirements);
         Assert.Empty(board.Features);
         // Not empty: a new project opens with Iris's greeting, so the client arrives at a
         // conversation rather than a blank box. It is fixed text, so it costs nothing.
@@ -137,8 +137,9 @@ public class ProjectLifecycleTests : IDisposable
         using var conn = Database.OpenProject(_paths.ProjectDb("alpha"));
         var tasks = new TaskRepository(conn);
 
-        // Milestones agreed and requirements being drafted — still a conversation.
-        new MilestoneRepository(conn).Insert(new MilestoneRecord { Name = "M1", Ordinal = 1 });
+        // A proposal put to the client is still a draft: it is read in the review dialog,
+        // and nothing reaches the page until they approve it.
+        new RequirementsProposal("Build it", "objective").Save(conn);
         Assert.False(new BoardQuery(conn, "alpha").Snapshot().SpecReady);
 
         // An approved proposal opens the Feature, and that is the trigger.

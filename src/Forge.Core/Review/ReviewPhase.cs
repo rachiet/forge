@@ -48,7 +48,9 @@ public sealed class ReviewPhase(
 
         var diff = workspaces.DiffAgainstTrunk(task.Id, branch);
         var result = await loop
-            .RunReviewAsync([new LlmMessage("user", Brief(task, diff))], task, executor, ct)
+            .RunReviewAsync(
+                [new LlmMessage("user", Brief(task, diff, new DiscussionRepository(conn).History(task.Id)))],
+                task, executor, ct)
             .ConfigureAwait(false);
 
         // The reviewer rejected the underlying bug, which the runner closes rather than revises.
@@ -78,8 +80,11 @@ public sealed class ReviewPhase(
         return new ReviewVerdict(approved, feedback, result.ReviewConvention, result.End);
     }
 
-    /// <summary>The reviewer's opening turn: the task, its acceptance criteria, and the diff.</summary>
-    private static string Brief(TaskRecord task, string diff) => $"""
+    /// <summary>
+    /// The reviewer's opening turn: the task, its acceptance criteria, the diff, and what has
+    /// already been said about it — without which a fresh reviewer re-argues its own verdicts.
+    /// </summary>
+    private static string Brief(TaskRecord task, string diff, string history) => $"""
         # Review
 
         Task {task.Id}: {task.Title}
@@ -95,6 +100,19 @@ public sealed class ReviewPhase(
         conformance, and design conformance. Read the touched files with read_file
         and grep for patterns you're worried about. End with approve or
         request_changes.
+        {(history is { Length: > 0 } ? $"""
+
+        ## What has already been said about this task
+
+        Earlier reviews and the engineer's account of each attempt, oldest first. A
+        reviewer before you may have asked for the very thing you are about to object
+        to — read this first. If an objection here has been met, do not raise it again;
+        if you find that two earlier reviews asked for opposite things, settle it now,
+        say which reading the acceptance criteria support, and pass the rule as the
+        `convention` argument so it is not re-argued next round.
+
+        {history}
+        """ : "")}
         {(task.Type == TaskType.Bug ? """
 
         This is a BUG fix. Before judging the diff, judge the bug itself: reproduce

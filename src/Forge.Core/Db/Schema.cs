@@ -26,7 +26,6 @@ public static class Schema
     public const string TasksDdl = """
         CREATE TABLE IF NOT EXISTS tasks (
           id INTEGER PRIMARY KEY,
-          milestone_id INTEGER REFERENCES milestones(id),
           -- The Feature this task belongs to. NULL on a Feature itself or a standalone task.
           parent_id INTEGER REFERENCES tasks(id),
           type TEXT NOT NULL CHECK(type IN ('feature','task','bug','chore')),
@@ -127,14 +126,6 @@ public static class Schema
 
         CREATE INDEX IF NOT EXISTS ix_ledger_task ON token_ledger(task_id);
         CREATE INDEX IF NOT EXISTS ix_ledger_role ON token_ledger(role);
-
-        -- No status column: a milestone's state is derived from its tasks.
-        CREATE TABLE IF NOT EXISTS milestones (
-          id INTEGER PRIMARY KEY,
-          name TEXT NOT NULL,
-          description TEXT,
-          ordinal INTEGER NOT NULL
-        );
 
         CREATE TABLE IF NOT EXISTS agent_instances (
           id TEXT PRIMARY KEY,

@@ -155,7 +155,7 @@ public sealed class TaskRunner(
 
     /// <summary>
     /// Decomposes a Feature into tasks by running the design phase, then makes each new task a
-    /// child of it, gives it the Feature's milestone, and releases it to `ready`. The Feature
+    /// child of it and releases it to `ready`. The Feature
     /// moves to `active`, and closes to `done` later when every child has finished.
     /// </summary>
     private async Task<TaskRunOutcome> DecomposeFeatureAsync(TaskRecord feature, CancellationToken ct)
@@ -196,11 +196,6 @@ public sealed class TaskRunner(
         foreach (var child in _tasks.List().Where(t => !before.Contains(t.Id) && t.Type != TaskType.Feature))
         {
             _tasks.SetParent(child.Id, feature.Id);
-
-            // A child inherits the Feature's milestone unless it was given one of its own,
-            // so its cost appears in the client's per-milestone view.
-            if (feature.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
-                _tasks.SetMilestone(child.Id, milestone);
 
             if (_tasks.Get(child.Id).Status == TaskStatus.Created)
                 Transition(child.Id, TaskStatus.Ready, log);
@@ -317,8 +312,8 @@ public sealed class TaskRunner(
 
     /// <summary>
     /// Parents and releases the tasks a triage created. A task created by break_and_relink
-    /// keeps the parent and milestone that verdict gave it; anything else is filed under the
-    /// task being triaged and inherits its milestone. Both are released to `ready`.
+    /// keeps the parent that verdict gave it; anything else is filed under the task being
+    /// triaged. Both are released to `ready`.
     /// </summary>
     private void ReleaseTriageSubtasks(TaskRecord triaged, IReadOnlySet<long> before, ForgeLogger log)
     {
@@ -328,8 +323,6 @@ public sealed class TaskRunner(
             if (_tasks.Get(child.Id).SplitDepth == 0)
             {
                 _tasks.SetParent(child.Id, triaged.Id);
-                if (triaged.MilestoneId is { } milestone && _tasks.Get(child.Id).MilestoneId is null)
-                    _tasks.SetMilestone(child.Id, milestone);
             }
             if (_tasks.Get(child.Id).Status == TaskStatus.Created)
                 Transition(child.Id, TaskStatus.Ready, log);
@@ -950,6 +943,12 @@ public sealed class TaskRunner(
     {
         _workspaces.CommitAll(task.Id, $"task({task.Id}): {task.Title}");
 
+        // The engineer's turn in the thread. It has no tool for answering a review, so the
+        // harness records the note it wrote — otherwise the history is every complaint and
+        // no account of what was done about them.
+        if (result.ProgressNote is { Length: > 0 } account)
+            new DiscussionRepository(conn).Open(task.Id, "engineer", account);
+
         if (!_workspaces.HasCommitsAhead(task.Id, branch))
         {
             var note = "Agent reported done but produced no commits — nothing to merge.";
@@ -1103,7 +1102,9 @@ public sealed class TaskRunner(
         if (current == TaskStatus.InReview) Transition(task.Id, TaskStatus.InProgress, log);
 
         _tasks.SetProgressNote(task.Id, $"CHANGES REQUESTED ({stage}). {feedback}");
-        new DiscussionRepository(conn).Open(task.Id, "system", $"[{stage}] {feedback}");
+        // A review records its own verdict as it makes it; CI has no author of its own.
+        if (!string.Equals(stage, "review", StringComparison.OrdinalIgnoreCase))
+            new DiscussionRepository(conn).Open(task.Id, "ci", feedback);
         log.Message($"Task {task.Id}: changes requested at {stage} — back to the engineer");
         return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.InProgress, $"Changes requested ({stage}).");
     }
@@ -1172,8 +1173,24 @@ public sealed class TaskRunner(
             ProjectBudgetExhausted: true);
     }
 
-    private int CrashCount(long taskId) =>
-        _instances.ForTask(taskId).Count(i => i.EndReason == EndReason.Crash);
+    /// <summary>
+    /// Crashes since the task last got through a whole instance. An instance that called `done`
+    /// reached the gates, which proves the provider is letting the work run, so the count starts
+    /// again from there — otherwise unrelated outages accumulate over a task's life and a
+    /// perfectly healthy task climbs the strike ladder on network luck alone.
+    /// </summary>
+    private int CrashCount(long taskId)
+    {
+        var instances = _instances.ForTask(taskId);
+        var lastCompleted = instances
+            .Where(i => i.EndReason == EndReason.Done)
+            .Select(i => i.StartedAt)
+            .DefaultIfEmpty("")
+            .Max();
+        return instances.Count(i =>
+            i.EndReason == EndReason.Crash
+            && string.CompareOrdinal(i.StartedAt, lastCompleted) > 0);
+    }
 
     /// <summary>
     /// Leaves a crashed task in_progress so the next run auto-resumes it, until the crash cap

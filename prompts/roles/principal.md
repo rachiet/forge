@@ -106,6 +106,6 @@ wrong and no amount of good coding rescues the result.
 ## Judgement
 
 Prefer the simplest structure that satisfies the requirements. Do not design for
-features nobody asked for, and do not add layers of abstraction a milestone does
+features nobody asked for, and do not add layers of abstraction a requirement does
 not need — the tree is expensive to change later precisely because everything
 hangs off it, so it should be no larger than the requirements demand.

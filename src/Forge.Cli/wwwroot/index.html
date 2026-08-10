@@ -219,6 +219,20 @@
                  text-transform:none; letter-spacing:normal; }
   dialog .row { display:flex; gap:10px; justify-content:flex-end; }
   dialog .err { border-radius:8px; }
+
+  /* review dialog — wider than the create form, since it holds the whole draft */
+  dialog.review { width:min(760px,94vw); }
+  .review .head { padding:20px 22px 14px; border-bottom:1px solid var(--line); }
+  .review .head h2 { margin:0 0 4px; }
+  .review .head .sub { margin:0; font-size:.82rem; color:var(--muted); }
+  .review .body { padding:16px 22px 20px; max-height:min(62vh,620px); overflow-y:auto;
+                  font-size:.9rem; max-width:none; }
+  .review .body h3 { margin:18px 0 6px; font-size:.95rem; }
+  .review .body h3:first-child { margin-top:0; }
+  .review .foot { padding:14px 22px 18px; border-top:1px solid var(--line);
+                  display:flex; gap:10px; justify-content:flex-end; }
+  .review .objective { margin:0 0 4px; }
+  .review .accept { margin:0; color:var(--muted); font-size:.86rem; }
 </style>
 </head>
 <body>
@@ -263,12 +277,12 @@
         <p class="ask"><b id="needsTitle"></b></p>
         <p class="sub" id="needsDetail"></p>
       </div>
-      <!-- The client's one approval: it opens the Feature and starts the build. -->
+      <!-- A draft waiting to be read. Approving happens inside the review dialog, and
+           nothing about the proposal reaches the page until the client approves it. -->
       <div class="approve hidden" id="approveBar">
-        <p class="ask"><b id="approveTitle"></b> is ready for your approval.</p>
+        <p class="ask"><b id="approveTitle"></b> is ready for you to read.</p>
         <div class="row">
-          <button class="btn primary" id="approveBtn">Approve &amp; start building</button>
-          <button class="btn" id="declineBtn">Keep chatting</button>
+          <button class="btn primary" id="reviewBtn">Review proposal</button>
         </div>
       </div>
       <p class="err hidden" id="chatErr"></p>
@@ -280,6 +294,18 @@
   </div>
 </div>
 <div class="offline hidden" id="offline">board offline — retrying</div>
+
+<dialog id="reviewDialog" class="review">
+  <div class="head">
+    <h2 id="reviewHead">Draft proposal</h2>
+    <p class="sub" id="reviewSub"></p>
+  </div>
+  <div class="body specbody" id="reviewBody"></div>
+  <div class="foot">
+    <button class="btn" id="keepBtn">Keep chatting</button>
+    <button class="btn primary" id="approveBtn">Approve &amp; start building</button>
+  </div>
+</dialog>
 
 <dialog id="newDialog">
   <form method="dialog" id="newForm">
@@ -317,6 +343,8 @@ const ROLE = { qa:'QA', principal:'Principal', engineer:'Engineer', researcher:'
 const roleName = r => (r === 'pm' ? (agentName || 'PM') : ROLE[r] || r);
 
 let lastChatId = 0, sending = false;
+// The newest snapshot, so the review dialog can render without waiting for a poll.
+let lastBoard = null;
 let project = decodeURIComponent(location.hash.slice(1)) || null;
 let providers = [];
 // The rail is re-rendered every poll; without these the spec — the card and each
@@ -397,6 +425,21 @@ function rows(items) {
     </div>`).join('');
 }
 
+// A requirement's client-facing name comes from the spec's own H1; the file name is the
+// fallback, and an unnamed group is the work that serves no requirement.
+function requirementName(d, file) {
+  if (!file) return '';
+  return (d.spec.find(s => s.file === file) || {}).title || file;
+}
+
+// The task statuses, said the way a client would say them.
+function statusWord(status) {
+  return ({
+    claimed: 'starting', in_progress: 'in progress', in_review: 'in review',
+    merging: 'merging', triage: 'planning',
+  })[status] || status;
+}
+
 function section(title, sub, body, total) {
   return `<section class="card">
     <div class="card-head"><h2>${esc(title)}</h2><span class="sub">${esc(sub)}</span></div>
@@ -413,8 +456,8 @@ function renderRail(d) {
       <div class="placeholder">
         <div class="bar" style="width:62%"></div><div class="bar" style="width:44%"></div>
         <div class="bar" style="width:53%"></div>
-        <p>Milestones and features appear here once you and ${esc(agentName)} agree
-           the plan. Until then, the conversation is the whole page.</p>
+        <p>Your requirements and progress appear here once you approve what you and
+           ${esc(agentName)} agree on. Until then, the conversation is the whole page.</p>
       </div></section>`;
     return;
   }
@@ -422,9 +465,9 @@ function renderRail(d) {
   let html = '';
 
   if (d.specReady && d.spec.length) {
-    // Open while it is waiting to be approved — you cannot approve what you cannot
-    // read — and folded away once the build is under way.
-    const open = d.proposal ? ' open' : (specOpen ? ' open' : '');
+    // Folded by default once the build is under way; the client reads the detail in
+    // the review dialog before approving.
+    const open = specOpen ? ' open' : '';
     html += `<section class="card">
       <details class="speccard" id="specCard"${open}>
         <summary><div class="card-head"><h2><span class="chev">▸</span> Specification</h2>
@@ -458,10 +501,24 @@ function renderRail(d) {
       </div>`).join('')}</section>`;
   }
 
-  if (d.milestones.length) {
-    const done = d.milestones.filter(m => m.state === 'done').length;
-    html += section('Milestones', `${done} of ${d.milestones.length} complete`,
-      rows(d.milestones), { label: 'Project total', value: d.totalCostUsd });
+  // What a worker has in hand this second. Absent between tasks and when nothing runs.
+  if (d.currentTask) {
+    html += `<section class="card"><div class="card-head"><h2>Currently building</h2>
+        <span class="sub">${esc(statusWord(d.currentTask.status))}</span></div>
+      <div class="row st-active"><span class="dot"></span>
+        <span class="name">${esc(d.currentTask.title)}</span>
+        <span class="cost none">${esc(requirementName(d, d.currentTask.requirement) || '')}</span>
+      </div></section>`;
+  }
+
+  if (d.requirements.length) {
+    const done = d.requirements.filter(r => r.state === 'done').length;
+    html += section('Progress', `${done} of ${d.requirements.length} complete`,
+      rows(d.requirements.map(r => ({
+        state: r.state,
+        name: requirementName(d, r.file) || 'Other work',
+        costUsd: r.costUsd,
+      }))), { label: 'Project total', value: d.totalCostUsd });
   }
   if (d.features.length) {
     const done = d.features.filter(f => f.state === 'done').length;
@@ -470,8 +527,8 @@ function renderRail(d) {
       rows(d.features), { label: 'Features subtotal', value: sum });
   }
 
-  // Shown whenever it is non-zero: without it the milestone and feature figures do not
-  // add up to the total, and the client is left with money they cannot account for.
+  // Shown whenever it is non-zero: without it the feature figures do not add up to the
+  // total, and the client is left with money they cannot account for.
   const outside = d.projectLevelCostUsd + d.unparentedTaskCostUsd;
   if (outside > 0) {
     html += section('Work outside features', `${Math.round(outside / d.totalCostUsd * 100)}% of spend`, `
@@ -553,6 +610,7 @@ function showEmptyState() {
   $('thread').innerHTML = '';
   $('composer').classList.add('hidden');
   $('approveBar').classList.add('hidden');
+  if ($('reviewDialog').open) $('reviewDialog').close();
 }
 
 async function poll() {
@@ -561,6 +619,7 @@ async function poll() {
     const r = await fetch('/api/board?project=' + encodeURIComponent(project));
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
+    lastBoard = d;
     $('offline').classList.add('hidden');
 
     $('projName').textContent = d.project;
@@ -602,7 +661,14 @@ async function poll() {
 
     const bar = $('approveBar');
     bar.classList.toggle('hidden', !d.proposal);
-    if (d.proposal) $('approveTitle').textContent = d.proposal.title;
+    if (d.proposal) {
+      $('approveTitle').textContent = d.proposal.title;
+      // Kept current while the dialog is open, so a proposal the PM revises mid-read
+      // is not approved from a stale copy.
+      if ($('reviewDialog').open) fillReview(d);
+    } else if ($('reviewDialog').open) {
+      $('reviewDialog').close();
+    }
 
     // A flag, not an explanation: it names what is stuck and points at the chat,
     // where the agent has put what it actually needs in the client's own terms.
@@ -719,24 +785,45 @@ for (const [id, action] of [['resumeBtn', 'start'], ['stopBtn', 'stop']]) {
   });
 }
 
-// Approving opens the Feature and starts the build in one step, so this is the only
-// place a build begins. Declining just clears the proposal and the client keeps talking.
-for (const [id, decision] of [['approveBtn', 'approve'], ['declineBtn', 'decline']]) {
-  $(id).addEventListener('click', async () => {
-    $('approveBtn').disabled = $('declineBtn').disabled = true;
-    const r = await fetch('/api/proposal', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project, decision }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.error) {
-      $('chatErr').textContent = body.error || 'Could not record your decision.';
-      $('chatErr').classList.remove('hidden');
-    }
-    $('approveBtn').disabled = $('declineBtn').disabled = false;
-    poll();
-  });
+// The draft, rendered from the pending proposal and the requirement files it covers.
+function fillReview(d) {
+  const p = d.proposal;
+  if (!p) return;
+  $('reviewHead').textContent = p.title;
+  $('reviewSub').textContent = `Proposed by ${agentName}. Nothing is built until you approve.`;
+  const sections = d.spec.filter(s => s.file.toLowerCase() !== 'index.md');
+  $('reviewBody').innerHTML = `
+    <p class="objective">${esc(p.objective)}</p>
+    ${p.acceptance ? `<p class="accept">${esc(p.acceptance)}</p>` : ''}
+    ${sections.map(s => `<h3>${esc(s.title)}</h3>${markdown(s.markdown)}`).join('')}`;
 }
+
+$('reviewBtn').addEventListener('click', () => {
+  if (lastBoard) fillReview(lastBoard);
+  $('reviewDialog').showModal();
+});
+
+// Closing changes nothing: the proposal stays pending and the button reopens it, so
+// the client can read it again after asking about it in the chat.
+$('keepBtn').addEventListener('click', () => $('reviewDialog').close());
+
+// Approving opens the Feature and starts the build in one step, so this is the only
+// place a build begins.
+$('approveBtn').addEventListener('click', async () => {
+  $('approveBtn').disabled = $('keepBtn').disabled = true;
+  const r = await fetch('/api/proposal', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, decision: 'approve' }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok || body.error) {
+    $('chatErr').textContent = body.error || 'Could not record your decision.';
+    $('chatErr').classList.remove('hidden');
+  }
+  $('approveBtn').disabled = $('keepBtn').disabled = false;
+  $('reviewDialog').close();
+  poll();
+});
 
 refreshProjects().then(poll);
 setInterval(() => { refreshProjects(); poll(); }, 3000);

@@ -7,7 +7,6 @@ namespace Forge.Core.Model;
 public sealed record TaskRecord
 {
     public long Id { get; init; }
-    public long? MilestoneId { get; init; }
     /// <summary>
     /// The id of the Feature this task belongs to, or null on a Feature itself and on any task
     /// created outside one. A Feature is complete when every task carrying its id is finished.
@@ -43,7 +42,6 @@ public sealed record TaskRecord
         string title,
         string objective,
         int tokenBudget,
-        long? milestoneId = null,
         string? acceptanceCriteria = null,
         IReadOnlyList<string>? contextPaths = null,
         RequirementsRef? requirementsRef = null,
@@ -67,7 +65,6 @@ public sealed record TaskRecord
             Title = title,
             Objective = objective,
             TokenBudget = tokenBudget,
-            MilestoneId = milestoneId,
             ParentId = parentId,
             AcceptanceCriteria = acceptanceCriteria,
             ContextPaths = contextPaths ?? [],

@@ -26,17 +26,16 @@ public class BoardQueryTests : IDisposable
     public void Dispose() => _conn.Dispose();
 
     [Fact]
-    public void A_proposal_shows_the_spec_and_survives_until_it_is_decided()
+    public void A_proposal_survives_on_the_board_until_it_is_decided()
     {
         Assert.Null(Board().Proposal);
-        Assert.False(Board().SpecReady);
 
         new RequirementsProposal("Initial build", "Ship the thing").Save(_conn);
 
-        // The client cannot approve requirements they cannot read, so the spec panel
-        // opens at proposal time rather than waiting for the Feature to exist.
+        // It stays pending while the client reads it and goes on talking, so the review
+        // dialog can be reopened from the same button.
         Assert.Equal("Initial build", Board().Proposal!.Title);
-        Assert.True(Board().SpecReady);
+        Assert.Equal("Initial build", Board().Proposal!.Title);
     }
 
     [Fact]
@@ -68,16 +67,11 @@ public class BoardQueryTests : IDisposable
 
     private BoardSnapshot Board() => new BoardQuery(_conn, "demo").Snapshot();
 
-    private long Milestone(string name, int ordinal) =>
-        new MilestoneRepository(_conn).Insert(new MilestoneRecord
-        {
-            Name = name, Ordinal = ordinal,
-        }).Id;
-
-    private TaskRecord Task(TaskType type, string title, long? milestone = null, long? parent = null)
+    private TaskRecord Task(TaskType type, string title, string? requirement = null, long? parent = null)
     {
         var task = _tasks.Insert(TaskRecord.Create(
-            type, title, "objective", 10_000, milestoneId: milestone,
+            type, title, "objective", 10_000,
+            requirementsRef: requirement is null ? null : RequirementsRef.Parse(requirement),
             assignedRole: AgentRole.Engineer));
         if (parent is { } p) _tasks.SetParent(task.Id, p);
         return task;
@@ -107,41 +101,66 @@ public class BoardQueryTests : IDisposable
 
         Assert.False(board.Planned);
         Assert.Equal("planning", board.State);
-        Assert.Empty(board.Milestones);
+        Assert.Empty(board.Requirements);
     }
 
     [Fact]
-    public void Milestone_state_is_derived_from_its_tasks_not_from_the_status_column()
+    public void A_requirements_state_is_derived_from_the_tasks_that_name_it()
     {
-        // milestones.status is left at 'planned' throughout — nothing advances it, which
-        // is exactly why the board must not trust it.
-        var untouched = Milestone("Not started", 1);
-        var underway = Milestone("Underway", 2);
-        var finished = Milestone("Finished", 3);
+        Task(TaskType.Task, "queued", "01-queued.md@v1");
 
-        Task(TaskType.Task, "queued", untouched);
-
-        var running = Task(TaskType.Task, "running", underway);
+        var running = Task(TaskType.Task, "running", "02-underway.md@v1");
         Advance(running.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress);
 
-        var complete = Task(TaskType.Task, "complete", finished);
+        var complete = Task(TaskType.Task, "complete", "03-finished.md@v2");
         Advance(complete.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress,
             TaskStatus.InReview, TaskStatus.Merging, TaskStatus.Qa, TaskStatus.Done);
 
-        var states = Board().Milestones.ToDictionary(m => m.Name, m => m.State);
-        Assert.Equal("pending", states["Not started"]);
-        Assert.Equal("active", states["Underway"]);
-        Assert.Equal("done", states["Finished"]);
+        var states = Board().Requirements.ToDictionary(r => r.File, r => r.State);
+        Assert.Equal("pending", states["01-queued.md"]);
+        Assert.Equal("active", states["02-underway.md"]);
+        // The version is stripped, so a bumped requirement stays one group.
+        Assert.Equal("done", states["03-finished.md"]);
     }
 
     [Fact]
-    public void A_milestone_with_no_tasks_at_all_is_pending_not_complete()
+    public void Tasks_naming_no_requirement_are_grouped_apart_and_reported_last()
     {
-        Milestone("Empty", 1);
+        Task(TaskType.Task, "the feature work", "01-thing.md@v1");
+        Task(TaskType.Chore, "scaffolding", null);
 
-        var milestone = Assert.Single(Board().Milestones);
-        Assert.Equal("pending", milestone.State);
-        Assert.Equal(0, milestone.Total);
+        var groups = Board().Requirements;
+
+        Assert.Equal(["01-thing.md", ""], groups.Select(r => r.File));
+    }
+
+    [Fact]
+    public void A_feature_adds_its_cost_to_a_group_without_counting_as_work_in_it()
+    {
+        // The Feature is the container its children are counted in; counting it too would
+        // leave a group one short of complete for the whole build.
+        var feature = Task(TaskType.Feature, "The build");
+        var child = Task(TaskType.Task, "the work", "01-thing.md@v1", parent: feature.Id);
+        Advance(child.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress,
+            TaskStatus.InReview, TaskStatus.Merging, TaskStatus.Qa, TaskStatus.Done);
+        Spend(feature.Id, 0.20m);      // the design turn that decomposed it
+
+        var groups = Board().Requirements.ToDictionary(r => r.File);
+
+        Assert.Equal("done", groups["01-thing.md"].State);
+        Assert.Equal(1, groups["01-thing.md"].Total);
+        Assert.Equal(0, groups[""].Total);          // the Feature is not work
+        Assert.Equal(0.20m, groups[""].CostUsd);    // but its money is still shown
+    }
+
+    [Fact]
+    public void Two_versions_of_one_requirement_are_the_same_group()
+    {
+        Task(TaskType.Task, "first pass", "01-thing.md@v1");
+        Task(TaskType.Task, "after the change request", "01-thing.md@v2");
+
+        var group = Assert.Single(Board().Requirements);
+        Assert.Equal(2, group.Total);
     }
 
     [Fact]
@@ -219,14 +238,48 @@ public class BoardQueryTests : IDisposable
     }
 
     [Fact]
-    public void A_project_whose_milestones_are_all_done_reads_as_complete()
+    public void A_project_whose_features_are_all_done_reads_as_complete()
     {
-        var milestone = Milestone("Only one", 1);
-        var task = Task(TaskType.Task, "the work", milestone);
+        var feature = Task(TaskType.Feature, "Only one");
+        var task = Task(TaskType.Task, "the work", "01-thing.md@v1", parent: feature.Id);
         Advance(task.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress,
             TaskStatus.InReview, TaskStatus.Merging, TaskStatus.Qa, TaskStatus.Done);
 
         Assert.Equal("complete", Board().State);
+    }
+
+    [Fact]
+    public void The_task_in_hand_is_reported_with_the_requirement_it_serves()
+    {
+        Task(TaskType.Task, "not started yet", "01-later.md@v1");
+        var running = Task(TaskType.Task, "the one being built", "02-now.md@v1");
+        Advance(running.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress);
+
+        var inHand = Board().CurrentTask;
+
+        Assert.NotNull(inHand);
+        Assert.Equal("the one being built", inHand.Title);
+        Assert.Equal("in_progress", inHand.Status);
+        Assert.Equal("02-now.md", inHand.Requirement);
+    }
+
+    [Fact]
+    public void Nothing_is_in_hand_when_no_task_is_in_flight()
+    {
+        Task(TaskType.Task, "queued", "01-thing.md@v1");
+
+        Assert.Null(Board().CurrentTask);
+    }
+
+    [Fact]
+    public void A_pending_proposal_does_not_put_the_spec_on_the_page()
+    {
+        // The draft is read in the review dialog; the page changes only on approval, so
+        // declining leaves nothing behind.
+        new RequirementsProposal("Initial build", "Ship the thing").Save(_conn);
+
+        Assert.NotNull(Board().Proposal);
+        Assert.False(Board().SpecReady);
     }
 
     [Fact]

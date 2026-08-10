@@ -81,6 +81,30 @@ public sealed class DiscussionRepository(IDbConnection conn)
             .Select(b => b["[client guidance]".Length..].Trim())
             .ToList();
 
+    /// <summary>
+    /// The task's exchange as a prompt renders it: the last <paramref name="limit"/> entries,
+    /// oldest first, each cut to <paramref name="maxChars"/>. Bounded on both axes because a
+    /// task that has been round the loop a dozen times would otherwise cost more than the work.
+    /// Returns an empty string when the task has no history, so callers can append it blindly.
+    /// </summary>
+    public string History(long taskId, int limit = 6, int maxChars = 700)
+    {
+        var entries = conn.Query<(string Author, string Body)>("""
+            SELECT author AS Author, body AS Body FROM discussions
+            WHERE task_id = @taskId
+            ORDER BY id DESC LIMIT @limit
+            """, new { taskId, limit })
+            .Reverse()
+            .Select(e => $"**{e.Author}:** {Cut(e.Body, maxChars)}")
+            .ToList();
+
+        return entries.Count == 0 ? "" : string.Join("\n\n", entries);
+    }
+
+    /// <summary>Truncates a body to its opening, which is where a verdict states its point.</summary>
+    private static string Cut(string body, int max) =>
+        body.Length <= max ? body.Trim() : body[..max].Trim() + "…";
+
     /// <summary>Every discussion on a task, oldest first.</summary>
     public IReadOnlyList<DiscussionRecord> ForTask(long taskId) =>
         conn.Query<Row>($"{SelectColumns} WHERE task_id = @taskId ORDER BY created_at, id", new { taskId })

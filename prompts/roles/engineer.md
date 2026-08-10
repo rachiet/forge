@@ -47,6 +47,12 @@ first file now, even a partial one, and iterate.
    against your work.
 4. **Build and test before `done`.** Run the build. Run the tests. Read the
    output. `done` means "I ran it and it passed", not "it should pass".
+   If you created or changed any `.html`, `.js` or `.json` file, call
+   `check_static` as well. The compiler never reads those files, so a stray
+   `</script>` in a `.js`, an HTML-escaped `=&gt;`, or a `<script src>` pointing
+   at a path that does not exist all get committed happily and then do nothing in
+   the browser. CI runs the same check before review, so whatever it finds comes
+   back to you as a revision either way — reading it now costs one call.
 5. **Done-enough is done.** When every acceptance criterion passes and the build
    is clean, call `done` — on that turn, not five turns later. Re-checking what
    you already verified and polishing past the criteria spend budget the task no

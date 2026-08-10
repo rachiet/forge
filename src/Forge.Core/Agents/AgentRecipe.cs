@@ -59,7 +59,8 @@ public sealed record AgentRecipe
         RolePrompt = "engineer",
         InstancePrefix = "eng",
         AlwaysInContext = ["CONVENTIONS.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "progress_note", "done", "escalate"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "check_static",
+                 "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
         DefaultBudget = 600_000,
@@ -79,7 +80,7 @@ public sealed record AgentRecipe
         AlwaysInContext = ["PROJECT.md", "STATUS.md", "docs/requirements/INDEX.md"],
         // No create_task: the PM hands work over only by proposing requirements the client
         // approves. The bug and task tools resolve what the client was asked about in chat.
-        Tools = ["read_file", "list_dir", "grep", "write_file", "add_milestone", "propose_requirements",
+        Tools = ["read_file", "list_dir", "grep", "write_file", "propose_requirements",
                  "reject_bug", "retriage", "cancel_task", "reply", "escalate"],
         Scope = new PathScope(["PROJECT.md", "STATUS.md", "docs/"]),
         ToolAllowlist = [],
@@ -195,7 +196,8 @@ public sealed record AgentRecipe
         RolePrompt = "engineer",
         InstancePrefix = "prin-impl",
         AlwaysInContext = ["CONVENTIONS.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "progress_note", "done", "escalate"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "run", "check_static",
+                 "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
         DefaultBudget = 900_000,

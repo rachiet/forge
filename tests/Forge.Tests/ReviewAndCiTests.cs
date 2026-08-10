@@ -83,9 +83,35 @@ public class ReviewAndCiTests : IDisposable
         Assert.Equal(TaskStatus.Done, outcome!.Status);
         Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
 
-        // A review discussion records the verdict.
-        var discussion = Assert.Single(new DiscussionRepository(_conn).ForTask(task.Id));
-        Assert.Equal("principal", discussion.Author);
+        // The thread holds both halves of the exchange: what the engineer did, then the verdict.
+        var thread = new DiscussionRepository(_conn).ForTask(task.Id);
+        Assert.Equal(["engineer", "principal"], thread.Select(d => d.Author));
+    }
+
+    [Fact]
+    public async Task A_rejected_task_carries_the_whole_exchange_into_the_next_attempt()
+    {
+        // Each side used to arrive blind: the engineer saw only the latest complaint and the
+        // reviewer only the diff, so an objection could be raised, met, and raised again.
+        var task = ReadyTask();
+
+        await Runner(new ScriptedLlmClient(
+                    Engineer("greeting.txt", "hello", "Wrote greeting.txt as asked.")), CiPass)
+            .RunAsync(_tasks.Get(task.Id));
+
+        await Runner(new ScriptedLlmClient(
+                    ScriptedLlmClient.Tool("request_changes", ("reason", "It needs a trailing newline."))), CiPass)
+            .RunNextByPriorityAsync();
+
+        var history = new DiscussionRepository(_conn).History(task.Id);
+
+        Assert.Contains("Wrote greeting.txt as asked.", history, StringComparison.Ordinal);
+        Assert.Contains("It needs a trailing newline.", history, StringComparison.Ordinal);
+        // The engineer spoke first, so its account comes before the verdict on it.
+        Assert.True(history.IndexOf("Wrote greeting.txt", StringComparison.Ordinal)
+                  < history.IndexOf("trailing newline", StringComparison.Ordinal));
+        // One row per verdict — the runner no longer duplicates what the review already wrote.
+        Assert.Single(new DiscussionRepository(_conn).ForTask(task.Id), d => d.Author == "principal");
     }
 
     [Fact]

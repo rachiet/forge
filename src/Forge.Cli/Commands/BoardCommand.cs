@@ -24,7 +24,7 @@ namespace Forge.Cli.Commands;
 
 /// <summary>
 /// Serves the client's web page and its API: create a project, talk to the PM, watch
-/// milestones, features and spend, approve requirements, and start or stop the build. Every
+/// requirements, features and spend, approve requirements, and start or stop the build. Every
 /// project is served by one host, with the project as a query parameter.
 /// </summary>
 public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
@@ -130,12 +130,13 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 snapshot.BudgetUsd, snapshot.BudgetRemainingUsd, snapshot.BudgetExhausted,
                 snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
                 snapshot.AwaitingClient, snapshot.NeedsClient, snapshot.Delivery,
-                snapshot.Milestones, snapshot.Features,
+                snapshot.Requirements, snapshot.Features, snapshot.CurrentTask,
                 AgentName = ClientFacing.AgentName,
                 snapshot.ProjectLevelCostUsd, snapshot.UnparentedTaskCostUsd,
                 snapshot.Agents, snapshot.Chat,
-                // Only read once the PM has handed work over; before that it is a draft.
-                Spec = snapshot.SpecReady ? SpecReader.Read(_paths, project) : [],
+                // Read whenever there is anything committed: the page shows it in the rail once
+                // the client has approved, and in the review dialog while it is still a draft.
+                Spec = SpecReader.Read(_paths, project),
                 PmBusy = _pmBusy.GetValueOrDefault(project),
                 PmError = _pmError.GetValueOrDefault(project),
                 RunError = _runError.GetValueOrDefault(project),

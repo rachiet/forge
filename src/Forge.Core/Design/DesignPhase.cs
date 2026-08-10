@@ -71,7 +71,7 @@ public sealed class DesignPhase(
         var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
-        var brief = (isChangeRequest ? ChangeRequestBrief() : Brief()) + MilestoneSection();
+        var brief = (isChangeRequest ? ChangeRequestBrief() : Brief()) + ProgressSection();
 
         var result = await loop
             .RunChatAsync([new LlmMessage("user", brief)], executor, ct)
@@ -105,30 +105,19 @@ public sealed class DesignPhase(
     }
 
     /// <summary>
-    /// The milestone section of the brief: the PM's plan with each milestone's id, which is
-    /// what `create_task(milestone: N)` takes. Empty when there are no milestones.
+    /// The progress section of the brief: the client watches the build by requirement, so
+    /// every task that serves one must name it in `requirements_ref`.
     /// </summary>
-    private string MilestoneSection()
-    {
-        var milestones = new MilestoneRepository(conn).List();
-        if (milestones.Count == 0) return "";
-
-        var lines = string.Join("\n", milestones.Select(m => $"- id {m.Id}: {m.Name}"));
-        return $"""
+    private static string ProgressSection() => """
 
 
-            ## Milestones
+        ## What the client sees
 
-            The PM has agreed this milestone plan with the client:
-
-            {lines}
-
-            Pass `milestone: <id>` on every `create_task` so each unit of work belongs to
-            the milestone it advances. The client watches progress and cost per milestone,
-            so a task with no milestone is invisible to them. If a task genuinely serves no
-            milestone (pure scaffolding, say), leave it off rather than guessing.
-            """;
-    }
+        Progress is reported per requirement file, counted from the `requirements_ref` you
+        give each task. Pass it on every `create_task` that serves a requirement, exactly as
+        the file is named in `docs/requirements/`. Work that serves none — scaffolding, a
+        chore — is reported separately, so leave its ref off rather than guessing at one.
+        """;
 
     /// <summary>The brief for a new project: build the structure, the contract and the DAG.</summary>
     private static string Brief() => $"""

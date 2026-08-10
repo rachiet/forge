@@ -128,7 +128,8 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     /// exact paths, status codes and response schemas it must produce.
     /// </param>
     public static string TaskPacket(
-        TaskRecord task, IReadOnlyList<string>? standingGuidance = null, string? contractSlice = null)
+        TaskRecord task, IReadOnlyList<string>? standingGuidance = null, string? contractSlice = null,
+        string? history = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Task {task.Id}: {task.Title}").AppendLine();
@@ -168,6 +169,18 @@ public sealed class PromptAssembler(PromptLibrary prompts)
         }
 
         sb.AppendLine($"## Budget\n\n{task.TokensSpent} of {task.TokenBudget} tokens already spent.").AppendLine();
+
+        if (history is { Length: > 0 })
+        {
+            sb.AppendLine("## What has already been said about this task").AppendLine();
+            sb.AppendLine(
+                "Earlier attempts and the reviews of them, oldest first. Read it before you " +
+                "start: an objection already answered does not need answering again, and one " +
+                "raised twice is the thing standing between this task and merging. If two " +
+                "reviews contradict each other, say so in your progress note rather than " +
+                "silently picking one.").AppendLine();
+            sb.AppendLine(history).AppendLine();
+        }
 
         if (task.ProgressNote is { Length: > 0 } note)
         {

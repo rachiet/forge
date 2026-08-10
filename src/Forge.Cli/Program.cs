@@ -37,7 +37,7 @@ app.Configure(config =>
     });
 
     config.AddCommand<BoardCommand>("board")
-        .WithDescription("Serve the client's progress page: milestones, features, agent spend, and the PM chat.");
+        .WithDescription("Serve the client's progress page: requirements, features, agent spend, and the PM chat.");
 
     config.AddBranch("prices", prices =>
     {

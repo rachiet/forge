@@ -25,14 +25,6 @@ public sealed record TokenLedgerEntry
     public string? CreatedAt { get; init; }
 }
 
-public sealed record MilestoneRecord
-{
-    public long Id { get; init; }
-    public required string Name { get; init; }
-    public string? Description { get; init; }
-    public required int Ordinal { get; init; }
-}
-
 /// <summary>One agent_instances row: a single agent run, e.g. `eng-20260718-093012`.</summary>
 public sealed record AgentInstanceRecord
 {

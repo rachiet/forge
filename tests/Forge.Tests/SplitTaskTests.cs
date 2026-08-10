@@ -47,10 +47,10 @@ public class SplitTaskTests : IDisposable
         new MeteredLlmClient(llm, _conn, TestPrices.Catalog),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve());
 
-    private TaskRecord Task(string title, long? parentId = null, long? milestoneId = null) =>
+    private TaskRecord Task(string title, long? parentId = null) =>
         _tasks.Insert(TaskRecord.Create(
             TaskType.Task, title, $"objective for {title}", 100_000,
-            assignedRole: AgentRole.Engineer, parentId: parentId, milestoneId: milestoneId));
+            assignedRole: AgentRole.Engineer, parentId: parentId));
 
     /// <summary>A task the Principal owns, at the given strike count.</summary>
     private TaskRecord Stuck(int strikes)
@@ -110,13 +110,11 @@ public class SplitTaskTests : IDisposable
     }
 
     [Fact]
-    public async Task Replacements_inherit_the_original_dependencies_feature_and_milestone()
+    public async Task Replacements_inherit_the_original_dependencies_and_feature()
     {
         // Everything the stuck task waited on, the replacements must wait on too, or they
-        // start before their groundwork. Feature and milestone come from the task being
-        // replaced — NOT from the task itself, which is about to be cancelled.
-        var milestone = new MilestoneRepository(_conn).Insert(
-            new MilestoneRecord { Name = "M1", Ordinal = 1 });
+        // start before their groundwork. The Feature comes from the task being replaced —
+        // NOT from the task itself, which is about to be cancelled.
         var feature = _tasks.Insert(TaskRecord.Create(
             TaskType.Feature, "The feature", "objective", 100_000));
         var upstream = Task("Scaffold first");
@@ -124,7 +122,6 @@ public class SplitTaskTests : IDisposable
 
         var stuck = Stuck(strikes: 1);
         _tasks.SetParent(stuck.Id, feature.Id);
-        _tasks.SetMilestone(stuck.Id, milestone.Id);
         _tasks.AddDependency(stuck.Id, upstream.Id);
 
         await Runner(SplitInto(2)).RunNextByPriorityAsync();
@@ -136,7 +133,6 @@ public class SplitTaskTests : IDisposable
         {
             Assert.Equal([upstream.Id], _tasks.DependenciesOf(r.Id));
             Assert.Equal(feature.Id, r.ParentId);        // under the feature, not the cancelled task
-            Assert.Equal(milestone.Id, r.MilestoneId);
             Assert.Equal(1, r.SplitDepth);
         });
     }

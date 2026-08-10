@@ -80,7 +80,9 @@ public sealed class AgentLoop(
                 task,
                 new DiscussionRepository(conn).ClientGuidance(task.Id),
                 // Read from the workspace, so the slice is the contract as it stands on this branch.
-                ContractSlice(task, executor.Jail.Root)))],
+                ContractSlice(task, executor.Jail.Root),
+                // Everything said about this task so far, so an instance is not the first to hear it.
+                new DiscussionRepository(conn).History(task.Id)))],
             executor, task, ct);
 
     /// <summary>

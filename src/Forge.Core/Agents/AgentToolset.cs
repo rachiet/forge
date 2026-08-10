@@ -49,7 +49,6 @@ public sealed partial class AgentToolset(
     private readonly PathJail _jail = executor.Jail;
     private readonly TaskRepository _tasks = new(connection);
     private readonly MessageRepository _messages = new(connection);
-    private readonly MilestoneRepository _milestones = new(connection);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
 
     /// <summary>The last note the agent wrote, used as the resume note when the run ends.</summary>
@@ -100,11 +99,13 @@ public sealed partial class AgentToolset(
                 Required("command", "the binary and its arguments, e.g. `dotnet build`."),
                 Optional("cwd", "directory to run in, relative to your workspace root. Defaults to the root.")),
 
-            ["add_milestone"] = new("add a milestone to the plan. Returns its id, which create_task "
-                                  + "and propose_requirements take.",
-                Required("name", "what the client will see, e.g. `Core API`."),
-                Optional("description", "one line on what is demonstrable when it is reached."),
-                Optional("ordinal", "position in the sequence. Defaults to the end.")),
+            ["check_static"] = new(
+                "parse every .js, .json and .html in the repo — the files the browser reads and "
+              + "the compiler never sees. Reports a JavaScript or JSON file that does not parse, "
+              + "an HTML page referencing a local script, stylesheet or image that is not in the "
+              + "repo, and an inline <script> that does not parse. It takes no arguments and "
+              + "changes nothing; CI runs the same check before review, so anything it reports "
+              + "here would be sent back to you as a revision."),
 
             ["propose_requirements"] = new(
                 "present the finished requirements to the client for approval. They see Approve & "
@@ -113,10 +114,7 @@ public sealed partial class AgentToolset(
                 Required("title", "what is being built, in the client's words."),
                 Required("objective", "what must be true when it is done."),
                 Optional("acceptance", "how the client would check it from the outside."),
-                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md@v1`."),
-                Optional("milestone", "a milestone id, for a CHANGE REQUEST only. Pass none for the "
-                                    + "initial build: it spans the whole plan, and a Feature-level "
-                                    + "milestone would drag every task under one heading.")),
+                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md@v1`.")),
 
             ["create_task"] = new("put a task on the board. Returns its id.",
                 Required("title", "short imperative name, e.g. `implement-create-poll-endpoint`."),
@@ -126,13 +124,14 @@ public sealed partial class AgentToolset(
                                      + "be finished. If you cannot say what done looks like, the task "
                                      + "is not ready to create."),
                 Optional("type", "`task` (default), `bug`, or `chore`."),
-                Optional("requirements_ref", "the requirement it implements, e.g. `01-todos.md@v1`."),
+                Optional("requirements_ref", "the requirement it implements, e.g. `01-todos.md@v1`. "
+                                           + "This is what the client watches progress by, so every "
+                                           + "task serving a requirement must name it."),
                 Optional("context_paths", "comma-separated files worth reading first."),
                 Optional("contract_ops", "comma-separated operationIds from the OpenAPI contract this "
                                        + "task implements. The engineer is handed exactly those "
                                        + "operations. Omit for work with no HTTP surface."),
-                Optional("budget", "token cap for one agent on this task. Defaults to 60000."),
-                Optional("milestone", "milestone id, so the client can see progress per milestone.")),
+                Optional("budget", "token cap for one agent on this task. Defaults to 60000.")),
 
             ["add_dependency"] = new("make one task wait for another. Dependencies flow one way: an "
                                    + "edge that would close a cycle is refused.",
@@ -145,7 +144,7 @@ public sealed partial class AgentToolset(
             ["break_and_relink"] = new(
                 "replace this stuck task with the smaller tasks you have just created. The harness "
               + "re-points everything that waited on it at all of them, gives them its dependencies, "
-              + "files them under its feature and milestone, and cancels it. Use when the task is too "
+              + "files them under its feature, and cancels it. Use when the task is too "
               + "big to finish, not when the engineer took a wrong turn.",
                 Required("new_tasks", "comma-separated ids from create_task, at least two."),
                 Optional("reason", "why it had to be split, for the record.")),
@@ -241,7 +240,7 @@ public sealed partial class AgentToolset(
                 "grep" => Grep(call),
                 "write_file" => WriteFile(call),
                 "run" => await RunAsync(call, ct).ConfigureAwait(false),
-                "add_milestone" => AddMilestone(call),
+                "check_static" => CheckStatic(),
                 "propose_requirements" => ProposeRequirements(call),
                 "create_task" => CreateTask(call),
                 "add_dependency" => AddDependency(call),
@@ -447,19 +446,14 @@ public sealed partial class AgentToolset(
     /// </summary>
     private readonly HashSet<long> _createdTaskIds = [];
 
-    /// <summary>Adds a milestone row to the plan and returns its id.</summary>
-    private ToolOutcome AddMilestone(ToolCall call)
-    {
-        var name = call.Arg("name");
-        var ordinal = call.OptionalInt("ordinal") ?? _milestones.NextOrdinal();
-        var milestone = _milestones.Insert(new MilestoneRecord
-        {
-            Name = name,
-            Description = call.Optional("description"),
-            Ordinal = ordinal,
-        });
-        return new ToolOutcome($"Milestone {milestone.Id} recorded: #{ordinal} {name}.");
-    }
+    /// <summary>
+    /// Runs the harness's static-file check over the workspace and reports what it found. The
+    /// same code CI runs, so an agent that calls it sees the gate's verdict before submitting.
+    /// </summary>
+    private ToolOutcome CheckStatic() =>
+        new(Ci.StaticFileCheck.Check(_jail.Root) is { } problems
+            ? problems
+            : "Every .js, .json and .html in the repo parses, and their local references exist.");
 
     /// <summary>
     /// Puts a task on the board, born `created` and released to `ready` by the caller that
@@ -503,7 +497,6 @@ public sealed partial class AgentToolset(
             acceptanceCriteria: call.Arg("acceptance"),
             contextPaths: contexts,
             requirementsRef: requirement,
-            milestoneId: call.OptionalInt("milestone") is { } m ? m : null,
             assignedRole: AgentRole.Engineer,
             createdBy: SnakeCaseEnum.ToSnakeCase(recipe.Role),
             contractOps: ops));
@@ -523,8 +516,7 @@ public sealed partial class AgentToolset(
             call.Arg("title"),
             call.Arg("objective"),
             call.Optional("acceptance"),
-            call.Optional("requirements_ref") is { } reqRef ? NormalizeRequirementRef(reqRef).ToString() : null,
-            call.OptionalInt("milestone"));
+            call.Optional("requirements_ref") is { } reqRef ? NormalizeRequirementRef(reqRef).ToString() : null);
         proposal.Save(connection);
 
         return new ToolOutcome(
@@ -859,8 +851,6 @@ public sealed partial class AgentToolset(
             // Onto the OLD task's parent, not the old task: it is about to be cancelled, and a
             // child of a cancelled task falls out of its Feature on the board.
             _tasks.SetParent(replacement, current.ParentId);
-            if (current.MilestoneId is { } milestone && _tasks.Get(replacement).MilestoneId is null)
-                _tasks.SetMilestone(replacement, milestone);
             _tasks.SetSplitDepth(replacement, current.SplitDepth + 1);
         }
 

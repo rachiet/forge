@@ -133,11 +133,9 @@ public class BudgetPauseTests : IDisposable
         // subtasks were born `created` and nothing ever released them: the only
         // release paths ran after design sign-off or Feature decomposition, so a
         // triage decomposition quietly deadlocked the board.
-        var milestone = new MilestoneRepository(_conn).Insert(
-            new MilestoneRecord { Name = "M1", Ordinal = 1 });
         var stuck = _tasks.Insert(TaskRecord.Create(
             TaskType.Task, "Too big", "Do everything", 1_000,
-            milestoneId: milestone.Id, assignedRole: AgentRole.Engineer));
+            assignedRole: AgentRole.Engineer));
         foreach (var s in new[] { TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.OutOfBudget })
             _tasks.Transition(stuck.Id, s);
         _tasks.IncrementOutOfBudgetCount(stuck.Id);
@@ -154,6 +152,5 @@ public class BudgetPauseTests : IDisposable
         var subtask = Assert.Single(_tasks.List(), t => t.Title == "First half");
         Assert.Equal(TaskStatus.Ready, subtask.Status);       // claimable, not stranded
         Assert.Equal(stuck.Id, subtask.ParentId);             // lineage recorded
-        Assert.Equal(milestone.Id, subtask.MilestoneId);      // client's view keeps the cost grouped
     }
 }

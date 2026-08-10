@@ -15,8 +15,7 @@ public sealed record RequirementsProposal(
     string Title,
     string Objective,
     string? Acceptance = null,
-    string? RequirementsRef = null,
-    long? MilestoneId = null)
+    string? RequirementsRef = null)
 {
     private const string MetaKey = "requirements_proposal";
 
@@ -58,7 +57,6 @@ public sealed record RequirementsProposal(
             FeatureBudget,
             acceptanceCriteria: Acceptance,
             requirementsRef: RequirementsRef is { Length: > 0 } r ? Model.RequirementsRef.Parse(r) : null,
-            milestoneId: MilestoneId,
             assignedRole: AgentRole.Principal,
             createdBy: "pm") with { Status = TaskStatus.Triage });
 

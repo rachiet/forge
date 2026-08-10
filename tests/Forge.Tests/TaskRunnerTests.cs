@@ -326,6 +326,32 @@ public class TaskRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task Crashes_are_counted_since_the_task_last_reached_the_gates_not_for_its_whole_life()
+    {
+        // A task that gets through an instance is not the thing failing, so unrelated outages
+        // must not accumulate across its life and walk it up the strike ladder on network luck.
+        var task = ReadyTask();
+        var crashing = Runner(new ThrowingLlmClient());
+
+        for (var i = 1; i <= 2; i++) await crashing.RunAsync(_tasks.Get(task.Id));
+        Assert.Equal(TaskStatus.InProgress, _tasks.Get(task.Id).Status);
+
+        // An instance that calls done reaches CI and review; the count starts again from there.
+        await Runner(new ScriptedLlmClient(
+                ScriptedLlmClient.Tool("write_file", ("path", "greeting.txt"), ("content", "hello")),
+                ScriptedLlmClient.Tool("done", ("summary", "wrote the file"))))
+            .RunAsync(_tasks.Get(task.Id));
+        Assert.Equal(TaskStatus.InReview, _tasks.Get(task.Id).Status);
+
+        // Back with the engineer after a rejection: two more crashes are absorbed, as before.
+        _tasks.Transition(task.Id, TaskStatus.InProgress);
+        for (var i = 1; i <= 2; i++) await crashing.RunAsync(_tasks.Get(task.Id));
+
+        Assert.Equal(TaskStatus.InProgress, _tasks.Get(task.Id).Status);
+        Assert.Equal(0, _tasks.Get(task.Id).OutOfBudgetCount);
+    }
+
+    [Fact]
     public async Task A_stuck_task_is_cleared_before_a_ready_engineer_task_and_triage_redirects_it()
     {
         var stuck = OutOfBudgetTask(strikes: 1);   // Principal-owned

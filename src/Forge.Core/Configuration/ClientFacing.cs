@@ -21,8 +21,9 @@ public static class ClientFacing
     /// </remarks>
     public const string ApprovalAcknowledgement =
         "Thank you — the requirements are confirmed and the team is starting work now.\n\n"
-        + "The specification stays on this page for the whole build, so you can read it "
-        + "back whenever you like. I'll come to you if anything needs a decision.\n\n"
+        + "You'll see the plan and its progress on this page from now on, and the "
+        + "specification stays there for the whole build so you can read it back whenever "
+        + "you like. I'll come to you if anything needs a decision.\n\n"
         + "If you want to change something, just message me here and I'll raise it as a "
         + "change request.";
 }
