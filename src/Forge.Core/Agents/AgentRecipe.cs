@@ -33,6 +33,12 @@ public sealed record AgentRecipe
     /// <summary>Binaries run() and serve() may execute. Everything else is refused.</summary>
     public IReadOnlyList<string> ToolAllowlist { get; init; } = [];
 
+    /// <summary>
+    /// Command prefixes run() refuses for this role, matched on the leading words. The binary
+    /// allowlist cannot express this: `dotnet build` and `dotnet new` are the same binary.
+    /// </summary>
+    public IReadOnlyList<string> RefusedCommands { get; init; } = [];
+
     public int DefaultBudget { get; init; } = 60_000;
 
     /// <summary>How many turns one instance of this role may take.</summary>
@@ -65,6 +71,7 @@ public sealed record AgentRecipe
                  "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
+        RefusedCommands = ["dotnet new", "dotnet sln"],
         DefaultBudget = 600_000,
         IterationCap = 40,
     }).Validate();
@@ -102,8 +109,8 @@ public sealed record AgentRecipe
         RolePrompt = "principal",
         InstancePrefix = "prin",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md", "docs/requirements/INDEX.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "create_task", "choose_theme",
-                 "add_dependency", "done", "escalate"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "scaffold", "create_task",
+                 "choose_theme", "add_dependency", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
         DefaultBudget = 900_000,
@@ -204,6 +211,7 @@ public sealed record AgentRecipe
                  "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = ["dotnet", "git"],
+        RefusedCommands = ["dotnet new", "dotnet sln"],
         DefaultBudget = 900_000,
         IterationCap = 80,
     }).Validate();

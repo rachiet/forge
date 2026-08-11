@@ -141,6 +141,22 @@ public sealed partial class AgentToolset(
                                        + "operations. Omit for work with no HTTP surface."),
                 Optional("budget", "token cap for one agent on this task. Defaults to 60000.")),
 
+            ["scaffold"] = new(
+                "create the project layout: the solution, the one runnable web project with its "
+              + "wwwroot, a class library per module, and the unit test project — all referenced "
+              + "and all listed in the solution. The harness places every project, so nothing "
+              + "nests and there is never more than one runnable project. Call it once, before "
+              + "creating tasks, and NEVER create a task for scaffolding. Calling it again on a "
+              + "change request adds only what is missing.",
+                Required("app", "the runnable project's name, e.g. `MyBooks.App`. Exactly one "
+                              + "project runs: it serves the pages from its own wwwroot and the "
+                              + "API on the same port."),
+                Optional("libraries", "comma-separated class libraries, e.g. "
+                                    + "`MyBooks.Books,MyBooks.Storage`. Name only the modules the "
+                                    + "design actually needs; a small project may need none."),
+                Optional("tests", "the unit test project's name. Defaults to `<solution>.Tests`."),
+                Optional("solution", "the .sln name. Defaults to the app name up to its first dot.")),
+
             ["choose_theme"] = new(
                 "set how this project's user interface looks. Every page is built from Forge's UI "
               + "kit, so this is the whole visual decision: you pick a theme and how it is "
@@ -277,6 +293,7 @@ public sealed partial class AgentToolset(
                 "check_static" => CheckStatic(),
                 "propose_requirements" => ProposeRequirements(call),
                 "create_task" => CreateTask(call),
+                "scaffold" => Scaffold(call),
                 "choose_theme" => ChooseTheme(call),
                 "add_dependency" => AddDependency(call),
                 "break_and_relink" => BreakAndRelink(call),
@@ -457,6 +474,8 @@ public sealed partial class AgentToolset(
     private async Task<ToolOutcome> RunAsync(ToolCall call, CancellationToken ct)
     {
         var command = call.Arg("command");
+        if (Refused(command) is { } refusal) return new ToolOutcome(refusal);
+
         var result = await executor.RunAsync(command, call.Optional("cwd"), ct: ct).ConfigureAwait(false);
 
         var sb = new StringBuilder($"$ {command}\nexit code: {result.ExitCode}");
@@ -468,6 +487,29 @@ public sealed partial class AgentToolset(
         _lastRunTrace = sb.ToString();
         _ranCommands.Add(command);
         return new ToolOutcome(Truncate(sb.ToString()));
+    }
+
+    /// <summary>
+    /// Why this role may not run this command, or null when it may. Matched on the leading
+    /// words with whitespace collapsed, so extra spaces do not slip past it.
+    /// </summary>
+    private string? Refused(string command)
+    {
+        if (recipe.RefusedCommands.Count == 0) return null;
+
+        var normalised = string.Join(' ',
+            command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (!recipe.RefusedCommands.Any(prefix =>
+                normalised.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                normalised.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        return "REFUSED: this project's layout is the harness's, not yours to change. The "
+             + "solution, the runnable project and every library already exist and are wired "
+             + "together; write your code inside them. If the work genuinely needs a project "
+             + "that is not there, `escalate` and the Principal adds it.";
     }
 
     /// <summary>The most recent observation the harness captured, attached by file_bug.</summary>
@@ -547,6 +589,33 @@ public sealed partial class AgentToolset(
             $"Task {created.Id} created: {created.Title}, under milestone '{milestone.Name}'. "
             + $"The plan so far: {string.Join(" → ", milestones.Names())}. Repeat a name exactly "
             + "to add to that phase; a new name starts another one.");
+    }
+
+    /// <summary>
+    /// Builds the repo's project layout from the plan the Principal names. The harness derives
+    /// every path from a project's name, so the model chooses the modules and nothing else.
+    /// </summary>
+    private ToolOutcome Scaffold(ToolCall call)
+    {
+        var app = call.Arg("app").Trim();
+        var solution = call.Optional("solution")?.Trim() is { Length: > 0 } named
+            ? named
+            : app.Split('.')[0];
+        var libraries = call.Optional("libraries")?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        var tests = call.Optional("tests")?.Trim() is { Length: > 0 } testName ? testName : $"{solution}.Tests";
+
+        var plan = new Scaffolding.ScaffoldPlan(solution, app, libraries, tests);
+        var result = Scaffolding.SolutionScaffold.Ensure(_jail.Root, plan);
+        if (!result.Ok) return new ToolOutcome($"ERROR: {result.Refusal}");
+
+        var added = result.Created.Count == 0
+            ? "Everything in that plan was already there; nothing changed."
+            : $"Created {string.Join(", ", result.Created)}.";
+        return new ToolOutcome(
+            $"{added} The repo now holds {string.Join(", ", Scaffolding.SolutionScaffold.AllProjects(plan))}, "
+            + $"all listed in {solution}.sln, with `{app}` the one runnable project. Do not create a "
+            + "task for scaffolding, and do not ask an engineer to run `dotnet new`.");
     }
 
     /// <summary>

@@ -46,6 +46,13 @@ public sealed record ContractReport(
     }.Where(part => part is not null));
 }
 
+/// <summary>Modules whose MODULE.md was never written, still carrying the scaffold's marker.</summary>
+/// <param name="Undescribed">Repo-relative MODULE.md paths the Principal left as stubs.</param>
+public sealed record ModuleReport(IReadOnlyList<string> Undescribed)
+{
+    public bool Complete => Undescribed.Count == 0;
+}
+
 /// <summary>
 /// Checks that the design's artifacts are linked to each other, by comparing sets rather than
 /// asking a model: requirement files on disk against the requirements_ref and contract_ops
@@ -53,6 +60,27 @@ public sealed record ContractReport(
 /// </summary>
 public static class CoverageGate
 {
+    /// <summary>
+    /// Reports the modules the scaffold created that still carry the todo marker, meaning the
+    /// Principal never said what they are for. A MODULE.md the model rewrote drops the marker,
+    /// so this is a set difference over file contents rather than a judgement about prose.
+    /// </summary>
+    public static ModuleReport CheckModules(string workspaceRoot)
+    {
+        if (!Directory.Exists(workspaceRoot)) return new ModuleReport([]);
+
+        var stubs = Directory.EnumerateFiles(workspaceRoot, "MODULE.md", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}",
+                                          StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(path)
+                .Contains(Scaffolding.SolutionScaffold.ModuleTodo, StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(workspaceRoot, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        return new ModuleReport(stubs);
+    }
+
     /// <summary>Reports which requirement files are named by at least one task.</summary>
     public static CoverageReport Check(IDbConnection conn, string workspaceRoot)
     {

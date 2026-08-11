@@ -16,6 +16,7 @@ namespace Forge.Core.Design;
 /// <param name="TasksCreated">How many tasks it added to the board.</param>
 /// <param name="Coverage">Which requirements map to a task.</param>
 /// <param name="Contract">Gaps in the requirement-operation-task links.</param>
+/// <param name="Modules">Modules the Principal scaffolded but never described.</param>
 /// <param name="Summary">The Principal's plain-language account of the design.</param>
 /// <param name="ProjectBudgetExhausted">
 /// The project's dollar cap refused the run; the build pauses rather than treating the design
@@ -26,6 +27,7 @@ public sealed record DesignOutcome(
     int TasksCreated,
     CoverageReport Coverage,
     ContractReport Contract,
+    ModuleReport Modules,
     string Summary,
     bool ProjectBudgetExhausted = false);
 
@@ -98,11 +100,17 @@ public sealed class DesignPhase(
             ? "Contract gate: requirements, operations and tasks all linked"
             : $"Contract gate: {contract.Describe()}");
 
+        var modules = CoverageGate.CheckModules(workspace);
+        _log.Message(modules.Complete
+            ? "Module gate: every module says what it is for"
+            : $"Module gate: {modules.Undescribed.Count} module(s) never described: "
+              + string.Join(", ", modules.Undescribed));
+
         // The Principal has no reply tool, so its summary arrives as the progress note.
         var summary = result.Reply ?? result.ProgressNote
             ?? $"Design ended ({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns.";
         return new DesignOutcome(
-            result.End, created, coverage, contract, summary, result.ProjectBudgetExhausted);
+            result.End, created, coverage, contract, modules, summary, result.ProjectBudgetExhausted);
     }
 
     /// <summary>
@@ -132,6 +140,24 @@ public sealed class DesignPhase(
             + string.Join(", ", existing.Select(n => $"`{n}`")) + ".";
 
         return $"""
+
+
+            ## The project's skeleton
+
+            Call `scaffold` FIRST, before any `create_task`. It builds the solution, the one
+            runnable web project with its `wwwroot`, a class library per module you name, and
+            the unit test project — referenced and listed in the solution. The harness decides
+            every path, so nothing lands inside another project's directory and there is never
+            a second runnable project.
+
+            That means there is no scaffolding work left to plan: do NOT create a task for
+            setting up the solution, adding projects, or wiring references, and do not ask an
+            engineer to run `dotnet new`. Your tasks start from a repo that already builds.
+
+            Every module it creates gets a stub `MODULE.md` carrying a `forge:todo` line.
+            Replace that line in each one with what the module is for, what belongs in it and
+            what does not — it is what stops a later agent inventing a module that already
+            exists. A file still carrying the marker when you call `done` is reported back.
 
 
             ## How the plan reads to the client

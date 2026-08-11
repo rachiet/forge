@@ -487,6 +487,30 @@ public class AgentLoopTests : IDisposable
     }
 
     [Fact]
+    public async Task An_engineer_cannot_change_the_project_layout_with_dotnet_new()
+    {
+        var toolset = new AgentToolset(_executor, _conn, AgentRecipe.Engineer, StartTask());
+
+        // Padded, since the check collapses whitespace before matching.
+        var outcome = await toolset.ExecuteAsync(
+            new ToolCall("run", new Dictionary<string, string> { ["command"] = "dotnet  new   classlib" }));
+
+        Assert.True(outcome.Refused);
+        Assert.Contains("escalate", outcome.Observation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_command_that_only_starts_like_a_refused_one_still_runs()
+    {
+        var toolset = new AgentToolset(_executor, _conn, AgentRecipe.Engineer, StartTask());
+
+        var outcome = await toolset.ExecuteAsync(
+            new ToolCall("run", new Dictionary<string, string> { ["command"] = "echo dotnet new" }));
+
+        Assert.False(outcome.Refused);
+    }
+
+    [Fact]
     public async Task Budget_exhaustion_ends_the_loop_without_the_model_being_asked_to_stop()
     {
         var task = StartTask(budget: 300); // one call costs 150; the second is refused
