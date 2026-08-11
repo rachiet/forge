@@ -352,6 +352,45 @@ public class TaskRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task Final_triage_is_given_the_play_and_can_narrow_the_task_to_what_it_can_finish()
+    {
+        // Past the last strike the engineer and the Principal have both failed, so the
+        // question stops being "how do we finish this" and becomes "what can ship".
+        var stuck = OutOfBudgetTask(strikes: 3);
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("descope",
+                ("criteria", "The endpoint returns 200 with the poll body."),
+                ("reason", "The animation is cosmetic and nothing depends on it.")));
+
+        await Runner(llm).RunNextByPriorityAsync();
+
+        // The play reached the instance, and only once.
+        Assert.Contains("cut it down", llm.Requests[0].Messages[^1].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.True(new DiscussionRepository(_conn).PlayUsed(stuck.Id, "cut-it-down"));
+
+        // The task carries the narrowed contract and goes back to be finished against it.
+        var after = _tasks.Get(stuck.Id);
+        Assert.Equal("The endpoint returns 200 with the poll body.", after.AcceptanceCriteria);
+        Assert.Contains("DESCOPED", after.ProgressNote);
+    }
+
+    [Fact]
+    public async Task A_task_that_reaches_final_triage_twice_is_closed_by_the_harness_not_asked_about()
+    {
+        // The Principal has already had its one decision. Cancelling would take every task
+        // waiting on this one off the board, so it is closed instead and the build goes on.
+        var stuck = OutOfBudgetTask(strikes: 3);
+        new DiscussionRepository(_conn).RecordPlay(stuck.Id, "cut-it-down");
+
+        var outcome = await Runner(new ScriptedLlmClient()).RunNextByPriorityAsync();
+
+        Assert.Equal(TaskStatus.Done, _tasks.Get(stuck.Id).Status);
+        Assert.Contains("Closed short", outcome!.Summary, StringComparison.Ordinal);
+        // Nothing was put to the client.
+        Assert.Empty(new MessageRepository(_conn).Pending("pm").Where(m => m is EscalationMessage));
+    }
+
+    [Fact]
     public async Task A_stuck_task_is_cleared_before_a_ready_engineer_task_and_triage_redirects_it()
     {
         var stuck = OutOfBudgetTask(strikes: 1);   // Principal-owned

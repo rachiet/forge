@@ -105,6 +105,19 @@ public sealed class DiscussionRepository(IDbConnection conn)
     private static string Cut(string body, int max) =>
         body.Length <= max ? body.Trim() : body[..max].Trim() + "…";
 
+    /// <summary>The marker recording that a play has been attached to a task.</summary>
+    private static string PlayMarker(string play) => $"[play] {play}";
+
+    /// <summary>Whether this play has already been given to an instance working this task.</summary>
+    public bool PlayUsed(long taskId, string play) =>
+        conn.ExecuteScalar<long>("""
+            SELECT COUNT(*) FROM discussions WHERE task_id = @taskId AND body = @marker
+            """, new { taskId, marker = PlayMarker(play) }) > 0;
+
+    /// <summary>Records that a play was attached, so it is offered once and not again.</summary>
+    public void RecordPlay(long taskId, string play) =>
+        Open(taskId, "system", PlayMarker(play));
+
     /// <summary>Every discussion on a task, oldest first.</summary>
     public IReadOnlyList<DiscussionRecord> ForTask(long taskId) =>
         conn.Query<Row>($"{SelectColumns} WHERE task_id = @taskId ORDER BY created_at, id", new { taskId })

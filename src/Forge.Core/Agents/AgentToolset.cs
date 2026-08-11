@@ -184,6 +184,15 @@ public sealed partial class AgentToolset(
                 Required("task", "the id of the task or bug, exactly as it was put to the client."),
                 Required("note", "what the client said to do, in their own terms.")),
 
+            ["descope"] = new(
+                "narrow this task to the part that can be finished, and send it back through the "
+              + "gates. What you leave out does not disappear: file it with create_task so it is "
+              + "on the board. Use this when the core of the task is met and the remainder is not "
+              + "what anything else is waiting for.",
+                Required("criteria", "the acceptance criteria as they now stand — the full new "
+                                   + "text, not a diff. The reviewer judges the work against this."),
+                Required("reason", "what is being left out, and why it can wait.")),
+
             ["cancel_task"] = new("drop a task the client does not want done. Its branch is deleted and "
                                 + "anything depending on it is cancelled too, so tell them what else "
                                 + "goes with it BEFORE you call this.",
@@ -252,6 +261,7 @@ public sealed partial class AgentToolset(
                 "reject_bug" => RejectBug(call),
                 "retriage" => Retriage(call),
                 "cancel_task" => CancelTask(call),
+                "descope" => Descope(call),
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
                 "reply" => Reply(call),
@@ -737,23 +747,64 @@ public sealed partial class AgentToolset(
     /// <summary>Cancels a task the client dropped, along with everything depending on it.</summary>
     private ToolOutcome CancelTask(ToolCall call)
     {
-        if (AwaitingClient(call) is not { } task) return NotAwaitingClient("cancel_task");
+        // The PM cancels what the client has been asked about; the Principal cancels the task
+        // it is triaging, and only that one, so a triage cannot reach across the board.
+        var target = recipe.Role == AgentRole.Principal ? task : AwaitingClient(call);
+        if (target is null) return recipe.Role == AgentRole.Principal
+            ? new ToolOutcome("ERROR: cancel_task needs a task; this run has none.")
+            : NotAwaitingClient("cancel_task");
 
         var reason = call.Arg("reason");
         var cancelled = new List<long>();
-        foreach (var affected in _tasks.UnfinishedDependents(task.Id).Append(task))
+        foreach (var affected in _tasks.UnfinishedDependents(target.Id).Append(target))
         {
             if (!TaskTransitions.IsLegal(affected.Status, TaskStatus.Cancelled)) continue;
             _tasks.Transition(affected.Id, TaskStatus.Cancelled);
-            _tasks.SetProgressNote(affected.Id, $"CANCELLED by the client: {reason}");
+            _tasks.SetProgressNote(affected.Id,
+                $"CANCELLED by the {(recipe.Role == AgentRole.Principal ? "principal" : "client")}: {reason}");
             ResolveEscalations(affected.Id);
             cancelled.Add(affected.Id);
         }
 
-        new DiscussionRepository(connection).Open(task.Id, "pm", $"[cancelled by the client] {reason}");
+        new DiscussionRepository(connection).Open(target.Id,
+            SnakeCaseEnum.ToSnakeCase(recipe.Role),
+            $"[cancelled] {reason}");
         return new ToolOutcome(
             $"Cancelled task(s) {string.Join(", ", cancelled)}. Their branches are dropped and the " +
             "build moves on without them.");
+    }
+
+    /// <summary>
+    /// Narrows this task's acceptance criteria and returns it to the engineer's queue, so what
+    /// has been built is judged against what is now being asked. The task is not finished here:
+    /// it goes back through CI and review like any other work.
+    /// </summary>
+    private ToolOutcome Descope(ToolCall call)
+    {
+        if (task is null) return new ToolOutcome("ERROR: descope needs a task; this run has none.");
+
+        var current = _tasks.Get(task.Id);
+        if (current.Status is not (TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage))
+            return new ToolOutcome($"ERROR: descope only applies to a task being triaged; "
+                + $"task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current.Status)}.");
+
+        var criteria = call.Arg("criteria");
+        var reason = call.Arg("reason");
+        _tasks.SetAcceptanceCriteria(task.Id, criteria);
+        var note = $"DESCOPED: {reason}\nFinish what the narrowed criteria ask for and call done.";
+        _tasks.SetProgressNote(task.Id, note);
+        // Back on the engineer's queue against the narrowed contract; the strike count stays,
+        // so a task that fails again lands where the harness closes it rather than looping.
+        _tasks.Transition(task.Id, TaskStatus.Ready);
+        _messages.Insert(Message.Create(MessageType.Decision, "principal", "pm",
+            $"Task {task.Id} narrowed: {reason}", task.Id));
+        new DiscussionRepository(connection).Open(task.Id, "principal", $"[descoped] {reason}");
+
+        LastProgressNote = note;
+        return new ToolOutcome(
+            $"Task {task.Id} narrowed to the criteria you gave. It goes back to an engineer to "
+            + "finish against them. File whatever you left out with create_task so it is not lost.",
+            EndReason.Done);
     }
 
     /// <summary>The task named by the call's `task` argument, if it is waiting on the client.</summary>

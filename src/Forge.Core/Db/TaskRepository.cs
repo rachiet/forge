@@ -296,6 +296,17 @@ public sealed class TaskRepository(IDbConnection conn)
             SELECT COUNT(*) FROM tasks WHERE type != 'bug' AND status = 'done'
             """) > 0;
 
+    /// <summary>
+    /// Replaces a task's acceptance criteria — what "done" means for it. Used when a task is
+    /// narrowed to the part that can be finished, so the reviewer judges it against what is
+    /// now being asked rather than what was asked originally.
+    /// </summary>
+    public void SetAcceptanceCriteria(long taskId, string criteria) =>
+        conn.Execute("""
+            UPDATE tasks SET acceptance_criteria = @criteria, updated_at = datetime('now')
+            WHERE id = @taskId
+            """, new { taskId, criteria });
+
     /// <summary>Replaces a task's progress note, which is what its next instance resumes from.</summary>
     public void SetProgressNote(long taskId, string note) =>
         conn.Execute("""

@@ -52,6 +52,9 @@ public sealed class TaskRunner(
     /// <summary>Strikes at OutOfBudget before the Principal stops redirecting and implements the task directly.</summary>
     private const int DirectImplementStrike = 2;
 
+    /// <summary>The play given to the Principal at final triage, once per task.</summary>
+    private const string CutItDownPlay = "cut-it-down";
+
     /// <summary>project_meta key holding the task ids the client was last asked about.</summary>
     private const string AskedKey = "client_asked_about";
 
@@ -143,10 +146,12 @@ public sealed class TaskRunner(
             };
         if (task.Status == TaskStatus.OutOfBudget)
         {
-            // Past the last strike: one final triage whose only options are splitting the
-            // task or handing it to the client.
+            // Past the last strike: one final triage, given the play. If it has already had
+            // that turn, deciding again is not going to help — the harness closes it instead.
             if (task.OutOfBudgetCount > DirectImplementStrike)
-                return await TriageAsync(task, ct, AgentRecipe.PrincipalFinalTriage).ConfigureAwait(false);
+                return new DiscussionRepository(conn).PlayUsed(task.Id, CutItDownPlay)
+                    ? CloseShort(task, log)
+                    : await TriageAsync(task, ct, AgentRecipe.PrincipalFinalTriage).ConfigureAwait(false);
             if (task.OutOfBudgetCount >= DirectImplementStrike)
                 return await ImplementDirectlyAsync(task, ct).ConfigureAwait(false);
         }
@@ -289,9 +294,23 @@ public sealed class TaskRunner(
 
         var before = _tasks.List().Select(t => t.Id).ToHashSet();
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
+
+        // Final triage gets the play, and the marker is written now: it is offered once
+        // whatever the instance does with it, so a crash cannot spend a second turn on it.
+        var discussions = new DiscussionRepository(conn);
+        var play = "";
+        if (finalTriage is not null && !discussions.PlayUsed(task.Id, CutItDownPlay))
+        {
+            play = "\n\n" + prompts.Play(CutItDownPlay).TrimEnd();
+            discussions.RecordPlay(task.Id, CutItDownPlay);
+            log.Message($"Task {task.Id}: attaching the {CutItDownPlay} play to final triage.");
+        }
+
+        var packet = TriagePacket(task, recipe.Tools.Contains("redirect"))
+            + Section("What has already been said about this task", discussions.History(task.Id))
+            + play;
         var result = await RunWithCrashRetryAsync(() =>
-            loop.RunTriageAsync(TriagePacket(task, recipe.Tools.Contains("redirect")),
-                _tasks.Get(task.Id), executor, ct)).ConfigureAwait(false);
+            loop.RunTriageAsync(packet, _tasks.Get(task.Id), executor, ct)).ConfigureAwait(false);
 
         ReleaseTriageSubtasks(task, before, log);
 
@@ -415,6 +434,52 @@ public sealed class TaskRunner(
             {redirectOption}
             Do not write code. Resolve it with one of the tools above.
             """;
+    }
+
+    /// <summary>A titled block for the packet, or nothing when the body is empty.</summary>
+    private static string Section(string title, string body) =>
+        body.Length == 0 ? "" : $"\n\n## {title}\n\n{body}";
+
+    /// <summary>
+    /// Closes a task the Principal has already had its one decision on. Whatever is on the
+    /// branch goes through the normal gates — merged if CI is green, recorded as a shortfall if
+    /// not — and the task ends `done` either way, because cancelling it would take every task
+    /// waiting on it off the board and stall the build over one unfinished piece. What is
+    /// missing surfaces where the client can act on it: QA tests the requirement and files it.
+    /// </summary>
+    private TaskRunOutcome CloseShort(TaskRecord task, ForgeLogger log)
+    {
+        var note = $"Closed short after triage could not finish it. "
+                 + $"Last state: {task.ProgressNote ?? "(no note)"}";
+        _tasks.SetProgressNote(task.Id, note);
+        new DiscussionRepository(conn).Open(task.Id, "system", note);
+        log.Message($"Task {task.Id}: closed short — the board moves on without the remainder.");
+        Notify(task.Id, MessageType.Status, "pm", note);
+
+        var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
+        // Only a workspace with commits ahead has anything to take through the gates.
+        if (_workspaces.Exists(task.Id))
+        {
+            _workspaces.CommitAll(task.Id, $"task({task.Id}): closing short");
+            if (_workspaces.HasCommitsAhead(task.Id, branch))
+            {
+                _workspaces.PushBranch(task.Id, branch);
+                if (_ci(_workspaces.Path(task.Id)) is { Passed: true })
+                {
+                    Transition(task.Id, TaskStatus.InProgress, log);
+                    Transition(task.Id, TaskStatus.InReview, log);
+                    return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.InReview,
+                        "Closed short; what builds goes to review.");
+                }
+            }
+        }
+
+        // Nothing mergeable: the task still ends done, so its dependents are not stranded.
+        foreach (var step in new[] { TaskStatus.InProgress, TaskStatus.InReview, TaskStatus.Merging,
+                                     TaskStatus.Qa, TaskStatus.Done })
+            Transition(task.Id, step, log);
+        return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.Done,
+            "Closed short with nothing to merge; dependents are released.");
     }
 
     // ---- QA (M5a): a project-level acceptance gate that runs only when the board is done ----

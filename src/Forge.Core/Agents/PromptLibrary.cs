@@ -29,6 +29,13 @@ public sealed class PromptLibrary(string root)
         Read(Path.Combine(Root, "tasks", $"{SnakeCaseEnum.ToSnakeCase(type)}.md"));
 
     /// <summary>
+    /// A named play: how to get out of a situation the harness has detected, attached to the
+    /// instance that has to act on it. Versioned like the roles, so improving one improves
+    /// every future run rather than one conversation.
+    /// </summary>
+    public string Play(string name) => Read(Path.Combine(Root, "plays", $"{name}.md"));
+
+    /// <summary>
     /// A file Forge writes into the client's repo rather than into a prompt — currently
     /// the base CONVENTIONS.md every project starts from. It lives here for the same
     /// reason the prompts do: editing one versioned file improves every future project,

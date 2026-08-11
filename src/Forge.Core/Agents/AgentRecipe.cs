@@ -156,7 +156,7 @@ public sealed record AgentRecipe
     {
         InstancePrefix = "final-triage",
         Tools = ["read_file", "list_dir", "grep", "create_task", "add_dependency",
-                 "break_and_relink", "escalate"],
+                 "break_and_relink", "descope", "cancel_task", "escalate"],
     }).Validate();
 
     /// <summary>
