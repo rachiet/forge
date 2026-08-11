@@ -1,0 +1,50 @@
+/* Theme: slate — cool grey neutrals with an indigo accent.
+   The default. Quiet, professional, and the safest choice for a tool or dashboard. */
+
+:root {
+  /* Type. System stacks only: the kit never loads a font over the network. */
+  --fg-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fg-font-heading: var(--fg-font-sans);
+  --fg-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* Heading weight and letter-spacing carry most of a theme's character. */
+  --fg-heading-weight: 640;
+  --fg-heading-tracking: -0.014em;
+
+  /* Accent hue and chroma in oklch; the mode supplies the lightness. */
+  --fg-accent-h: 262;
+  --fg-accent-c: 0.15;
+
+  /* Character defaults. The chosen theme knobs override these. */
+  --fg-radius-base: 1;
+  --fg-density-base: 1;
+
+  /* Light palette. Named light-* because the mode file maps one set into use. */
+  --fg-light-canvas: oklch(0.985 0.003 265);
+  --fg-light-surface: oklch(1 0 0);
+  --fg-light-surface-sunken: oklch(0.968 0.004 265);
+  --fg-light-ink: oklch(0.24 0.02 265);
+  --fg-light-ink-muted: oklch(0.53 0.017 265);
+  --fg-light-ink-faint: oklch(0.68 0.014 265);
+  --fg-light-border: oklch(0.918 0.006 265);
+  --fg-light-border-strong: oklch(0.855 0.009 265);
+  --fg-light-overlay: oklch(0.24 0.02 265 / 0.45);
+  --fg-light-shadow: oklch(0.24 0.02 265 / 0.09);
+  --fg-light-on-accent: oklch(0.99 0 0);
+  --fg-light-accent-l: 0.55;
+  --fg-light-accent-soft-l: 0.955;
+
+  /* Dark palette. Surfaces lift as they come forward, rather than going darker. */
+  --fg-dark-canvas: oklch(0.185 0.012 265);
+  --fg-dark-surface: oklch(0.228 0.014 265);
+  --fg-dark-surface-sunken: oklch(0.268 0.015 265);
+  --fg-dark-ink: oklch(0.955 0.005 265);
+  --fg-dark-ink-muted: oklch(0.735 0.013 265);
+  --fg-dark-ink-faint: oklch(0.6 0.014 265);
+  --fg-dark-border: oklch(0.315 0.016 265);
+  --fg-dark-border-strong: oklch(0.395 0.018 265);
+  --fg-dark-overlay: oklch(0.12 0.012 265 / 0.65);
+  --fg-dark-shadow: oklch(0.08 0.01 265 / 0.5);
+  --fg-dark-on-accent: oklch(0.99 0 0);
+  --fg-dark-accent-l: 0.68;
+  --fg-dark-accent-soft-l: 0.31;
+}

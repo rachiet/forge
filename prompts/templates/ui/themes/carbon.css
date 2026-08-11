@@ -1,0 +1,45 @@
+/* Theme: carbon — true-neutral greys, sharp corners, tight headings.
+   For technical tools: consoles, admin panels, anything dense and data-heavy. */
+
+:root {
+  --fg-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fg-font-heading: var(--fg-font-sans);
+  --fg-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --fg-heading-weight: 680;
+  --fg-heading-tracking: -0.022em;
+
+  --fg-accent-h: 232;
+  --fg-accent-c: 0.145;
+
+  /* Sharp corners and a tighter rhythm are what make this one read as technical. */
+  --fg-radius-base: 0.35;
+  --fg-density-base: 0.92;
+
+  --fg-light-canvas: oklch(0.975 0 0);
+  --fg-light-surface: oklch(1 0 0);
+  --fg-light-surface-sunken: oklch(0.955 0 0);
+  --fg-light-ink: oklch(0.21 0 0);
+  --fg-light-ink-muted: oklch(0.51 0 0);
+  --fg-light-ink-faint: oklch(0.67 0 0);
+  --fg-light-border: oklch(0.9 0 0);
+  --fg-light-border-strong: oklch(0.83 0 0);
+  --fg-light-overlay: oklch(0.21 0 0 / 0.48);
+  --fg-light-shadow: oklch(0.21 0 0 / 0.1);
+  --fg-light-on-accent: oklch(0.99 0 0);
+  --fg-light-accent-l: 0.54;
+  --fg-light-accent-soft-l: 0.95;
+
+  --fg-dark-canvas: oklch(0.16 0 0);
+  --fg-dark-surface: oklch(0.205 0 0);
+  --fg-dark-surface-sunken: oklch(0.25 0 0);
+  --fg-dark-ink: oklch(0.96 0 0);
+  --fg-dark-ink-muted: oklch(0.73 0 0);
+  --fg-dark-ink-faint: oklch(0.59 0 0);
+  --fg-dark-border: oklch(0.3 0 0);
+  --fg-dark-border-strong: oklch(0.385 0 0);
+  --fg-dark-overlay: oklch(0.1 0 0 / 0.68);
+  --fg-dark-shadow: oklch(0.05 0 0 / 0.55);
+  --fg-dark-on-accent: oklch(0.99 0 0);
+  --fg-dark-accent-l: 0.69;
+  --fg-dark-accent-soft-l: 0.3;
+}

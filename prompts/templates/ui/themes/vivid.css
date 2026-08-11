@@ -1,0 +1,44 @@
+/* Theme: vivid — high contrast, round corners, a violet accent and bold headings.
+   For consumer apps that should feel energetic: trackers, games, social things. */
+
+:root {
+  --fg-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fg-font-heading: var(--fg-font-sans);
+  --fg-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --fg-heading-weight: 750;
+  --fg-heading-tracking: -0.026em;
+
+  --fg-accent-h: 298;
+  --fg-accent-c: 0.19;
+
+  --fg-radius-base: 1.9;
+  --fg-density-base: 1.05;
+
+  --fg-light-canvas: oklch(0.988 0.006 300);
+  --fg-light-surface: oklch(1 0 0);
+  --fg-light-surface-sunken: oklch(0.964 0.009 300);
+  --fg-light-ink: oklch(0.2 0.025 300);
+  --fg-light-ink-muted: oklch(0.5 0.024 300);
+  --fg-light-ink-faint: oklch(0.665 0.02 300);
+  --fg-light-border: oklch(0.915 0.011 300);
+  --fg-light-border-strong: oklch(0.845 0.017 300);
+  --fg-light-overlay: oklch(0.2 0.025 300 / 0.45);
+  --fg-light-shadow: oklch(0.28 0.05 300 / 0.13);
+  --fg-light-on-accent: oklch(0.99 0 0);
+  --fg-light-accent-l: 0.56;
+  --fg-light-accent-soft-l: 0.955;
+
+  --fg-dark-canvas: oklch(0.175 0.02 300);
+  --fg-dark-surface: oklch(0.222 0.024 300);
+  --fg-dark-surface-sunken: oklch(0.265 0.027 300);
+  --fg-dark-ink: oklch(0.96 0.008 300);
+  --fg-dark-ink-muted: oklch(0.745 0.02 300);
+  --fg-dark-ink-faint: oklch(0.605 0.022 300);
+  --fg-dark-border: oklch(0.315 0.028 300);
+  --fg-dark-border-strong: oklch(0.4 0.032 300);
+  --fg-dark-overlay: oklch(0.11 0.02 300 / 0.66);
+  --fg-dark-shadow: oklch(0.07 0.02 300 / 0.55);
+  --fg-dark-on-accent: oklch(0.99 0 0);
+  --fg-dark-accent-l: 0.7;
+  --fg-dark-accent-soft-l: 0.315;
+}

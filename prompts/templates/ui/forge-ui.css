@@ -1,0 +1,935 @@
+/* Forge UI kit — components, utilities and motion.
+
+   Harness-owned. Forge rewrites this file into the repo on every task run, so an
+   edit made here is discarded on the next one. The look is changed through the
+   theme (see theme.css, itself generated), never by editing this file.
+
+   Token values arrive from theme.css; this file only consumes them, plus the
+   derived ramps below. Every rule is namespaced `fg-` so nothing here can
+   collide with a class the application defines in app.css. */
+
+/* ---------------------------------------------------------------- derived tokens */
+
+:root {
+  /* Character: the value the theme draws at, multiplied by the knob chosen
+     for this project. */
+  --fg-density: calc(var(--fg-density-base) * var(--fg-density-scale, 1));
+  --fg-radius-scale: calc(var(--fg-radius-base) * var(--fg-radius-mult, 1));
+
+  /* Interactive accent, built from the theme's hue and the mode's lightness, so
+     one hue knob restyles every button, link, focus ring and selected row. */
+  --fg-accent: oklch(var(--fg-accent-l) var(--fg-accent-c) var(--fg-accent-h));
+  --fg-accent-hover: oklch(calc(var(--fg-accent-l) - 0.045) var(--fg-accent-c) var(--fg-accent-h));
+  --fg-accent-active: oklch(calc(var(--fg-accent-l) - 0.09) var(--fg-accent-c) var(--fg-accent-h));
+  --fg-accent-soft: oklch(var(--fg-accent-soft-l) calc(var(--fg-accent-c) * 0.3) var(--fg-accent-h));
+  --fg-accent-ring: oklch(var(--fg-accent-l) var(--fg-accent-c) var(--fg-accent-h) / 0.32);
+
+  /* Status hues are fixed; only their lightness follows the mode, so a red in
+     dark mode is as legible as the same red in light mode. */
+  --fg-danger: oklch(var(--fg-accent-l) 0.17 25);
+  --fg-danger-soft: oklch(var(--fg-accent-soft-l) 0.055 25);
+  --fg-success: oklch(var(--fg-accent-l) 0.14 150);
+  --fg-success-soft: oklch(var(--fg-accent-soft-l) 0.05 150);
+  --fg-warning: oklch(var(--fg-accent-l) 0.14 75);
+  --fg-warning-soft: oklch(var(--fg-accent-soft-l) 0.05 75);
+
+  /* Spacing scale. Every gap and pad in the kit is one of these six steps
+     multiplied by the theme's density, so a compact theme tightens everything. */
+  --fg-space-1: calc(0.25rem * var(--fg-density));
+  --fg-space-2: calc(0.5rem * var(--fg-density));
+  --fg-space-3: calc(0.75rem * var(--fg-density));
+  --fg-space-4: calc(1rem * var(--fg-density));
+  --fg-space-5: calc(1.5rem * var(--fg-density));
+  --fg-space-6: calc(2.5rem * var(--fg-density));
+
+  /* Corner radii, scaled by the theme's character: 0 is sharp, 2 is round. */
+  --fg-radius-sm: calc(0.25rem * var(--fg-radius-scale));
+  --fg-radius-md: calc(0.5rem * var(--fg-radius-scale));
+  --fg-radius-lg: calc(0.875rem * var(--fg-radius-scale));
+  --fg-radius-full: 999px;
+
+  /* Type scale. One ratio, so headings and body text stay in proportion. */
+  --fg-text-xs: 0.75rem;
+  --fg-text-sm: 0.875rem;
+  --fg-text-md: 1rem;
+  --fg-text-lg: 1.25rem;
+  --fg-text-xl: 1.625rem;
+  --fg-text-2xl: 2.125rem;
+
+  /* Elevation. Two shadow layers each: a tight contact shadow and a wide soft one. */
+  --fg-elevation-1: 0 1px 2px var(--fg-shadow), 0 1px 3px -1px var(--fg-shadow);
+  --fg-elevation-2: 0 2px 4px var(--fg-shadow), 0 8px 20px -6px var(--fg-shadow);
+  --fg-elevation-3: 0 4px 8px var(--fg-shadow), 0 24px 48px -12px var(--fg-shadow);
+
+  /* Motion. The two durations and the one easing curve every transition in the
+     kit uses. */
+  --fg-motion-fast: 130ms;
+  --fg-motion-slow: 220ms;
+  --fg-ease: cubic-bezier(0.2, 0, 0.13, 1);
+}
+
+/* ---------------------------------------------------------------- base */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html {
+  font-family: var(--fg-font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--fg-canvas);
+  color: var(--fg-ink);
+  font-size: var(--fg-text-md);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  margin: 0 0 var(--fg-space-3);
+  font-family: var(--fg-font-heading);
+  font-weight: var(--fg-heading-weight);
+  letter-spacing: var(--fg-heading-tracking);
+  line-height: 1.2;
+}
+
+h1 { font-size: var(--fg-text-2xl); }
+h2 { font-size: var(--fg-text-xl); }
+h3 { font-size: var(--fg-text-lg); }
+h4 { font-size: var(--fg-text-md); }
+
+p { margin: 0 0 var(--fg-space-3); }
+
+a {
+  color: var(--fg-accent);
+  text-decoration-color: var(--fg-accent-ring);
+  text-underline-offset: 2px;
+  transition: color var(--fg-motion-fast) var(--fg-ease);
+}
+
+a:hover { color: var(--fg-accent-hover); }
+
+code, pre, kbd { font-family: var(--fg-font-mono); font-size: 0.925em; }
+
+:focus-visible {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 2px;
+  border-radius: var(--fg-radius-sm);
+}
+
+/* ---------------------------------------------------------------- app shell */
+
+/* The page frame: a fixed topbar, an optional sidebar, and a scrolling main
+   column. Wrap the whole page in it so every screen has the same anatomy. */
+.fg-shell {
+  display: grid;
+  grid-template-areas: "topbar topbar" "sidebar main";
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+.fg-shell--no-sidebar { grid-template-areas: "topbar" "main"; grid-template-columns: 1fr; }
+
+.fg-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-4);
+  padding: var(--fg-space-3) var(--fg-space-5);
+  background: var(--fg-surface);
+  border-bottom: 1px solid var(--fg-border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.fg-topbar__brand {
+  font-family: var(--fg-font-heading);
+  font-weight: 650;
+  font-size: var(--fg-text-lg);
+  letter-spacing: var(--fg-heading-tracking);
+  margin-right: auto;
+}
+
+.fg-sidebar {
+  grid-area: sidebar;
+  width: 15rem;
+  padding: var(--fg-space-4) var(--fg-space-3);
+  background: var(--fg-surface);
+  border-right: 1px solid var(--fg-border);
+}
+
+.fg-main {
+  grid-area: main;
+  padding: var(--fg-space-5);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* A page's title block: heading on the left, actions on the right. */
+.fg-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--fg-space-4);
+  margin-bottom: var(--fg-space-5);
+  flex-wrap: wrap;
+}
+
+.fg-page-header__title { margin: 0; }
+
+.fg-page-header__subtitle {
+  margin: var(--fg-space-1) 0 0;
+  color: var(--fg-ink-muted);
+  font-size: var(--fg-text-sm);
+}
+
+/* ---------------------------------------------------------------- nav */
+
+.fg-nav { display: flex; flex-direction: column; gap: 2px; }
+
+.fg-nav--horizontal { flex-direction: row; align-items: center; gap: var(--fg-space-1); }
+
+.fg-nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-2);
+  padding: var(--fg-space-2) var(--fg-space-3);
+  border-radius: var(--fg-radius-md);
+  color: var(--fg-ink-muted);
+  font-size: var(--fg-text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background var(--fg-motion-fast) var(--fg-ease),
+              color var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-nav__item:hover { background: var(--fg-surface-sunken); color: var(--fg-ink); }
+
+.fg-nav__item--active { background: var(--fg-accent-soft); color: var(--fg-accent); }
+
+/* ---------------------------------------------------------------- button */
+
+.fg-btn {
+  --fg-btn-height: calc(2.375rem * var(--fg-density));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fg-space-2);
+  height: var(--fg-btn-height);
+  padding: 0 var(--fg-space-4);
+  border: 1px solid transparent;
+  border-radius: var(--fg-radius-md);
+  background: var(--fg-surface);
+  color: var(--fg-ink);
+  font: inherit;
+  font-size: var(--fg-text-sm);
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--fg-motion-fast) var(--fg-ease),
+              border-color var(--fg-motion-fast) var(--fg-ease),
+              box-shadow var(--fg-motion-fast) var(--fg-ease),
+              transform var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-btn:active { transform: translateY(1px); }
+
+.fg-btn:disabled,
+.fg-btn[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+
+/* The one call to action on a screen. */
+.fg-btn--primary {
+  background: var(--fg-accent);
+  color: var(--fg-on-accent);
+  box-shadow: var(--fg-elevation-1);
+}
+
+.fg-btn--primary:hover { background: var(--fg-accent-hover); }
+.fg-btn--primary:active { background: var(--fg-accent-active); }
+
+/* The everyday button: visible, but does not compete with the primary one. */
+.fg-btn--secondary {
+  background: var(--fg-surface);
+  border-color: var(--fg-border-strong);
+}
+
+.fg-btn--secondary:hover { background: var(--fg-surface-sunken); }
+
+/* Lowest emphasis: row actions, toolbar icons, anything repeated many times. */
+.fg-btn--ghost { background: transparent; color: var(--fg-ink-muted); }
+
+.fg-btn--ghost:hover { background: var(--fg-surface-sunken); color: var(--fg-ink); }
+
+/* Destructive, and only for actions that really destroy something. */
+.fg-btn--danger { background: var(--fg-danger); color: var(--fg-on-accent); }
+
+.fg-btn--danger:hover { filter: brightness(1.07); }
+
+.fg-btn--sm { --fg-btn-height: calc(1.875rem * var(--fg-density)); padding: 0 var(--fg-space-3); font-size: var(--fg-text-xs); }
+.fg-btn--lg { --fg-btn-height: calc(2.875rem * var(--fg-density)); padding: 0 var(--fg-space-5); font-size: var(--fg-text-md); }
+.fg-btn--block { display: flex; width: 100%; }
+
+/* Square button holding a single glyph, used in toolbars and list rows. */
+.fg-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(2.25rem * var(--fg-density));
+  height: calc(2.25rem * var(--fg-density));
+  padding: 0;
+  border: 0;
+  border-radius: var(--fg-radius-md);
+  background: transparent;
+  color: var(--fg-ink-muted);
+  font-size: var(--fg-text-md);
+  cursor: pointer;
+  transition: background var(--fg-motion-fast) var(--fg-ease), color var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-icon-btn:hover { background: var(--fg-surface-sunken); color: var(--fg-ink); }
+
+/* ---------------------------------------------------------------- form */
+
+/* One labelled control: label, input, and either a hint or an error beneath it. */
+.fg-field { display: flex; flex-direction: column; gap: var(--fg-space-2); margin-bottom: var(--fg-space-4); }
+
+.fg-field__label { font-size: var(--fg-text-sm); font-weight: 550; color: var(--fg-ink); }
+
+.fg-field__hint { font-size: var(--fg-text-xs); color: var(--fg-ink-muted); }
+
+.fg-field__error { font-size: var(--fg-text-xs); color: var(--fg-danger); }
+
+.fg-input,
+.fg-select,
+.fg-textarea {
+  width: 100%;
+  padding: calc(var(--fg-space-2) + 1px) var(--fg-space-3);
+  border: 1px solid var(--fg-border-strong);
+  border-radius: var(--fg-radius-md);
+  background: var(--fg-surface);
+  color: var(--fg-ink);
+  font: inherit;
+  font-size: var(--fg-text-sm);
+  transition: border-color var(--fg-motion-fast) var(--fg-ease),
+              box-shadow var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-input::placeholder,
+.fg-textarea::placeholder { color: var(--fg-ink-faint); }
+
+.fg-input:focus,
+.fg-select:focus,
+.fg-textarea:focus {
+  outline: none;
+  border-color: var(--fg-accent);
+  box-shadow: 0 0 0 3px var(--fg-accent-ring);
+}
+
+.fg-input--invalid { border-color: var(--fg-danger); }
+
+.fg-textarea { min-height: 6rem; resize: vertical; }
+
+.fg-select {
+  appearance: none;
+  padding-right: var(--fg-space-6);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 1.05rem center, right 0.75rem center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* Checkbox and radio, sized and coloured to match the rest of the controls. */
+.fg-checkbox,
+.fg-radio {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--fg-accent);
+  cursor: pointer;
+}
+
+/* A checkbox or radio with its label on one line. */
+.fg-choice { display: inline-flex; align-items: center; gap: var(--fg-space-2); font-size: var(--fg-text-sm); cursor: pointer; }
+
+/* An on/off control for a setting that applies immediately. */
+.fg-switch { position: relative; display: inline-block; width: 2.5rem; height: 1.4rem; }
+.fg-switch input { opacity: 0; width: 0; height: 0; }
+
+.fg-switch__track {
+  position: absolute;
+  inset: 0;
+  background: var(--fg-border-strong);
+  border-radius: var(--fg-radius-full);
+  cursor: pointer;
+  transition: background var(--fg-motion-slow) var(--fg-ease);
+}
+
+.fg-switch__track::before {
+  content: "";
+  position: absolute;
+  top: 0.175rem;
+  left: 0.175rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  background: var(--fg-surface);
+  border-radius: var(--fg-radius-full);
+  box-shadow: var(--fg-elevation-1);
+  transition: transform var(--fg-motion-slow) var(--fg-ease);
+}
+
+.fg-switch input:checked + .fg-switch__track { background: var(--fg-accent); }
+.fg-switch input:checked + .fg-switch__track::before { transform: translateX(1.1rem); }
+
+/* ---------------------------------------------------------------- card & panel */
+
+/* A raised container for one coherent thing: a record, a form, a summary. */
+.fg-card {
+  background: var(--fg-surface);
+  border: 1px solid var(--fg-border);
+  border-radius: var(--fg-radius-lg);
+  box-shadow: var(--fg-elevation-1);
+  overflow: hidden;
+}
+
+.fg-card--interactive { cursor: pointer; transition: box-shadow var(--fg-motion-slow) var(--fg-ease), transform var(--fg-motion-slow) var(--fg-ease); }
+.fg-card--interactive:hover { box-shadow: var(--fg-elevation-2); transform: translateY(-2px); }
+
+.fg-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fg-space-3);
+  padding: var(--fg-space-4);
+  border-bottom: 1px solid var(--fg-border);
+  font-weight: 600;
+}
+
+.fg-card__body { padding: var(--fg-space-4); }
+
+.fg-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--fg-space-2);
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border-top: 1px solid var(--fg-border);
+  background: var(--fg-surface-sunken);
+}
+
+/* A flat container for grouping, where a card would be too much furniture. */
+.fg-panel {
+  background: var(--fg-surface-sunken);
+  border: 1px solid var(--fg-border);
+  border-radius: var(--fg-radius-md);
+  padding: var(--fg-space-4);
+}
+
+/* ---------------------------------------------------------------- list */
+
+.fg-list { list-style: none; margin: 0; padding: 0; }
+
+.fg-list--boxed {
+  background: var(--fg-surface);
+  border: 1px solid var(--fg-border);
+  border-radius: var(--fg-radius-lg);
+  overflow: hidden;
+}
+
+.fg-list--divided > .fg-list__row + .fg-list__row { border-top: 1px solid var(--fg-border); }
+
+.fg-list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-3);
+  padding: var(--fg-space-3) var(--fg-space-4);
+  transition: background var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-list--hoverable > .fg-list__row:hover { background: var(--fg-surface-sunken); }
+
+.fg-list__row--selected { background: var(--fg-accent-soft); }
+
+/* The row's own text block: title on top, supporting text under it. */
+.fg-list__content { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+
+.fg-list__title { font-size: var(--fg-text-sm); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.fg-list__meta { font-size: var(--fg-text-xs); color: var(--fg-ink-muted); }
+
+/* Row actions, revealed on hover so a long list stays quiet at rest. */
+.fg-list__actions { display: flex; gap: var(--fg-space-1); opacity: 0; transition: opacity var(--fg-motion-fast) var(--fg-ease); }
+
+.fg-list__row:hover .fg-list__actions,
+.fg-list__row:focus-within .fg-list__actions { opacity: 1; }
+
+/* ---------------------------------------------------------------- table */
+
+.fg-table { width: 100%; border-collapse: collapse; font-size: var(--fg-text-sm); }
+
+.fg-table th {
+  text-align: left;
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border-bottom: 1px solid var(--fg-border-strong);
+  color: var(--fg-ink-muted);
+  font-size: var(--fg-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.fg-table td { padding: var(--fg-space-3) var(--fg-space-4); border-bottom: 1px solid var(--fg-border); }
+
+.fg-table tbody tr { transition: background var(--fg-motion-fast) var(--fg-ease); }
+.fg-table--hoverable tbody tr:hover { background: var(--fg-surface-sunken); }
+
+/* Wrap a table in this to keep a wide one scrolling inside the page. */
+.fg-table-wrap { overflow-x: auto; border: 1px solid var(--fg-border); border-radius: var(--fg-radius-lg); background: var(--fg-surface); }
+
+/* ---------------------------------------------------------------- badge, chip, tag */
+
+.fg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fg-space-1);
+  padding: 0.15rem var(--fg-space-2);
+  border-radius: var(--fg-radius-full);
+  background: var(--fg-surface-sunken);
+  color: var(--fg-ink-muted);
+  font-size: var(--fg-text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.fg-badge--accent { background: var(--fg-accent-soft); color: var(--fg-accent); }
+.fg-badge--success { background: var(--fg-success-soft); color: var(--fg-success); }
+.fg-badge--warning { background: var(--fg-warning-soft); color: var(--fg-warning); }
+.fg-badge--danger { background: var(--fg-danger-soft); color: var(--fg-danger); }
+
+/* A badge the user can remove, for filters and selected values. */
+.fg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fg-space-2);
+  padding: var(--fg-space-1) var(--fg-space-3);
+  border: 1px solid var(--fg-border-strong);
+  border-radius: var(--fg-radius-full);
+  background: var(--fg-surface);
+  font-size: var(--fg-text-xs);
+}
+
+.fg-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--fg-radius-full);
+  background: var(--fg-accent-soft);
+  color: var(--fg-accent);
+  font-size: var(--fg-text-xs);
+  font-weight: 650;
+  overflow: hidden;
+}
+
+.fg-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------------------------------------------------------------- alert */
+
+.fg-alert {
+  display: flex;
+  gap: var(--fg-space-3);
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border: 1px solid var(--fg-border);
+  border-left: 3px solid var(--fg-ink-muted);
+  border-radius: var(--fg-radius-md);
+  background: var(--fg-surface);
+  font-size: var(--fg-text-sm);
+}
+
+.fg-alert--info { border-left-color: var(--fg-accent); background: var(--fg-accent-soft); }
+.fg-alert--success { border-left-color: var(--fg-success); background: var(--fg-success-soft); }
+.fg-alert--warning { border-left-color: var(--fg-warning); background: var(--fg-warning-soft); }
+.fg-alert--danger { border-left-color: var(--fg-danger); background: var(--fg-danger-soft); }
+
+.fg-alert__title { font-weight: 600; margin-bottom: 2px; }
+
+/* ---------------------------------------------------------------- empty & loading */
+
+/* What a list or table shows before it has anything in it. Never leave a blank
+   area: an empty state says what is missing and offers the action that fills it. */
+.fg-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--fg-space-3);
+  padding: var(--fg-space-6) var(--fg-space-4);
+  text-align: center;
+  color: var(--fg-ink-muted);
+}
+
+.fg-empty__icon { font-size: 2rem; opacity: 0.6; }
+.fg-empty__title { font-size: var(--fg-text-lg); font-weight: 600; color: var(--fg-ink); margin: 0; }
+.fg-empty__body { max-width: 26rem; font-size: var(--fg-text-sm); margin: 0; }
+
+/* A grey block standing in for content that is still loading. */
+.fg-skeleton {
+  background: linear-gradient(90deg, var(--fg-surface-sunken) 25%, var(--fg-border) 37%, var(--fg-surface-sunken) 63%);
+  background-size: 400% 100%;
+  border-radius: var(--fg-radius-sm);
+  animation: fg-shimmer 1.4s ease infinite;
+}
+
+.fg-skeleton--text { height: 0.85rem; margin-bottom: var(--fg-space-2); }
+.fg-skeleton--title { height: 1.35rem; width: 40%; margin-bottom: var(--fg-space-3); }
+.fg-skeleton--block { height: 6rem; }
+
+@keyframes fg-shimmer { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+
+.fg-spinner {
+  display: inline-block;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--fg-border-strong);
+  border-top-color: var(--fg-accent);
+  border-radius: var(--fg-radius-full);
+  animation: fg-spin 0.7s linear infinite;
+}
+
+@keyframes fg-spin { to { transform: rotate(360deg); } }
+
+.fg-progress { height: 0.4rem; background: var(--fg-surface-sunken); border-radius: var(--fg-radius-full); overflow: hidden; }
+.fg-progress__bar { height: 100%; background: var(--fg-accent); border-radius: inherit; transition: width var(--fg-motion-slow) var(--fg-ease); }
+
+/* ---------------------------------------------------------------- modal */
+
+.fg-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--fg-space-4);
+  background: var(--fg-overlay);
+  animation: fg-fade-in var(--fg-motion-slow) var(--fg-ease);
+}
+
+.fg-modal[hidden] { display: none; }
+
+.fg-modal__dialog {
+  width: min(32rem, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--fg-surface);
+  border-radius: var(--fg-radius-lg);
+  box-shadow: var(--fg-elevation-3);
+  animation: fg-rise var(--fg-motion-slow) var(--fg-ease);
+}
+
+.fg-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fg-space-3);
+  padding: var(--fg-space-4);
+  border-bottom: 1px solid var(--fg-border);
+  font-size: var(--fg-text-lg);
+  font-weight: 600;
+}
+
+.fg-modal__body { padding: var(--fg-space-4); }
+
+.fg-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--fg-space-2);
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border-top: 1px solid var(--fg-border);
+}
+
+@keyframes fg-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fg-rise { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
+
+/* ---------------------------------------------------------------- toast */
+
+.fg-toaster {
+  position: fixed;
+  right: var(--fg-space-4);
+  bottom: var(--fg-space-4);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fg-space-2);
+  pointer-events: none;
+}
+
+.fg-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-3);
+  min-width: 16rem;
+  max-width: 24rem;
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border: 1px solid var(--fg-border);
+  border-radius: var(--fg-radius-md);
+  background: var(--fg-surface);
+  box-shadow: var(--fg-elevation-2);
+  font-size: var(--fg-text-sm);
+  pointer-events: auto;
+  animation: fg-slide-in var(--fg-motion-slow) var(--fg-ease);
+}
+
+.fg-toast--leaving { animation: fg-slide-out var(--fg-motion-slow) var(--fg-ease) forwards; }
+.fg-toast--success { border-left: 3px solid var(--fg-success); }
+.fg-toast--danger { border-left: 3px solid var(--fg-danger); }
+
+@keyframes fg-slide-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@keyframes fg-slide-out { to { opacity: 0; transform: translateX(16px); } }
+
+/* ---------------------------------------------------------------- tabs */
+
+.fg-tabs { display: flex; gap: var(--fg-space-1); border-bottom: 1px solid var(--fg-border); margin-bottom: var(--fg-space-4); }
+
+.fg-tabs__tab {
+  position: relative;
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border: 0;
+  background: none;
+  color: var(--fg-ink-muted);
+  font: inherit;
+  font-size: var(--fg-text-sm);
+  font-weight: 550;
+  cursor: pointer;
+  transition: color var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-tabs__tab::after {
+  content: "";
+  position: absolute;
+  left: var(--fg-space-3);
+  right: var(--fg-space-3);
+  bottom: -1px;
+  height: 2px;
+  background: var(--fg-accent);
+  border-radius: var(--fg-radius-full);
+  transform: scaleX(0);
+  transition: transform var(--fg-motion-slow) var(--fg-ease);
+}
+
+.fg-tabs__tab:hover { color: var(--fg-ink); }
+.fg-tabs__tab--active { color: var(--fg-accent); }
+.fg-tabs__tab--active::after { transform: scaleX(1); }
+
+.fg-tabs__panel[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- menu */
+
+.fg-menu { position: relative; display: inline-block; }
+
+.fg-menu__list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--fg-space-1));
+  z-index: 40;
+  min-width: 11rem;
+  padding: var(--fg-space-1);
+  list-style: none;
+  margin: 0;
+  background: var(--fg-surface);
+  border: 1px solid var(--fg-border);
+  border-radius: var(--fg-radius-md);
+  box-shadow: var(--fg-elevation-2);
+  animation: fg-rise var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-menu__list[hidden] { display: none; }
+
+.fg-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-2);
+  width: 100%;
+  padding: var(--fg-space-2) var(--fg-space-3);
+  border: 0;
+  border-radius: var(--fg-radius-sm);
+  background: none;
+  color: var(--fg-ink);
+  font: inherit;
+  font-size: var(--fg-text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-menu__item:hover { background: var(--fg-surface-sunken); }
+.fg-menu__item--danger { color: var(--fg-danger); }
+
+/* ---------------------------------------------------------------- carousel */
+
+/* A horizontal strip of slides that snap into place. Scrolling is native, so it
+   works with a trackpad and a touchscreen; the arrows are the keyboard path. */
+.fg-carousel { position: relative; }
+
+.fg-carousel__track {
+  display: flex;
+  gap: var(--fg-space-4);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  padding-bottom: var(--fg-space-2);
+}
+
+.fg-carousel__track::-webkit-scrollbar { display: none; }
+
+.fg-carousel__slide { flex: 0 0 min(22rem, 82%); scroll-snap-align: start; }
+
+.fg-carousel__arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.25rem;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--fg-border);
+  border-radius: var(--fg-radius-full);
+  background: var(--fg-surface);
+  color: var(--fg-ink);
+  box-shadow: var(--fg-elevation-2);
+  cursor: pointer;
+  transition: background var(--fg-motion-fast) var(--fg-ease), opacity var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-carousel__arrow:hover { background: var(--fg-surface-sunken); }
+.fg-carousel__arrow--prev { left: calc(-1 * var(--fg-space-3)); }
+.fg-carousel__arrow--next { right: calc(-1 * var(--fg-space-3)); }
+.fg-carousel__arrow[disabled] { opacity: 0.35; pointer-events: none; }
+
+/* ---------------------------------------------------------------- misc */
+
+.fg-divider { height: 1px; border: 0; background: var(--fg-border); margin: var(--fg-space-4) 0; }
+
+.fg-breadcrumb { display: flex; align-items: center; gap: var(--fg-space-2); font-size: var(--fg-text-xs); color: var(--fg-ink-muted); }
+.fg-breadcrumb__sep { opacity: 0.5; }
+
+.fg-pagination { display: flex; align-items: center; gap: var(--fg-space-1); }
+
+/* A label that appears on hover, positioned by the wrapper it sits in. */
+.fg-tooltip { position: relative; }
+
+.fg-tooltip__bubble {
+  position: absolute;
+  bottom: calc(100% + var(--fg-space-2));
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  padding: var(--fg-space-1) var(--fg-space-2);
+  border-radius: var(--fg-radius-sm);
+  background: var(--fg-ink);
+  color: var(--fg-canvas);
+  font-size: var(--fg-text-xs);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fg-motion-fast) var(--fg-ease), transform var(--fg-motion-fast) var(--fg-ease);
+}
+
+.fg-tooltip:hover .fg-tooltip__bubble,
+.fg-tooltip:focus-within .fg-tooltip__bubble { opacity: 1; transform: translateX(-50%); }
+
+/* ---------------------------------------------------------------- utilities */
+
+/* Layout. These are the only way to arrange things: no bare flex/grid styles,
+   so spacing across the whole application comes from one scale. */
+.fg-stack { display: flex; flex-direction: column; }
+.fg-row { display: flex; flex-direction: row; align-items: center; }
+.fg-wrap { flex-wrap: wrap; }
+.fg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); }
+.fg-grid--2 { grid-template-columns: repeat(2, 1fr); }
+.fg-grid--3 { grid-template-columns: repeat(3, 1fr); }
+.fg-center { align-items: center; justify-content: center; }
+.fg-between { justify-content: space-between; }
+.fg-end { justify-content: flex-end; }
+.fg-start { align-items: flex-start; }
+.fg-grow { flex: 1; }
+
+.fg-gap-1 { gap: var(--fg-space-1); }
+.fg-gap-2 { gap: var(--fg-space-2); }
+.fg-gap-3 { gap: var(--fg-space-3); }
+.fg-gap-4 { gap: var(--fg-space-4); }
+.fg-gap-5 { gap: var(--fg-space-5); }
+.fg-gap-6 { gap: var(--fg-space-6); }
+
+.fg-pad-2 { padding: var(--fg-space-2); }
+.fg-pad-3 { padding: var(--fg-space-3); }
+.fg-pad-4 { padding: var(--fg-space-4); }
+.fg-pad-5 { padding: var(--fg-space-5); }
+
+.fg-mt-2 { margin-top: var(--fg-space-2); }
+.fg-mt-4 { margin-top: var(--fg-space-4); }
+.fg-mb-2 { margin-bottom: var(--fg-space-2); }
+.fg-mb-4 { margin-bottom: var(--fg-space-4); }
+
+/* Width. A closed set, so no screen ends up with an arbitrary measurement on it. */
+.fg-w-sm { width: 100%; max-width: 22rem; }
+.fg-w-md { width: 100%; max-width: 34rem; }
+.fg-w-lg { width: 100%; max-width: 52rem; }
+.fg-w-xl { width: 100%; max-width: 72rem; }
+.fg-w-full { width: 100%; }
+.fg-w-auto { width: auto; }
+
+/* Centres a width-limited block in the page. */
+.fg-container { margin-inline: auto; }
+
+.fg-text-xs { font-size: var(--fg-text-xs); }
+.fg-text-sm { font-size: var(--fg-text-sm); }
+.fg-text-lg { font-size: var(--fg-text-lg); }
+.fg-text-xl { font-size: var(--fg-text-xl); }
+.fg-muted { color: var(--fg-ink-muted); }
+.fg-strong { font-weight: 650; }
+.fg-mono { font-family: var(--fg-font-mono); }
+.fg-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fg-scroll { overflow: auto; }
+
+.fg-hide { display: none; }
+
+/* Visible to a screen reader, invisible on the page. */
+.fg-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- responsive */
+
+@media (max-width: 48rem) {
+  .fg-shell { grid-template-areas: "topbar" "main"; grid-template-columns: 1fr; }
+  .fg-sidebar { display: none; }
+  .fg-main { padding: var(--fg-space-4) var(--fg-space-3); }
+  .fg-grid--2, .fg-grid--3 { grid-template-columns: 1fr; }
+}
+
+/* Someone who has asked their system for less motion gets none of it. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

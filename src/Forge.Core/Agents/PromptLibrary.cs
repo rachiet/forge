@@ -43,6 +43,29 @@ public sealed class PromptLibrary(string root)
     /// </summary>
     public string Template(string name) => Read(Path.Combine(Root, "templates", name));
 
+    /// <summary>
+    /// A file from the UI kit, named as it sits under templates/ui — `forge-ui.css`,
+    /// `themes/slate.css`, `modes/dark.css`.
+    /// </summary>
+    public string UiAsset(string relative) =>
+        Read(Path.Combine(UiRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
+
+    /// <summary>
+    /// The theme ids the kit ships, one per file in templates/ui/themes, in name order.
+    /// </summary>
+    public IReadOnlyList<string> UiThemes()
+    {
+        var dir = Path.Combine(UiRoot, "themes");
+        return Directory.Exists(dir)
+            ? [.. Directory.EnumerateFiles(dir, "*.css")
+                  .Select(Path.GetFileNameWithoutExtension)
+                  .OfType<string>()
+                  .OrderBy(name => name, StringComparer.Ordinal)]
+            : [];
+    }
+
+    private string UiRoot => Path.Combine(Root, "templates", "ui");
+
     private static string Read(string path) =>
         File.Exists(path)
             ? File.ReadAllText(path)

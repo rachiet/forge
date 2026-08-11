@@ -1,0 +1,19 @@
+/* Mode: dark — maps the theme's dark palette into the tokens the kit reads,
+   whatever the viewer's system is set to. */
+
+:root {
+  color-scheme: dark;
+  --fg-canvas: var(--fg-dark-canvas);
+  --fg-surface: var(--fg-dark-surface);
+  --fg-surface-sunken: var(--fg-dark-surface-sunken);
+  --fg-ink: var(--fg-dark-ink);
+  --fg-ink-muted: var(--fg-dark-ink-muted);
+  --fg-ink-faint: var(--fg-dark-ink-faint);
+  --fg-border: var(--fg-dark-border);
+  --fg-border-strong: var(--fg-dark-border-strong);
+  --fg-overlay: var(--fg-dark-overlay);
+  --fg-shadow: var(--fg-dark-shadow);
+  --fg-on-accent: var(--fg-dark-on-accent);
+  --fg-accent-l: var(--fg-dark-accent-l);
+  --fg-accent-soft-l: var(--fg-dark-accent-soft-l);
+}

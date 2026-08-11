@@ -1,0 +1,44 @@
+/* Theme: sand — warm neutrals with a terracotta accent and softer corners.
+   For consumer-facing things that should feel friendly rather than corporate. */
+
+:root {
+  --fg-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fg-font-heading: var(--fg-font-sans);
+  --fg-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --fg-heading-weight: 620;
+  --fg-heading-tracking: -0.01em;
+
+  --fg-accent-h: 42;
+  --fg-accent-c: 0.135;
+
+  --fg-radius-base: 1.3;
+  --fg-density-base: 1;
+
+  --fg-light-canvas: oklch(0.982 0.008 80);
+  --fg-light-surface: oklch(1 0.003 80);
+  --fg-light-surface-sunken: oklch(0.958 0.011 80);
+  --fg-light-ink: oklch(0.27 0.02 60);
+  --fg-light-ink-muted: oklch(0.545 0.022 60);
+  --fg-light-ink-faint: oklch(0.695 0.018 60);
+  --fg-light-border: oklch(0.912 0.013 75);
+  --fg-light-border-strong: oklch(0.85 0.019 75);
+  --fg-light-overlay: oklch(0.27 0.02 60 / 0.42);
+  --fg-light-shadow: oklch(0.32 0.03 60 / 0.11);
+  --fg-light-on-accent: oklch(0.99 0 0);
+  --fg-light-accent-l: 0.58;
+  --fg-light-accent-soft-l: 0.955;
+
+  --fg-dark-canvas: oklch(0.2 0.011 60);
+  --fg-dark-surface: oklch(0.245 0.013 60);
+  --fg-dark-surface-sunken: oklch(0.285 0.015 60);
+  --fg-dark-ink: oklch(0.955 0.008 70);
+  --fg-dark-ink-muted: oklch(0.745 0.016 70);
+  --fg-dark-ink-faint: oklch(0.605 0.017 70);
+  --fg-dark-border: oklch(0.33 0.016 60);
+  --fg-dark-border-strong: oklch(0.41 0.019 60);
+  --fg-dark-overlay: oklch(0.13 0.011 60 / 0.65);
+  --fg-dark-shadow: oklch(0.09 0.01 60 / 0.5);
+  --fg-dark-on-accent: oklch(0.99 0 0);
+  --fg-dark-accent-l: 0.7;
+  --fg-dark-accent-soft-l: 0.32;
+}

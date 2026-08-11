@@ -164,6 +164,59 @@ movable and shareable, so keys must not ride along in that payload.
   guidance) — no more tasks stranded behind a message nobody reads, no DB surgery to
   resume. The autonomous loop never blocks on a human: an escalated task is skipped.
 
+### How generated interfaces look [DECIDED] (the UI kit)
+Clients describe behaviour, not aesthetics ("a box to type in, a list to see them"),
+and a model writing CSS per task under token pressure produces a different-looking
+app for every task. So appearance stops being generated work at all.
+- **Forge ships the components; nobody writes CSS.** `prompts/templates/ui/` holds
+  `forge-ui.css` (primitives, page shell, layout utilities, motion), `forge-ui.js`
+  (modal/toast/tabs/menu/carousel, driven by data attributes), `UI-KIT.md` (the class
+  catalogue) and one file per theme and mode. It lives beside the prompts for the same
+  reason they do: fixing one versioned file improves every future project. Taste is
+  paid for once, at authoring time.
+- **The harness installs it, per the "if it can be decided deterministically" rule.**
+  `UiKit.Ensure` runs on every task workspace (after `Prepare`, and again in `Submit`
+  before the commit, which is what makes the task that scaffolds the web project ship
+  the kit in its own commit) and writes `<runnable project>/wwwroot/forge-ui/` plus
+  `UI-KIT.md` at the repo root. The runnable project is found with
+  `AgentToolset.RunnableProjects`, the same discovery CI and delivery use. **No single
+  runnable project ⇒ no kit at all**, so a CLI tool or a library pays nothing.
+- **Files are overwritten, never policed.** An agent that edits or deletes a kit file
+  finds it restored before it can commit, so "don't touch the kit" needs no gate.
+- **The catalogue reaches the engineer through the repo, not a new prompt layer.**
+  `UI-KIT.md` is in `AgentRecipe.Engineer.AlwaysInContext` (and the reviewer's), and
+  `AppendCommon` skips absent files — so a project with no interface carries none of it
+  and no `Ui` task type was needed.
+- **Choosing is a selection, not authoring.** `choose_theme(theme, mode, accent,
+  density, radius)` is the Principal's, at design time; every argument is a value from
+  a closed set (`ThemeChoice`), stored as five `project_meta` rows and rendered into
+  `theme.css` as theme + mode + a knob block. A theme the model invented would be LLM
+  aesthetics again. Theme ids are read from the files on disk and each theme describes
+  itself in its opening comment (`UiKit.ThemeCatalogue`), so adding a theme is adding
+  one CSS file — no second list.
+- **The PM stays out of it.** The client says "dark, red tint" in chat, the PM records
+  it as a requirement, the Principal turns it into a theme id. A theme is code.
+- **Two doors for a later change.** A change request re-runs the design phase, which
+  can call `choose_theme` again; or the client uses the board's Appearance panel
+  (`POST /api/theme`), which writes `project_meta` and calls `UiKit.ApplyToTrunk` —
+  clone, install, commit, push, no agent. The second door exists because a finished
+  project has no task runs left to render through. It defers to a running worker,
+  which owns trunk.
+- **`UiGate` is the enforcement, not the prompt.** Prompts are manners; this repo's
+  stance is mechanical (the PM cannot read `src/` because `PathScope` refuses it).
+  Run from `CiRunner.Run` beside `StaticFileCheck`, and skipped entirely where the kit
+  is not installed. Four rules: no `style=` attribute, no literal colour or font
+  outside the kit, no stylesheet of the application's own beyond one `app.css`, and no
+  class that neither the kit nor `app.css` defines. `app.css` is the escape hatch — a
+  missing component must not deadlock a task — and `UiGate.CustomStyleReport` puts what
+  it contains into the reviewer's packet, so the gate detects and the reviewer judges.
+- **Sizes are classes, never numbers.** `fg-w-sm|md|lg|xl|full`, `fg-gap-1..6`,
+  `fg-pad-2..5`. Arbitrary measurements are what make a generated page look crooked.
+- **`fg-` prefix, BEM classes, `--fg-` tokens named by role** (`surface`, `ink`,
+  `border`, `accent`), in three tiers: theme primitives → mode mapping → derived ramps.
+  Colours are oklch, so one hue knob rotates the whole accent ramp perceptually. The
+  palette deliberately avoids fg/bg naming, since the prefix already means Forge.
+
 ### Handing the finished project over [DECIDED]
 - **A completed project is checked out, not just merged.** `repo.git` is bare and task
   workspaces are deleted after merge, so `TaskRunner.DeliverAsync` clones trunk to

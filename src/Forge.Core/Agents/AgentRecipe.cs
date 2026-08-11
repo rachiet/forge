@@ -58,7 +58,9 @@ public sealed record AgentRecipe
         Tier = ModelTier.Coding,
         RolePrompt = "engineer",
         InstancePrefix = "eng",
-        AlwaysInContext = ["CONVENTIONS.md"],
+        // UI-KIT.md is present only where the UI kit is installed; AlwaysInContext skips
+        // a file that is not there.
+        AlwaysInContext = ["CONVENTIONS.md", Ui.UiKit.CatalogueFile],
         Tools = ["read_file", "list_dir", "grep", "write_file", "run", "check_static",
                  "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,
@@ -100,7 +102,8 @@ public sealed record AgentRecipe
         RolePrompt = "principal",
         InstancePrefix = "prin",
         AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md", "docs/requirements/INDEX.md"],
-        Tools = ["read_file", "list_dir", "grep", "write_file", "create_task", "add_dependency", "done", "escalate"],
+        Tools = ["read_file", "list_dir", "grep", "write_file", "create_task", "choose_theme",
+                 "add_dependency", "done", "escalate"],
         Scope = PathScope.Workspace,
         ToolAllowlist = [],
         DefaultBudget = 900_000,
@@ -118,7 +121,8 @@ public sealed record AgentRecipe
         Tier = ModelTier.Reasoning,
         RolePrompt = "principal-review",
         InstancePrefix = "rev",
-        AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md"],
+        // The kit catalogue: the components the diff's markup should have been built from.
+        AlwaysInContext = ["PROJECT.md", "CONVENTIONS.md", Ui.UiKit.CatalogueFile],
         // reject_bug lets a bug-fix review close a bug whose reported defect is not real.
         Tools = ["read_file", "list_dir", "grep", "write_file", "approve", "request_changes", "reject_bug", "escalate"],
         Scope = PathScope.Workspace,
@@ -195,7 +199,7 @@ public sealed record AgentRecipe
         Tier = ModelTier.Reasoning,
         RolePrompt = "engineer",
         InstancePrefix = "prin-impl",
-        AlwaysInContext = ["CONVENTIONS.md"],
+        AlwaysInContext = ["CONVENTIONS.md", Ui.UiKit.CatalogueFile],
         Tools = ["read_file", "list_dir", "grep", "write_file", "run", "check_static",
                  "progress_note", "done", "escalate"],
         Scope = PathScope.Workspace,

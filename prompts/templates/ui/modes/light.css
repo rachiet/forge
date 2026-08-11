@@ -1,0 +1,18 @@
+/* Mode: light — maps the theme's light palette into the tokens the kit reads. */
+
+:root {
+  color-scheme: light;
+  --fg-canvas: var(--fg-light-canvas);
+  --fg-surface: var(--fg-light-surface);
+  --fg-surface-sunken: var(--fg-light-surface-sunken);
+  --fg-ink: var(--fg-light-ink);
+  --fg-ink-muted: var(--fg-light-ink-muted);
+  --fg-ink-faint: var(--fg-light-ink-faint);
+  --fg-border: var(--fg-light-border);
+  --fg-border-strong: var(--fg-light-border-strong);
+  --fg-overlay: var(--fg-light-overlay);
+  --fg-shadow: var(--fg-light-shadow);
+  --fg-on-accent: var(--fg-light-on-accent);
+  --fg-accent-l: var(--fg-light-accent-l);
+  --fg-accent-soft-l: var(--fg-light-accent-soft-l);
+}

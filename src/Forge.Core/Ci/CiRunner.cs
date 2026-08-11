@@ -42,6 +42,11 @@ public static class CiRunner
         if (StaticFileCheck.Check(workspaceDir) is { } unparseable)
             return new CiResult(false, "static", unparseable);
 
+        // Styling is read from the same files, and a page that ignores the UI kit builds
+        // and tests exactly like one that uses it.
+        if (Ui.UiGate.Check(workspaceDir) is { } unstyled)
+            return new CiResult(false, "ui", unstyled);
+
         var buildable = Directory.EnumerateFiles(workspaceDir, "*.sln", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(workspaceDir, "*.csproj", SearchOption.AllDirectories))
             .Any(p => !p.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}"));

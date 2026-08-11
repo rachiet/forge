@@ -13,6 +13,7 @@ using Forge.Core.Qa;
 using Forge.Core.Review;
 using Forge.Core.Secrets;
 using Forge.Core.Tools;
+using Forge.Core.Ui;
 using Forge.Core.Workspaces;
 using TaskStatus = Forge.Core.Model.TaskStatus;
 
@@ -540,6 +541,8 @@ public sealed class TaskRunner(
 
         var checkout = paths.ProjectBuild(project);
         _workspaces.PrepareTrunkClone(checkout);
+        // The client runs this copy, so it carries the theme as it now stands.
+        UiKit.Ensure(checkout, ThemeChoice.From(_meta), prompts);
 
         // QA's recorded command wins, since it really started the app and knows its port.
         var delivery = _meta.Get("run_command") is { Length: > 0 } recorded
@@ -960,6 +963,7 @@ public sealed class TaskRunner(
         if (task.BranchName is null) SetBranch(task.Id, branch);
 
         _workspaces.Prepare(task, branch);
+        InstallUiKit(task.Id, log);
         log.Event(EventType.GitBranch, $"prepared workspace on {branch}");
         var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
 
@@ -999,6 +1003,20 @@ public sealed class TaskRunner(
         conn.Execute("UPDATE tasks SET branch_name = @branch WHERE id = @taskId", new { taskId, branch });
 
     /// <summary>
+    /// Writes the UI kit and the project's chosen theme into a task's workspace, replacing
+    /// whatever is there. Does nothing when the task has no workspace, or when the repo has no
+    /// single runnable project to serve the files from.
+    /// </summary>
+    private void InstallUiKit(long taskId, ForgeLogger log)
+    {
+        if (!_workspaces.Exists(taskId)) return;
+
+        var theme = ThemeChoice.From(_meta);
+        if (UiKit.Ensure(_workspaces.Path(taskId), theme, prompts))
+            log.Message($"UI kit refreshed in the workspace: {theme.Describe()}.");
+    }
+
+    /// <summary>
     /// Commits and pushes what the agent produced, runs CI over it, and hands it to review by
     /// leaving it in_review for the next tick. Whether it advances is read from git and from
     /// CI's exit code, not from the agent's claim.
@@ -1006,6 +1024,9 @@ public sealed class TaskRunner(
     private TaskRunOutcome Submit(
         TaskRecord task, string branch, AgentRunResult result, ForgeLogger log)
     {
+        // Again before the commit, so the task that scaffolded the web project commits the
+        // kit alongside it.
+        InstallUiKit(task.Id, log);
         _workspaces.CommitAll(task.Id, $"task({task.Id}): {task.Title}");
 
         // The engineer's turn in the thread. It has no tool for answering a review, so the

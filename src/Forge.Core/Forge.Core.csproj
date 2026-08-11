@@ -11,9 +11,11 @@
   </ItemGroup>
 
   <!-- Prompt layers A and B travel with the binary; PromptLibrary reads them from
-       AppContext.BaseDirectory unless FORGE_PROMPTS overrides it. -->
+       AppContext.BaseDirectory unless FORGE_PROMPTS overrides it. Every file, not just
+       markdown: templates/ui holds the UI kit's CSS and JavaScript, which UiKit copies
+       into client repos. -->
   <ItemGroup>
-    <Content Include="$(MSBuildThisFileDirectory)../../prompts/**/*.md" Link="prompts/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)../../prompts/**/*" Link="prompts/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

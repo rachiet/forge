@@ -11,6 +11,7 @@ using Forge.Core.Logging;
 using Forge.Core.Model;
 using Forge.Core.Scheduling;
 using Forge.Core.Secrets;
+using Forge.Core.Ui;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -206,6 +207,52 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             return Results.Accepted();
         });
 
+        // What the interface currently looks like, and everything it could look like.
+        app.MapGet("/api/theme", (string project) =>
+        {
+            if (Resolve(project) is not { } dbPath) return Results.NotFound();
+            using var conn = Database.OpenProject(dbPath);
+            var prompts = PromptLibrary.Resolve();
+
+            return Results.Ok(new
+            {
+                Current = ThemeChoice.From(new ProjectMetaRepository(conn)),
+                Themes = UiKit.ThemeCatalogue(prompts),
+                Modes = ThemeChoice.Modes,
+                Accents = ThemeChoice.Accents.Keys,
+                Densities = ThemeChoice.Densities.Keys,
+                Radii = ThemeChoice.Radii.Keys,
+            });
+        });
+
+        // The client changing the look themselves: the choice is recorded and installed
+        // straight onto trunk, with no agent and no task.
+        app.MapPost("/api/theme", (ThemeChange request) =>
+        {
+            if (Resolve(request.Project) is not { } dbPath) return Results.NotFound();
+            var prompts = PromptLibrary.Resolve();
+
+            var choice = new ThemeChoice(
+                request.Theme ?? ThemeChoice.DefaultTheme,
+                request.Mode ?? ThemeChoice.DefaultMode,
+                request.Accent,
+                request.Density ?? ThemeChoice.DefaultDensity,
+                request.Radius ?? ThemeChoice.DefaultRadius);
+
+            if (choice.Invalid(UiKit.Themes(prompts)) is { } problem)
+                return Results.BadRequest(new { error = problem });
+
+            using var conn = Database.OpenProject(dbPath);
+            choice.Save(new ProjectMetaRepository(conn));
+
+            // A running build owns trunk, so leave the write to its next task.
+            var applied = _workerProject != request.Project
+                       && UiKit.ApplyToTrunk(_paths, request.Project, choice, prompts);
+
+            LoggerFor(request.Project).Message($"Client set the interface to {choice.Describe()}.");
+            return Results.Ok(new { theme = choice.Describe(), appliedToTrunk = applied });
+        });
+
         app.MapPost("/api/run", (RunRequest request) =>
         {
             if (Resolve(request.Project) is not { } dbPath) return Results.NotFound();
@@ -392,4 +439,6 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     public sealed record BudgetChange(string Project, decimal? BudgetUsd);
     public sealed record RunRequest(string Project, string Action);
     public sealed record ProposalDecision(string Project, string Decision);
+    public sealed record ThemeChange(
+        string Project, string? Theme, string? Mode, string? Accent, string? Density, string? Radius);
 }

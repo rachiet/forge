@@ -1,0 +1,36 @@
+/* Mode: auto — light by default, dark when the viewer's system asks for it. */
+
+:root {
+  color-scheme: light dark;
+  --fg-canvas: var(--fg-light-canvas);
+  --fg-surface: var(--fg-light-surface);
+  --fg-surface-sunken: var(--fg-light-surface-sunken);
+  --fg-ink: var(--fg-light-ink);
+  --fg-ink-muted: var(--fg-light-ink-muted);
+  --fg-ink-faint: var(--fg-light-ink-faint);
+  --fg-border: var(--fg-light-border);
+  --fg-border-strong: var(--fg-light-border-strong);
+  --fg-overlay: var(--fg-light-overlay);
+  --fg-shadow: var(--fg-light-shadow);
+  --fg-on-accent: var(--fg-light-on-accent);
+  --fg-accent-l: var(--fg-light-accent-l);
+  --fg-accent-soft-l: var(--fg-light-accent-soft-l);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg-canvas: var(--fg-dark-canvas);
+    --fg-surface: var(--fg-dark-surface);
+    --fg-surface-sunken: var(--fg-dark-surface-sunken);
+    --fg-ink: var(--fg-dark-ink);
+    --fg-ink-muted: var(--fg-dark-ink-muted);
+    --fg-ink-faint: var(--fg-dark-ink-faint);
+    --fg-border: var(--fg-dark-border);
+    --fg-border-strong: var(--fg-dark-border-strong);
+    --fg-overlay: var(--fg-dark-overlay);
+    --fg-shadow: var(--fg-dark-shadow);
+    --fg-on-accent: var(--fg-dark-on-accent);
+    --fg-accent-l: var(--fg-dark-accent-l);
+    --fg-accent-soft-l: var(--fg-dark-accent-soft-l);
+  }
+}

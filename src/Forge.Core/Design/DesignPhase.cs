@@ -71,7 +71,8 @@ public sealed class DesignPhase(
         var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
-        var brief = (isChangeRequest ? ChangeRequestBrief() : Brief()) + ProgressSection();
+        var brief = (isChangeRequest ? ChangeRequestBrief() : Brief())
+                  + ProgressSection() + ThemeSection();
 
         var result = await loop
             .RunChatAsync([new LlmMessage("user", brief)], executor, ct)
@@ -118,6 +119,38 @@ public sealed class DesignPhase(
         the file is named in `docs/requirements/`. Work that serves none — scaffolding, a
         chore — is reported separately, so leave its ref off rather than guessing at one.
         """;
+
+    /// <summary>
+    /// The theme section of the brief: the themes the kit ships, each with what it is for, and
+    /// the instruction to pick one with `choose_theme`. Empty when the kit ships none.
+    /// </summary>
+    private string ThemeSection()
+    {
+        var themes = Ui.UiKit.ThemeCatalogue(prompts);
+        if (themes.Count == 0) return "";
+
+        return $"""
+
+
+            ## How the interface looks
+
+            If this project has a user interface, call `choose_theme` before you create any
+            tasks. Forge ships a component library — buttons, forms, cards, lists, tables,
+            modals, tabs, menus, carousels, empty states, layout and motion — and installs it
+            into the repo itself. Engineers build pages from its classes; nobody writes CSS,
+            and no task should ask them to.
+
+            The themes, each with what it is for:
+
+            {string.Join("\n", themes.Select(t => $"- {t}"))}
+
+            Pick for what is being built, not for taste. `mode`, `accent`, `density` and
+            `radius` adjust it; pass only what the client actually asked for and leave the
+            rest at the theme's own character.
+
+            A project with no interface at all — a library, a CLI tool — skips this.
+            """;
+    }
 
     /// <summary>The brief for a new project: build the structure, the contract and the DAG.</summary>
     private static string Brief() => $"""

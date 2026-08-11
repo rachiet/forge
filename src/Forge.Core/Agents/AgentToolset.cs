@@ -133,6 +133,23 @@ public sealed partial class AgentToolset(
                                        + "operations. Omit for work with no HTTP surface."),
                 Optional("budget", "token cap for one agent on this task. Defaults to 60000.")),
 
+            ["choose_theme"] = new(
+                "set how this project's user interface looks. Every page is built from Forge's UI "
+              + "kit, so this is the whole visual decision: you pick a theme and how it is "
+              + "adjusted, and no engineer writes any styling. Call it once, before creating "
+              + "tasks, for any project with a user interface.",
+                Required("theme", "a theme id from the list in your brief. Pick the one whose "
+                                + "character suits what is being built, not your favourite."),
+                Optional("mode", "`auto` (default, follows the viewer's system), `light` or "
+                               + "`dark`. Only pass one when the client asked for it."),
+                Optional("accent", "the interactive colour: red, orange, amber, green, teal, "
+                                 + "blue, indigo, violet, pink or slate. Omit to keep the "
+                                 + "theme's own."),
+                Optional("density", "how tight the spacing is: `compact`, `normal` (default) or "
+                                  + "`roomy`. Compact suits data-heavy screens."),
+                Optional("radius", "how round the corners are, relative to the theme: `sharp`, "
+                                 + "`default` or `round`.")),
+
             ["add_dependency"] = new("make one task wait for another. Dependencies flow one way: an "
                                    + "edge that would close a cycle is refused.",
                 Required("task", "the id of the task that must wait."),
@@ -252,6 +269,7 @@ public sealed partial class AgentToolset(
                 "check_static" => CheckStatic(),
                 "propose_requirements" => ProposeRequirements(call),
                 "create_task" => CreateTask(call),
+                "choose_theme" => ChooseTheme(call),
                 "add_dependency" => AddDependency(call),
                 "break_and_relink" => BreakAndRelink(call),
                 "redirect" => Redirect(call),
@@ -514,6 +532,31 @@ public sealed partial class AgentToolset(
         _createdTaskIds.Add(created.Id);
         return new ToolOutcome($"Task {created.Id} created: {created.Title} " +
             $"(created — the client's sign-off makes it ready).");
+    }
+
+    /// <summary>
+    /// Records how the project's interface should look, as rows in project_meta. The harness
+    /// renders them into the repo's theme.css when it next installs the kit.
+    /// </summary>
+    private ToolOutcome ChooseTheme(ToolCall call)
+    {
+        var choice = new Ui.ThemeChoice(
+            call.Arg("theme"),
+            call.Optional("mode") ?? Ui.ThemeChoice.DefaultMode,
+            call.Optional("accent"),
+            call.Optional("density") ?? Ui.ThemeChoice.DefaultDensity,
+            call.Optional("radius") ?? Ui.ThemeChoice.DefaultRadius);
+
+        var prompts = PromptLibrary.Resolve();
+        if (choice.Invalid(Ui.UiKit.Themes(prompts)) is { } problem)
+            return new ToolOutcome($"ERROR: {problem}");
+
+        choice.Save(new ProjectMetaRepository(connection));
+        return new ToolOutcome(
+            $"The interface will use {choice.Describe()}. Forge installs the kit and this theme "
+            + $"into the repo itself; every engineer is given `{Ui.UiKit.CatalogueFile}` and builds "
+            + "pages from its classes. Do not create a task for styling, and do not ask anyone to "
+            + "write CSS.");
     }
 
     /// <summary>

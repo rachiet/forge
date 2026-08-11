@@ -172,6 +172,15 @@
   .btn.stop { background:var(--pending); color:#fff; border-color:transparent; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
 
+  /* appearance panel — five selects that set the built application's look */
+  .appearance { display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+                padding:10px 12px; margin-top:4px; width:100%;
+                border:1px solid var(--line); border-radius:9px; background:var(--surface); }
+  .appearance label { font-family:var(--mono); font-size:.62rem; letter-spacing:.1em;
+                      text-transform:uppercase; color:var(--faint); }
+  .appearance .hint { font-family:var(--mono); font-size:.62rem; color:var(--faint);
+                      flex-basis:100%; }
+
   /* budget strip */
   .budget { display:flex; align-items:baseline; gap:8px; justify-content:flex-end;
             font-family:var(--mono); font-size:.68rem; color:var(--faint); }
@@ -260,6 +269,16 @@
       <span class="runpill" id="runPill">● …</span>
       <button class="btn primary hidden" id="resumeBtn">Resume build</button>
       <button class="btn stop hidden" id="stopBtn">Pause build</button>
+      <button class="btn" id="appearanceBtn">Appearance</button>
+      <div class="appearance hidden" id="appearancePanel">
+        <label for="thTheme">Theme</label><select id="thTheme"></select>
+        <label for="thMode">Mode</label><select id="thMode"></select>
+        <label for="thAccent">Accent</label><select id="thAccent"></select>
+        <label for="thDensity">Density</label><select id="thDensity"></select>
+        <label for="thRadius">Corners</label><select id="thRadius"></select>
+        <button class="btn primary" id="thApply">Apply</button>
+        <span class="hint" id="thHint"></span>
+      </div>
     </div>
   </header>
 
@@ -758,6 +777,51 @@ $('newForm').addEventListener('submit', async e => {
   await refreshProjects();
   selectProject(body.name);
   $('msg').focus();
+});
+
+/* The look of the application being built. Options and the current choice are fetched
+   when the panel opens. */
+$('appearanceBtn').addEventListener('click', async () => {
+  const panel = $('appearancePanel');
+  panel.classList.toggle('hidden');
+  if (panel.classList.contains('hidden')) return;
+
+  const d = await (await fetch(`/api/theme?project=${encodeURIComponent(project)}`)).json();
+  const fill = (id, values, selected) => {
+    $(id).innerHTML = values
+      .map(v => `<option${v === selected ? ' selected' : ''}>${v}</option>`).join('');
+  };
+  // The catalogue reads "slate — cool grey neutrals…"; the id is the part before the dash.
+  fill('thTheme', d.themes.map(t => t.split(' — ')[0]), d.current.theme);
+  fill('thMode', d.modes, d.current.mode);
+  fill('thAccent', ['(theme)', ...d.accents], d.current.accent || '(theme)');
+  fill('thDensity', d.densities, d.current.density);
+  fill('thRadius', d.radii, d.current.radius);
+  $('thHint').textContent = d.themes.find(t => t.startsWith(d.current.theme)) || '';
+});
+
+$('thTheme').addEventListener('change', async () => {
+  const d = await (await fetch(`/api/theme?project=${encodeURIComponent(project)}`)).json();
+  $('thHint').textContent = d.themes.find(t => t.startsWith($('thTheme').value)) || '';
+});
+
+$('thApply').addEventListener('click', async () => {
+  const accent = $('thAccent').value;
+  const r = await fetch('/api/theme', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project,
+      theme: $('thTheme').value,
+      mode: $('thMode').value,
+      accent: accent === '(theme)' ? null : accent,
+      density: $('thDensity').value,
+      radius: $('thRadius').value,
+    }),
+  });
+  const body = await r.json().catch(() => ({}));
+  $('thHint').textContent = !r.ok ? (body.error || 'Could not apply that.')
+    : body.appliedToTrunk ? 'Applied — restart the app to see it.'
+    : 'Saved — it lands on the next piece of work that runs.';
 });
 
 $('raiseBudget').addEventListener('click', async () => {

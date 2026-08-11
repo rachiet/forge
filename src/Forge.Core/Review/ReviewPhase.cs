@@ -49,7 +49,8 @@ public sealed class ReviewPhase(
         var diff = workspaces.DiffAgainstTrunk(task.Id, branch);
         var result = await loop
             .RunReviewAsync(
-                [new LlmMessage("user", Brief(task, diff, new DiscussionRepository(conn).History(task.Id)))],
+                [new LlmMessage("user", Brief(task, diff, new DiscussionRepository(conn).History(task.Id),
+                    Ui.UiGate.CustomStyleReport(workspaces.Path(task.Id))))],
                 task, executor, ct)
             .ConfigureAwait(false);
 
@@ -84,7 +85,7 @@ public sealed class ReviewPhase(
     /// The reviewer's opening turn: the task, its acceptance criteria, the diff, and what has
     /// already been said about it — without which a fresh reviewer re-argues its own verdicts.
     /// </summary>
-    private static string Brief(TaskRecord task, string diff, string history) => $"""
+    private static string Brief(TaskRecord task, string diff, string history, string? bespokeStyling) => $"""
         # Review
 
         Task {task.Id}: {task.Title}
@@ -123,6 +124,13 @@ public sealed class ReviewPhase(
         request_changes for a real defect whose fix is inadequate.
         """ : "")}
 
+        {(bespokeStyling is { Length: > 0 } ? $"""
+
+        ## Styling written by hand
+
+        {bespokeStyling}
+
+        """ : "")}
         ## Diff (task branch against trunk)
 
         {diff}
