@@ -63,6 +63,43 @@
                    text-transform:uppercase; color:var(--faint); }
 
   .grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:20px; align-items:start; }
+
+  /* Three page modes. `new` is the create form on its own, `landing` is the
+     conversation on its own, `board` is the plan beside it. Only the third has
+     two columns; the first two are one centred reading column. */
+  .newpane { max-width:34rem; margin:8vh auto 0; padding:26px 28px 22px; }
+  .newpane h2 { margin:0 0 18px; font-size:1.25rem; letter-spacing:-.01em; }
+  .page:not(.mode-new) .newpane { display:none; }
+  .page.mode-new .grid, .page.mode-landing .grid { display:block; }
+  .page.mode-new .rail, .page.mode-landing .rail,
+  .page.mode-new .chat { display:none; }
+  .page.mode-new .grandtotal, .page.mode-landing .grandtotal,
+  .page.mode-new .statusrow, .page.mode-landing .statusrow { display:none; }
+  .page.mode-new .projwrap, .page.mode-new #newProject { visibility:hidden; }
+
+  /* Landing: the greeting and a prompt box, nothing else on the page. */
+  .page.mode-landing .chat { max-width:46rem; margin:6vh auto 0; position:static;
+                             height:auto; min-height:66vh; border:0; background:transparent;
+                             box-shadow:none; }
+  .page.mode-landing .chat > .card-head { display:none; }
+  .page.mode-landing .thread { padding:0 4px 20px; }
+  .page.mode-landing .msg { max-width:100%; font-size:1rem; }
+  .page.mode-landing .composer { border:1px solid var(--line); border-radius:14px;
+                                 background:var(--surface); padding:10px; box-shadow:var(--shadow);
+                                 align-items:flex-end; }
+  .page.mode-landing .composer textarea { border:0; background:transparent; min-height:4.5rem;
+                                          font-size:1rem; padding:8px 6px; }
+  .page.mode-landing .composer textarea:focus-visible { outline:none; }
+
+  /* Approving the spec is the moment the board appears: the plan fades in from the
+     left and the conversation settles into its column. Runs once, on the flip. */
+  @keyframes pane-in { from { opacity:0; transform:translateX(-20px); } to { opacity:1; transform:none; } }
+  @keyframes chat-settle { from { transform:translateX(-6%); } to { transform:none; } }
+  .page.just-planned .rail { animation:pane-in .45s cubic-bezier(.2,0,.13,1) both; }
+  .page.just-planned .chat { animation:chat-settle .45s cubic-bezier(.2,0,.13,1) both; }
+  @media (prefers-reduced-motion: reduce) {
+    .page.just-planned .rail, .page.just-planned .chat { animation:none; }
+  }
   @media (max-width:900px) { .grid { grid-template-columns:1fr; } }
   .rail { display:flex; flex-direction:column; gap:20px; min-width:0; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:10px;
@@ -161,8 +198,9 @@
                     background:var(--sunken); border:1px solid var(--line); border-radius:6px;
                     padding:8px 10px; overflow-x:auto; white-space:pre; user-select:all; }
   .composer { border-top:1px solid var(--line); padding:12px; display:flex; gap:8px; background:var(--sunken); }
-  .composer input { flex:1; min-width:0; font:inherit; font-size:.9rem; color:var(--ink);
-                    background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 12px; }
+  .composer textarea { flex:1; min-width:0; font:inherit; font-size:.9rem; color:var(--ink); resize:none;
+                       background:var(--surface); border:1px solid var(--line); border-radius:8px;
+                       padding:9px 12px; line-height:1.45; max-height:40vh; }
   .composer button { font-family:var(--mono); font-size:.74rem; letter-spacing:.08em; text-transform:uppercase;
                      background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 16px; cursor:pointer; }
   .composer button:disabled { opacity:.5; cursor:not-allowed; }
@@ -217,21 +255,22 @@
                    padding:1px 4px; border-radius:4px; }
   .specbody p { margin:6px 0; }
 
-  /* create-project dialog */
+  /* The review dialog and the create page share one form treatment. */
   dialog { border:1px solid var(--line); border-radius:12px; background:var(--surface);
            color:var(--ink); padding:0; box-shadow:var(--shadow); width:min(420px,92vw); }
   dialog::backdrop { background:rgba(0,0,0,.45); }
-  dialog form { padding:20px; display:flex; flex-direction:column; gap:14px; }
-  dialog h2 { margin:0; font-size:1.15rem; }
-  dialog label { display:flex; flex-direction:column; gap:5px; font-family:var(--mono);
+  :is(dialog, .newpane) form { display:flex; flex-direction:column; gap:14px; }
+  dialog form { padding:20px; }
+  :is(dialog, .newpane) h2 { margin:0; font-size:1.15rem; }
+  :is(dialog, .newpane) label { display:flex; flex-direction:column; gap:5px; font-family:var(--mono);
                  font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
-  dialog input, dialog select { font-family:var(--sans); font-size:.92rem; text-transform:none;
+  :is(dialog, .newpane) :is(input, select) { font-family:var(--sans); font-size:.92rem; text-transform:none;
                 letter-spacing:normal; padding:9px 11px; border:1px solid var(--line);
                 border-radius:8px; background:var(--ground); color:var(--ink); }
-  dialog .hint { font-family:var(--sans); font-size:.74rem; color:var(--faint);
+  :is(dialog, .newpane) .hint { font-family:var(--sans); font-size:.74rem; color:var(--faint);
                  text-transform:none; letter-spacing:normal; }
-  dialog .row { display:flex; gap:10px; justify-content:flex-end; }
-  dialog .err { border-radius:8px; }
+  :is(dialog, .newpane) .row { display:flex; gap:10px; justify-content:flex-end; }
+  :is(dialog, .newpane) .err { border-radius:8px; }
 
   /* review dialog — wider than the create form, since it holds the whole draft */
   dialog.review { width:min(760px,94vw); }
@@ -277,6 +316,30 @@
   </header>
 
   <div class="grid">
+
+    <!-- Starting a project is a page of its own, not a dialog over somebody else's board. -->
+    <section class="newpane card" id="newPane">
+      <form id="newForm">
+        <h2>Start a new project</h2>
+        <label>Project name
+          <input id="npName" required placeholder="weatherboard" autocomplete="off">
+          <span class="hint">Letters, digits, hyphen and underscore — it becomes the folder name.</span>
+        </label>
+        <label>Budget
+          <input id="npBudget" type="number" min="1" step="1" value="25" required>
+          <span class="hint">A hard cap in US dollars. You can raise it later.</span>
+        </label>
+        <label>Model provider
+          <select id="npProvider"></select>
+          <span class="hint">Needs that provider's key in ~/forge_env.</span>
+        </label>
+        <p class="err hidden" id="npErr"></p>
+        <div class="row">
+          <button class="btn" id="npCancel" type="button">Cancel</button>
+          <button class="btn primary" id="npGo">Go</button>
+        </div>
+      </form>
+    </section>
     <main class="rail" id="rail"></main>
 
     <aside class="card chat">
@@ -300,7 +363,7 @@
       </div>
       <p class="err hidden" id="chatErr"></p>
       <form class="composer" id="composer">
-        <input type="text" id="msg" placeholder="Message…" aria-label="Message" autocomplete="off">
+        <textarea id="msg" rows="1" placeholder="Message…" aria-label="Message"></textarea>
         <button type="submit" id="send">Send</button>
       </form>
     </aside>
@@ -320,28 +383,6 @@
   </div>
 </dialog>
 
-<dialog id="newDialog">
-  <form method="dialog" id="newForm">
-    <h2>Start a new project</h2>
-    <label>Project name
-      <input id="npName" required placeholder="weatherboard" autocomplete="off">
-      <span class="hint">Letters, digits, hyphen and underscore — it becomes the folder name.</span>
-    </label>
-    <label>Budget
-      <input id="npBudget" type="number" min="1" step="1" value="25" required>
-      <span class="hint">A hard cap in US dollars. You can raise it later.</span>
-    </label>
-    <label>Model provider
-      <select id="npProvider"></select>
-      <span class="hint">Needs that provider's key in ~/forge_env.</span>
-    </label>
-    <p class="err hidden" id="npErr"></p>
-    <div class="row">
-      <button class="btn" value="cancel" id="npCancel" type="button">Cancel</button>
-      <button class="btn primary" id="npGo">Go</button>
-    </div>
-  </form>
-</dialog>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -397,6 +438,27 @@ function setFavicon(needed) {
     document.head.appendChild(link);
   }
   link.href = c.toDataURL('image/png');
+}
+
+// Which of the three layouts the page is in. `board` arrives only when the client has
+// approved something to build, and the animation fires on that one transition.
+let creating = false;
+let wasPlanned = null;
+
+function setMode(mode) {
+  const page = document.querySelector('.page');
+  for (const m of ['mode-new', 'mode-landing', 'mode-board']) page.classList.toggle(m, m === `mode-${mode}`);
+  if (mode !== 'board') { page.classList.remove('just-planned'); wasPlanned = null; }
+}
+
+function showBoardMode(planned) {
+  setMode(planned ? 'board' : 'landing');
+  if (planned && wasPlanned === false) {
+    const page = document.querySelector('.page');
+    page.classList.add('just-planned');
+    setTimeout(() => page.classList.remove('just-planned'), 600);
+  }
+  wasPlanned = planned;
 }
 
 function selectProject(name) {
@@ -577,13 +639,19 @@ async function refreshProjects() {
   }
   document.querySelector('.projwrap').classList.toggle('single', d.projects.length < 2);
 
-  if (!d.projects.length) { showEmptyState(); return; }
+  if (!d.projects.length) {
+    showEmptyState();
+    // Nothing to look at and only one thing to do, so offer it rather than a bare page.
+    if (!creating) { creating = true; $('newProject').click(); }
+    return;
+  }
   if (!project || !d.projects.some(p => p.name === project)) selectProject(d.projects[0].name);
   picker.value = project;
 }
 
 function showEmptyState() {
   project = null;
+  wasPlanned = null;
   $('projName').textContent = '';
   $('runPill').classList.add('hidden');
   $('rail').innerHTML = `<section class="card"><div class="placeholder">
@@ -640,6 +708,8 @@ async function poll() {
       $('msg').placeholder = `Message ${agentName}…`;
       $('msg').setAttribute('aria-label', `Message ${agentName}`);
     }
+
+    if (!creating) showBoardMode(d.planned);
 
     const bar = $('approveBar');
     bar.classList.toggle('hidden', !d.proposal);
@@ -716,9 +786,15 @@ $('newProject').addEventListener('click', () => {
   $('npProvider').innerHTML = providers.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   $('npErr').classList.add('hidden');
   $('npName').value = '';
-  $('newDialog').showModal();
+  creating = true;
+  setMode('new');
+  $('npName').focus();
 });
-$('npCancel').addEventListener('click', () => $('newDialog').close());
+
+$('npCancel').addEventListener('click', () => {
+  creating = false;
+  if (project) poll(); else refreshProjects();
+});
 
 $('newForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -736,10 +812,19 @@ $('newForm').addEventListener('submit', async e => {
     $('npErr').classList.remove('hidden');
     return;
   }
-  $('newDialog').close();
+  creating = false;
   await refreshProjects();
   selectProject(body.name);
   $('msg').focus();
+});
+
+$('msg').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); }
+});
+$('msg').addEventListener('input', () => {
+  const box = $('msg');
+  box.style.height = 'auto';
+  box.style.height = `${box.scrollHeight}px`;
 });
 
 $('raiseBudget').addEventListener('click', async () => {
