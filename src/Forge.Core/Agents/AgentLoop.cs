@@ -221,9 +221,19 @@ public sealed class AgentLoop(
                     return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
                         why, lastMessage);
                 }
-                conversation.Add(new LlmMessage("user",
-                    "No tool call found in your last turn. Nothing happened. Emit a " +
-                    "<tool name=\"...\"> block, or finish your turn with the tool that ends it."));
+                // Shows the shape rather than naming it: a model that just wrote its own
+                // short form needs to see the one the parser reads.
+                conversation.Add(new LlmMessage("user", """
+                    Your last turn contained no tool call, so nothing happened and nothing
+                    changed. Text alone is discarded — including a plan, a question, or a
+                    request for access you already have.
+
+                    Reply with the call itself, in this exact form:
+
+                    <tool name="read_file">
+                    <arg name="path">src/App/Program.cs</arg>
+                    </tool>
+                    """));
                 continue;
             }
 

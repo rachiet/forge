@@ -61,7 +61,14 @@ public sealed class PromptAssembler(PromptLibrary prompts)
         var sb = new StringBuilder($$$"""
             # Tools
 
-            Act by emitting tool calls. A turn with no tool call accomplishes nothing.
+            Your entire reply is tool calls and nothing else. Anything outside a call is
+            discarded, so a turn without one accomplishes nothing.
+
+            The tools are live and already authorised, and your workspace — including
+            every file named in your packet — is on disk at your root. There is nothing
+            to check and nobody to ask: if you need to read something, call read_file
+            now rather than saying you are about to.
+
             You may emit several calls in one turn; they run in order, and you see all
             the observations before your next turn. Syntax (raw text, no escaping):
 
@@ -194,9 +201,10 @@ public sealed class PromptAssembler(PromptLibrary prompts)
         else
         {
             sb.AppendLine(
-                "Begin. Read the files in your packet once to orient, then write. " +
-                "Don't keep exploring — the first write_file should come within your " +
-                "first few turns, not after you've read everything twice.");
+                "Begin now, with tool calls. If you need to look at something first, your " +
+                "first call IS that read — not a sentence saying you are about to. Don't keep " +
+                "exploring: the first write_file should come within your first few turns, not " +
+                "after you have read everything twice.");
         }
 
         return sb.ToString().TrimEnd();

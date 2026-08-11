@@ -27,12 +27,16 @@
   * { box-sizing: border-box; }
   body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
          line-height:1.5; -webkit-font-smoothing:antialiased; }
-  .page { max-width:1240px; margin:0 auto; padding:24px 20px 40px; }
+  .page { max-width:1240px; margin:0 auto; padding:0 20px 40px; }
 
   /* Three stacked rows: brand, then the project and what you can do to it,
      then what it is doing right now. */
-  .topbar { display:flex; flex-direction:column; gap:10px;
-            padding-bottom:18px; border-bottom:2px solid var(--line); margin-bottom:22px; }
+  /* Frozen: the project, its spend and the build controls stay reachable at any
+     scroll position. --header-h is measured in script, since the header is shorter
+     before a project is planned. */
+  .topbar { position:sticky; top:0; z-index:30; background:var(--ground);
+            display:flex; flex-direction:column; gap:10px;
+            padding:24px 0 18px; border-bottom:2px solid var(--line); margin-bottom:22px; }
   .brand { font-family:var(--mono); font-size:.68rem; letter-spacing:.18em;
            text-transform:uppercase; color:var(--faint); }
   .titlerow { display:flex; flex-wrap:wrap; align-items:baseline; gap:12px 16px; }
@@ -162,7 +166,7 @@
                  border-radius:3px; transition:width .4s ease; }
   .agent .amt { font-family:var(--mono); font-size:.85rem; font-variant-numeric:tabular-nums; text-align:right; }
 
-  .chat { position:sticky; top:20px; display:flex; flex-direction:column; height:min(78vh,760px); }
+  .chat { position:sticky; top:calc(var(--header-h, 140px) + 16px); display:flex; flex-direction:column; height:min(78vh,760px); }
   @media (max-width:900px) { .chat { position:static; height:560px; } }
   .thread { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
   .msg { max-width:88%; font-size:.9rem; }
@@ -445,6 +449,13 @@ function setFavicon(needed) {
 let creating = false;
 let wasPlanned = null;
 
+// The header's height, published for whatever has to sit clear of it.
+function measureHeader() {
+  const bar = document.querySelector('.topbar');
+  if (bar) document.documentElement.style.setProperty('--header-h', `${bar.offsetHeight}px`);
+}
+window.addEventListener('resize', measureHeader);
+
 function setMode(mode) {
   const page = document.querySelector('.page');
   for (const m of ['mode-new', 'mode-landing', 'mode-board']) page.classList.toggle(m, m === `mode-${mode}`);
@@ -710,6 +721,7 @@ async function poll() {
     }
 
     if (!creating) showBoardMode(d.planned);
+  measureHeader();
 
     const bar = $('approveBar');
     bar.classList.toggle('hidden', !d.proposal);

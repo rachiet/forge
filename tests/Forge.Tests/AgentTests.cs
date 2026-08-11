@@ -397,7 +397,11 @@ public class AgentLoopTests : IDisposable
 
         Assert.Equal(EndReason.Crash, result.End);
         Assert.Equal(3, llm.Calls); // three strikes, not the full 40-turn cap
-        Assert.Contains("No tool call found", llm.Requests[1].Messages[^1].Content);
+        // The nudge shows the syntax rather than naming it, since a model that got the
+        // shape wrong cannot act on being told a call was missing.
+        var nudge = llm.Requests[1].Messages[^1].Content;
+        Assert.Contains("no tool call", nudge, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<tool name=\"read_file\">", nudge, StringComparison.Ordinal);
     }
 
     [Fact]
