@@ -118,6 +118,14 @@ public sealed partial class AgentToolset(
 
             ["create_task"] = new("put a task on the board. Returns its id.",
                 Required("title", "short imperative name, e.g. `implement-create-poll-endpoint`."),
+                Required("display_name", "the same task in the client's words — a short sentence "
+                                       + "a non-technical reader understands, e.g. `Adding, listing "
+                                       + "and deleting books`. This is what they see on their "
+                                       + "progress page, so never an identifier and never jargon."),
+                Required("milestone", "the phase of the plan this task belongs to, in the client's "
+                                    + "words, e.g. `Books API`. Tasks that belong together repeat "
+                                    + "the SAME name and appear as one group, in the order you "
+                                    + "first used it. Plan in a handful of phases, not one each."),
                 Required("objective", "what this task must achieve, specific enough to work from."),
                 Required("acceptance", "what must be observably true when it is done. The reviewer "
                                      + "judges the diff against this, so a task without it can never "
@@ -517,11 +525,16 @@ public sealed partial class AgentToolset(
                     + $"Available: {string.Join(", ", contract.OperationIds)}.");
         }
 
+        var milestones = new MilestoneRepository(connection);
+        var milestone = milestones.EnsureByName(call.Arg("milestone"));
+
         var created = _tasks.Insert(TaskRecord.Create(
             call.Optional("type") is { } type ? ParseRunnableTaskType(type) : TaskType.Task,
             call.Arg("title"),
             call.Arg("objective"),
             call.OptionalInt("budget") ?? 60_000,
+            displayName: call.Arg("display_name"),
+            milestoneId: milestone.Id,
             acceptanceCriteria: call.Arg("acceptance"),
             contextPaths: contexts,
             requirementsRef: requirement,
@@ -530,8 +543,10 @@ public sealed partial class AgentToolset(
             contractOps: ops));
 
         _createdTaskIds.Add(created.Id);
-        return new ToolOutcome($"Task {created.Id} created: {created.Title} " +
-            $"(created — the client's sign-off makes it ready).");
+        return new ToolOutcome(
+            $"Task {created.Id} created: {created.Title}, under milestone '{milestone.Name}'. "
+            + $"The plan so far: {string.Join(" → ", milestones.Names())}. Repeat a name exactly "
+            + "to add to that phase; a new name starts another one.");
     }
 
     /// <summary>
@@ -707,6 +722,8 @@ public sealed partial class AgentToolset(
             call.Arg("title"),
             objective,
             call.OptionalInt("budget") ?? 60_000,
+            displayName: $"Fixing: {call.Arg("title")}",
+            milestoneId: new MilestoneRepository(connection).EnsureByName(MilestoneRepository.Testing).Id,
             acceptanceCriteria: "Reproducing the steps no longer yields the actual behaviour; the expected result holds.",
             requirementsRef: requirement,
             assignedRole: AgentRole.Engineer,

@@ -28,8 +28,14 @@ public static class Schema
           id INTEGER PRIMARY KEY,
           -- The Feature this task belongs to. NULL on a Feature itself or a standalone task.
           parent_id INTEGER REFERENCES tasks(id),
+          -- The phase of the plan this task belongs to, named by the Principal at create_task.
+          -- NULL on a Feature, and on work created before any milestone was named.
+          milestone_id INTEGER REFERENCES milestones(id),
           type TEXT NOT NULL CHECK(type IN ('feature','task','bug','chore')),
           title TEXT NOT NULL CHECK(length(title) > 0),
+          -- The same task in the client's words, shown on the progress board. The title is
+          -- an identifier for engineers; this is the sentence a non-technical reader sees.
+          display_name TEXT,
           objective TEXT NOT NULL CHECK(length(objective) > 0),
           acceptance_criteria TEXT,
           context_paths TEXT,
@@ -76,6 +82,20 @@ public static class Schema
         );
 
         CREATE INDEX IF NOT EXISTS ix_messages_queue ON messages(to_agent, status, created_at);
+
+        -- The phases the Principal breaks a Feature into, in the order it first named them.
+        -- What the client reads as the plan: prose names, one row per phase, no status column
+        -- (a milestone's state is derived from the tasks pointing at it).
+        CREATE TABLE IF NOT EXISTS milestones (
+          id INTEGER PRIMARY KEY,
+          -- Shown to the client verbatim, so it is written in plain words.
+          name TEXT NOT NULL CHECK(length(name) > 0),
+          -- Where this phase sits in the plan; assigned from the order names first appear.
+          position INTEGER NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_milestones_name ON milestones(name);
 
         {TasksDdl}
 

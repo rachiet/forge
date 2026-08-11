@@ -131,9 +131,9 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 snapshot.BudgetUsd, snapshot.BudgetRemainingUsd, snapshot.BudgetExhausted,
                 snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
                 snapshot.AwaitingClient, snapshot.NeedsClient, snapshot.Delivery,
-                snapshot.Requirements, snapshot.Features, snapshot.CurrentTask,
+                snapshot.Plan,
                 AgentName = ClientFacing.AgentName,
-                snapshot.ProjectLevelCostUsd, snapshot.UnparentedTaskCostUsd,
+                snapshot.ProjectLevelCostUsd,
                 snapshot.Agents, snapshot.Chat,
                 // Read whenever there is anything committed: the page shows it in the rail once
                 // the client has approved, and in the review dialog while it is still a draft.

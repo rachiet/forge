@@ -141,7 +141,7 @@ public class BudgetPauseTests : IDisposable
         _tasks.IncrementOutOfBudgetCount(stuck.Id);
 
         var llm = new ScriptedLlmClient(
-            ScriptedLlmClient.Tool("create_task",
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
                 ("title", "First half"), ("objective", "Do the first half"),
                 ("acceptance", "The first half is done and builds."), ("budget", "50000")),
             ScriptedLlmClient.Tool("redirect", ("guidance", "Do only the second half now.")));

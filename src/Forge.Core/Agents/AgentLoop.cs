@@ -204,10 +204,22 @@ public sealed class AgentLoop(
             var calls = ToolCallParser.Parse(response.Content);
             if (calls.Count == 0)
             {
+                // The turn the parser could make nothing of, recorded with the provider's own
+                // reason for stopping and the start of what it sent. A response cut off at the
+                // output limit and a model that simply did not call a tool are indistinguishable
+                // from the outside, and this line is what tells them apart.
+                log.Event(EventType.LlmNoToolCall,
+                    $"turn {turn}: no tool call ({emptyTurns + 1} of {MaxEmptyTurns}), "
+                    + $"stop reason {response.StopReason ?? "(none reported)"}, "
+                    + $"{response.Content.Length} chars: {FirstLines(response.Content, 2)}");
+
                 if (++emptyTurns >= MaxEmptyTurns)
                 {
+                    var why = $"No tool call in {MaxEmptyTurns} consecutive turns; the model is not acting. "
+                            + $"Last stop reason: {response.StopReason ?? "(none reported)"}.";
+                    log.Event(EventType.ErrorInternal, why);
                     return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
-                        $"No tool call in {MaxEmptyTurns} consecutive turns; the model is not acting.", lastMessage);
+                        why, lastMessage);
                 }
                 conversation.Add(new LlmMessage("user",
                     "No tool call found in your last turn. Nothing happened. Emit a " +

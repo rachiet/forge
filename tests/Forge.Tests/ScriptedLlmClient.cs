@@ -25,6 +25,9 @@ public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
     /// <summary>Emitted once the script runs dry, so a loop under test can't hang on an empty queue.</summary>
     public string Fallback { get; init; } = "Nothing left to do.";
 
+    /// <summary>What every scripted turn reports as its reason for stopping.</summary>
+    public string StopReason { get; init; } = "end_turn";
+
     public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         Requests.Add(request);
@@ -32,7 +35,7 @@ public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
         return Task.FromResult(new LlmResponse
         {
             Content = content,
-            StopReason = "end_turn",
+            StopReason = StopReason,
             Usage = new LlmUsage(100, 50),
         });
     }

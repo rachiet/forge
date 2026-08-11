@@ -459,6 +459,34 @@ public class AgentLoopTests : IDisposable
     }
 
     [Fact]
+    public async Task A_turn_with_no_tool_call_is_logged_with_the_providers_reason_for_stopping()
+    {
+        var task = StartTask();
+        var sink = new MemoryLogSink();
+        // A response cut off at the output limit looks exactly like a model that did not act,
+        // so the stop reason is the only thing that tells them apart.
+        var llm = new ScriptedLlmClient("Here is the file I am about to write:\n<tool name=\"write_")
+        {
+            Fallback = "still truncated",
+            StopReason = "length",
+        };
+        var loop = new AgentLoop(llm, _conn, new PromptAssembler(PromptLibrary.Resolve()),
+            AgentRecipe.Engineer, new ForgeLogger(sink, "proj"));
+
+        var result = await loop.RunAsync(task, _executor);
+
+        var first = sink.Entries.First(e => e.Type == EventType.LlmNoToolCall);
+        Assert.Contains("stop reason length", first.Message);
+        Assert.Contains("Here is the file", first.Message);
+
+        // And the exit itself is on the record, which is what was missing.
+        Assert.Equal(EndReason.Crash, result.End);
+        var exit = Assert.Single(sink.Entries,
+            e => e.Type == EventType.ErrorInternal && e.Message.Contains("consecutive turns"));
+        Assert.Contains("length", exit.Message);
+    }
+
+    [Fact]
     public async Task Budget_exhaustion_ends_the_loop_without_the_model_being_asked_to_stop()
     {
         var task = StartTask(budget: 300); // one call costs 150; the second is refused

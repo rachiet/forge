@@ -436,26 +436,37 @@ app for every task. So appearance stops being generated work at all.
 - **A read model, never a second source of truth** (`Board/BoardQuery.cs`). Every figure is
   queried from tasks/milestones/token_ledger/messages at request time, so the page cannot
   drift from the ledger. Nothing is cached or denormalised.
-- **Milestone state is derived from its tasks — there is NO stored status column.**
-  `milestones.status` was dropped (with `MilestoneStatus`): nothing ever advanced it past
-  `planned` through a whole finished project, and a stored status beside a derived one is
-  two sources of truth. done = all tasks done; active = any in flight or any done; else
-  pending. The same cleanup dropped write-only `messages.thread_id` and the dead
-  `projects.token_budget` on the global registry; `project_meta` accessors live on
+- **The page is one panel: the plan.** Milestones in order with their tasks under each, and
+  the one task a worker holds blinking (`BoardSnapshot.Plan`). It replaced four separate
+  panels — "Currently building", "Progress" (by requirement), "Features" and "Work outside
+  features" — which showed the same work four ways. Requirement-grouping and `CurrentTask`
+  are gone with them.
+- **Milestone state is derived from its tasks — there is NO stored status column.** done =
+  all tasks done; active = any in flight; else pending. The same rule that dropped
+  `milestones.status` the first time round. `project_meta` accessors live on
   `Db/ProjectMetaRepository`, not TaskRepository.
-- **Milestone linkage is the harness's job, not the model's.** `create_task`/`propose_requirements`
-  accept `milestone`, the design brief now lists the PM's milestones with their ids
-  (`DesignPhase.MilestoneSection`) so the Principal has something to pass, and
-  `TaskRunner` makes a child **inherit its Feature's milestone** when it adopts it —
-  including subtasks created during a stuck-task triage, which are also adopted, given
-  the parent's milestone, and **released to `ready`** (before that fix they were born
-  `created` with no release path and deadlocked the board). PM guidance: a change-request
-  Feature names its one milestone; the initial build passes NONE (it spans the whole
-  plan — the Principal assigns per task).
-- **"Work outside features" is a required section, not a nicety.** ~15% of calls carry no
-  `task_id` at all (PM chat, design, QA) and bugs/chores sit under no Feature — on
-  weatherboard, features were $15.58 of a $23.45 total. Without that row the client sees
-  $7.87 they cannot account for. `BoardQueryTests` asserts the reconciliation.
+- **A task carries the two things the client reads: `display_name` and `milestone_id`.**
+  Both are **required** arguments of `create_task`, because a prompt asking for them is not
+  a guarantee. `title` stays an identifier for engineers (`implement-books-http-api`);
+  `display_name` is the sentence the client sees ("Adding, listing and deleting books").
+  A task with no display name falls back to its title rather than showing nothing.
+- **A milestone is created by naming it, not by an id.** `MilestoneRepository.EnsureByName`
+  find-or-creates, case- and whitespace-insensitively, and `position` comes from the order
+  names first appear — so the Principal groups work by repeating a name, chronological order
+  falls out, and there is no id to carry between calls. Adding a phase is one string.
+- **Two milestones are the harness's, not the model's.** `Getting started` is created first
+  (`EnsureFirst`) by `DecomposeFeatureAsync` and absorbs everything that was never a task:
+  PM chat, the design run, a Feature's own decomposition cost, and any task predating the
+  plan. It **never shows as active** — it has no task to be in flight, and a "Getting
+  started" row blinking after delivery would be nonsense. `Testing & fixes` is created by
+  `MaybeRunQaAsync` at the moment verification comes due, holds every bug (`file_bug` and
+  the acceptance-run bug assign it themselves), and absorbs QA's own rounds **by role**,
+  since a QA round has no task to attach to. Every other task inherits its phase from the
+  Principal, or from its parent when triage creates it.
+- **Cost is charged from every task; only live ones are shown.** A cancelled or rejected
+  task leaves the plan but its spend stays in its milestone's total, so the phases still sum
+  to the ledger. `BoardQueryTests` asserts that reconciliation — it is the property the
+  client depends on, and the reason the old "Work outside features" panel existed.
 - **Chat is a real PM turn.** `POST /api/chat` runs `PmChat.SendAsync` in the background
   (a turn takes far longer than a browser will wait) behind a semaphore, and the reply
   arrives via the same polling that drives the rest.

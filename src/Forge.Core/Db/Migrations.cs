@@ -15,6 +15,26 @@ public static class Migrations
         AddNeedsHumanStatus(conn);
         AddSplitDepth(conn);
         AddColumn(conn, "contract_ops", "ALTER TABLE tasks ADD COLUMN contract_ops TEXT;");
+        AddMilestones(conn);
+    }
+
+    /// <summary>
+    /// Creates the `milestones` table and the `tasks.milestone_id` column for a database that
+    /// predates them. Existing tasks read null, which the board groups as unplanned work.
+    /// </summary>
+    private static void AddMilestones(SqliteConnection conn)
+    {
+        conn.Execute("""
+            CREATE TABLE IF NOT EXISTS milestones (
+              id INTEGER PRIMARY KEY,
+              name TEXT NOT NULL CHECK(length(name) > 0),
+              position INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_milestones_name ON milestones(name);
+            """);
+        AddColumn(conn, "milestone_id", "ALTER TABLE tasks ADD COLUMN milestone_id INTEGER REFERENCES milestones(id);");
+        AddColumn(conn, "display_name", "ALTER TABLE tasks ADD COLUMN display_name TEXT;");
     }
 
     /// <summary>

@@ -65,6 +65,7 @@ public sealed class TaskRunner(
     private readonly TaskRepository _tasks = new(conn);
     private readonly MessageRepository _messages = new(conn);
     private readonly ProjectMetaRepository _meta = new(conn);
+    private readonly MilestoneRepository _milestones = new(conn);
     private readonly AgentInstanceRepository _instances = new(conn);
     private readonly WorkspaceManager _workspaces = new(paths, project);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
@@ -168,6 +169,10 @@ public sealed class TaskRunner(
     {
         var log = _log.For(feature.Id);
         log.Message($"Principal decomposing feature {feature.Id}: {feature.Title}");
+
+        // Intake, planning and the handover note are never tasks, so the phase that holds
+        // them is created here, before the Principal names any of its own.
+        _milestones.EnsureFirst(MilestoneRepository.GettingStarted);
 
         var before = _tasks.List().Select(t => t.Id).ToHashSet();
         var design = new DesignPhase(paths, project, conn, llm, vault, prompts, _log);
@@ -344,6 +349,8 @@ public sealed class TaskRunner(
             {
                 _tasks.SetParent(child.Id, triaged.Id);
             }
+            if (_tasks.Get(child.Id).MilestoneId is null && triaged.MilestoneId is { } phase)
+                _tasks.SetMilestone(child.Id, phase);
             if (_tasks.Get(child.Id).Status == TaskStatus.Created)
                 Transition(child.Id, TaskStatus.Ready, log);
             log.Message($"Triage subtask {child.Id} adopted under task {triaged.Id} and released.");
@@ -512,6 +519,10 @@ public sealed class TaskRunner(
     {
         if (!_tasks.BoardQuiescent()) return null;
         if (MetaInt("qa_escalated") == 1) return null;
+
+        // The phase QA's rounds and the bugs they file belong to, created the moment
+        // verification becomes due rather than sitting empty for the whole build.
+        _milestones.EnsureByName(MilestoneRepository.Testing);
 
         var rounds = MetaInt("qa_rounds");
         var newWorkToVerify = _tasks.CountDone() > MetaInt("qa_verified_count");
@@ -749,6 +760,8 @@ public sealed class TaskRunner(
             "Acceptance suite fails",
             objective,
             300_000,
+            displayName: "Fixing the failing acceptance checks",
+            milestoneId: _milestones.EnsureByName(MilestoneRepository.Testing).Id,
             acceptanceCriteria: $"`dotnet test {AcceptanceSuite.Directory}` passes against a running instance.",
             assignedRole: AgentRole.Engineer,
             createdBy: "qa") with { Status = TaskStatus.Triage });

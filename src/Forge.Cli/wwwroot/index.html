@@ -83,6 +83,8 @@
   .dot { width:10px; height:10px; border-radius:50%; justify-self:center; }
   .st-done .dot { background:var(--done-ink); }
   .st-active .dot { background:var(--active); animation:pulse 1.5s ease-in-out infinite; }
+  .ms.st-done .dot { background:var(--done-ink); }
+  .ms.st-pending .dot { background:transparent; border:2px solid var(--pending); }
   .st-pending .dot { background:transparent; border:2px solid var(--pending); }
   .st-done { background:color-mix(in srgb, var(--done) 22%, transparent); }
   .st-active { background:color-mix(in srgb, var(--active) 12%, transparent);
@@ -95,6 +97,17 @@
   @media (prefers-reduced-motion: reduce) {
     .st-active .dot { animation:none; outline:2px solid var(--active); outline-offset:2px; }
   }
+  /* A milestone heading, and the tasks filed under it one indent in. */
+  .ms { display:grid; grid-template-columns:14px minmax(0,1fr) auto; align-items:center;
+        gap:12px; padding:12px 16px 8px; font-weight:640; }
+  .ms .name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ms .cost { font-family:var(--mono); font-size:.85rem; font-variant-numeric:tabular-nums; }
+  .ms .cost.none { color:var(--faint); }
+  .row.sub { padding-left:38px; border-bottom:0; }
+  .row.sub .name { font-size:.88rem; color:var(--muted); }
+  .row.sub.st-active .name { color:var(--ink); }
+  .row.sub.empty .name { color:var(--faint); font-style:italic; }
+
   .row-total { display:grid; grid-template-columns:14px minmax(0,1fr) auto; gap:12px; padding:12px 16px;
                border-top:2px solid var(--line); background:var(--sunken); font-weight:620; }
   .row-total .name { font-family:var(--mono); font-size:.7rem; letter-spacing:.14em;
@@ -171,15 +184,6 @@
   .btn.primary { background:var(--accent); color:#fff; border-color:transparent; }
   .btn.stop { background:var(--pending); color:#fff; border-color:transparent; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
-
-  /* appearance panel — five selects that set the built application's look */
-  .appearance { display:flex; flex-wrap:wrap; align-items:center; gap:8px;
-                padding:10px 12px; margin-top:4px; width:100%;
-                border:1px solid var(--line); border-radius:9px; background:var(--surface); }
-  .appearance label { font-family:var(--mono); font-size:.62rem; letter-spacing:.1em;
-                      text-transform:uppercase; color:var(--faint); }
-  .appearance .hint { font-family:var(--mono); font-size:.62rem; color:var(--faint);
-                      flex-basis:100%; }
 
   /* budget strip */
   .budget { display:flex; align-items:baseline; gap:8px; justify-content:flex-end;
@@ -269,16 +273,6 @@
       <span class="runpill" id="runPill">● …</span>
       <button class="btn primary hidden" id="resumeBtn">Resume build</button>
       <button class="btn stop hidden" id="stopBtn">Pause build</button>
-      <button class="btn" id="appearanceBtn">Appearance</button>
-      <div class="appearance hidden" id="appearancePanel">
-        <label for="thTheme">Theme</label><select id="thTheme"></select>
-        <label for="thMode">Mode</label><select id="thMode"></select>
-        <label for="thAccent">Accent</label><select id="thAccent"></select>
-        <label for="thDensity">Density</label><select id="thDensity"></select>
-        <label for="thRadius">Corners</label><select id="thRadius"></select>
-        <button class="btn primary" id="thApply">Apply</button>
-        <span class="hint" id="thHint"></span>
-      </div>
     </div>
   </header>
 
@@ -444,21 +438,6 @@ function rows(items) {
     </div>`).join('');
 }
 
-// A requirement's client-facing name comes from the spec's own H1; the file name is the
-// fallback, and an unnamed group is the work that serves no requirement.
-function requirementName(d, file) {
-  if (!file) return '';
-  return (d.spec.find(s => s.file === file) || {}).title || file;
-}
-
-// The task statuses, said the way a client would say them.
-function statusWord(status) {
-  return ({
-    claimed: 'starting', in_progress: 'in progress', in_review: 'in review',
-    merging: 'merging', triage: 'planning',
-  })[status] || status;
-}
-
 function section(title, sub, body, total) {
   return `<section class="card">
     <div class="card-head"><h2>${esc(title)}</h2><span class="sub">${esc(sub)}</span></div>
@@ -520,43 +499,27 @@ function renderRail(d) {
       </div>`).join('')}</section>`;
   }
 
-  // What a worker has in hand this second. Absent between tasks and when nothing runs.
-  if (d.currentTask) {
-    html += `<section class="card"><div class="card-head"><h2>Currently building</h2>
-        <span class="sub">${esc(statusWord(d.currentTask.status))}</span></div>
-      <div class="row st-active"><span class="dot"></span>
-        <span class="name">${esc(d.currentTask.title)}</span>
-        <span class="cost none">${esc(requirementName(d, d.currentTask.requirement) || '')}</span>
-      </div></section>`;
-  }
-
-  if (d.requirements.length) {
-    const done = d.requirements.filter(r => r.state === 'done').length;
-    html += section('Progress', `${done} of ${d.requirements.length} complete`,
-      rows(d.requirements.map(r => ({
-        state: r.state,
-        name: requirementName(d, r.file) || 'Other work',
-        costUsd: r.costUsd,
-      }))), { label: 'Project total', value: d.totalCostUsd });
-  }
-  if (d.features.length) {
-    const done = d.features.filter(f => f.state === 'done').length;
-    const sum = d.features.reduce((a, f) => a + f.costUsd, 0);
-    html += section('Features', `${done} of ${d.features.length} complete`,
-      rows(d.features), { label: 'Features subtotal', value: sum });
-  }
-
-  // Shown whenever it is non-zero: without it the feature figures do not add up to the
-  // total, and the client is left with money they cannot account for.
-  const outside = d.projectLevelCostUsd + d.unparentedTaskCostUsd;
-  if (outside > 0) {
-    html += section('Work outside features', `${Math.round(outside / d.totalCostUsd * 100)}% of spend`, `
-      <div class="row st-done"><span class="dot"></span>
-        <span class="name">Requirements, design &amp; acceptance testing</span>
-        <span class="cost">${usd(d.projectLevelCostUsd)}</span></div>
-      <div class="row st-done"><span class="dot"></span>
-        <span class="name">Bug fixes &amp; chores</span>
-        <span class="cost">${usd(d.unparentedTaskCostUsd)}</span></div>`);
+  // The whole plan: every phase in order with its work under it. The one task a worker
+  // has in hand blinks, and so does the phase holding it.
+  if (d.plan.length) {
+    const tasks = d.plan.flatMap(m => m.tasks);
+    const done = tasks.filter(t => t.state === 'done').length;
+    html += section('Plan', `${done} of ${tasks.length} done`,
+      d.plan.map(m => `
+        <div class="ms st-${esc(m.state)}">
+          <span class="dot"></span>
+          <span class="name">${esc(m.name)}</span>
+          <span class="cost${m.costUsd > 0 ? '' : ' none'}">${m.costUsd > 0 ? usd(m.costUsd) : '—'}</span>
+        </div>
+        ${m.tasks.map(t => `
+          <div class="row sub st-${esc(t.state)}">
+            <span class="dot"></span>
+            <span class="name" title="${esc(t.name)}">${esc(t.name)}</span>
+            <span class="cost${t.costUsd > 0 ? '' : ' none'}">${t.costUsd > 0 ? usd(t.costUsd) : '—'}</span>
+          </div>`).join('')}
+        ${m.tasks.length ? '' : '<div class="row sub empty"><span></span><span class="name">nothing yet</span><span></span></div>'}
+      `).join(''),
+      { label: 'Project total', value: d.totalCostUsd });
   }
 
   if (d.agents.length) {
@@ -621,10 +584,10 @@ async function refreshProjects() {
 
 function showEmptyState() {
   project = null;
-  $('projName').textContent = 'no projects yet';
+  $('projName').textContent = '';
   $('runPill').classList.add('hidden');
   $('rail').innerHTML = `<section class="card"><div class="placeholder">
-      <p>Nothing here yet. Create a project to start talking to ${esc(agentName || 'your project lead')}.</p>
+      <p>No projects available. Click &ldquo;+ New project&rdquo; above to start a new project.</p>
     </div></section>`;
   $('thread').innerHTML = '';
   $('composer').classList.add('hidden');
@@ -648,7 +611,7 @@ async function poll() {
     // One word for what the project is doing. Approved work that nobody is executing
     // is PAUSED, not "building · idle" — the client needs to know a build has stopped.
     // Waiting on the client outranks everything: it is the only state they can clear.
-    const approved = d.features.length > 0;
+    const approved = d.planned;
     const status = d.needsClient ? 'needs your input'
                  : d.building ? 'building'
                  : d.state === 'complete' ? 'complete'
@@ -777,51 +740,6 @@ $('newForm').addEventListener('submit', async e => {
   await refreshProjects();
   selectProject(body.name);
   $('msg').focus();
-});
-
-/* The look of the application being built. Options and the current choice are fetched
-   when the panel opens. */
-$('appearanceBtn').addEventListener('click', async () => {
-  const panel = $('appearancePanel');
-  panel.classList.toggle('hidden');
-  if (panel.classList.contains('hidden')) return;
-
-  const d = await (await fetch(`/api/theme?project=${encodeURIComponent(project)}`)).json();
-  const fill = (id, values, selected) => {
-    $(id).innerHTML = values
-      .map(v => `<option${v === selected ? ' selected' : ''}>${v}</option>`).join('');
-  };
-  // The catalogue reads "slate — cool grey neutrals…"; the id is the part before the dash.
-  fill('thTheme', d.themes.map(t => t.split(' — ')[0]), d.current.theme);
-  fill('thMode', d.modes, d.current.mode);
-  fill('thAccent', ['(theme)', ...d.accents], d.current.accent || '(theme)');
-  fill('thDensity', d.densities, d.current.density);
-  fill('thRadius', d.radii, d.current.radius);
-  $('thHint').textContent = d.themes.find(t => t.startsWith(d.current.theme)) || '';
-});
-
-$('thTheme').addEventListener('change', async () => {
-  const d = await (await fetch(`/api/theme?project=${encodeURIComponent(project)}`)).json();
-  $('thHint').textContent = d.themes.find(t => t.startsWith($('thTheme').value)) || '';
-});
-
-$('thApply').addEventListener('click', async () => {
-  const accent = $('thAccent').value;
-  const r = await fetch('/api/theme', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      project,
-      theme: $('thTheme').value,
-      mode: $('thMode').value,
-      accent: accent === '(theme)' ? null : accent,
-      density: $('thDensity').value,
-      radius: $('thRadius').value,
-    }),
-  });
-  const body = await r.json().catch(() => ({}));
-  $('thHint').textContent = !r.ok ? (body.error || 'Could not apply that.')
-    : body.appliedToTrunk ? 'Applied — restart the app to see it.'
-    : 'Saved — it lands on the next piece of work that runs.';
 });
 
 $('raiseBudget').addEventListener('click', async () => {

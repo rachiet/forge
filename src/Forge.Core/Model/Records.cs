@@ -65,3 +65,9 @@ public sealed record ProjectRecord
     public int? TokenBudget { get; init; }
     public string? CreatedAt { get; init; }
 }
+
+/// <summary>
+/// One phase of the plan, as the client reads it. Position is plan order, assigned when the
+/// name is first used; state and cost are derived from the tasks pointing at it.
+/// </summary>
+public sealed record Milestone(long Id, string Name, long Position);

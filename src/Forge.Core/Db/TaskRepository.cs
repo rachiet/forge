@@ -15,6 +15,8 @@ public sealed class TaskRepository(IDbConnection conn)
         public long? ParentId { get; init; }
         public string Type { get; init; } = "";
         public string Title { get; init; } = "";
+        public string? DisplayName { get; init; }
+        public long? MilestoneId { get; init; }
         public string Objective { get; init; } = "";
         public string? AcceptanceCriteria { get; init; }
         public IReadOnlyList<string> ContextPaths { get; init; } = [];
@@ -38,6 +40,8 @@ public sealed class TaskRepository(IDbConnection conn)
             ParentId = ParentId,
             Type = SnakeCaseEnum.Parse<TaskType>(Type),
             Title = Title,
+            DisplayName = DisplayName,
+            MilestoneId = MilestoneId,
             Objective = Objective,
             AcceptanceCriteria = AcceptanceCriteria,
             ContextPaths = ContextPaths,
@@ -60,6 +64,7 @@ public sealed class TaskRepository(IDbConnection conn)
     /// <summary>The column list every read shares, aliased to <see cref="Row"/>'s properties.</summary>
     private const string SelectColumns = """
         SELECT id AS Id, parent_id AS ParentId, type AS Type, title AS Title,
+               display_name AS DisplayName, milestone_id AS MilestoneId,
                objective AS Objective, acceptance_criteria AS AcceptanceCriteria,
                context_paths AS ContextPaths, contract_ops AS ContractOps,
                requirements_ref AS RequirementsRef,
@@ -75,11 +80,13 @@ public sealed class TaskRepository(IDbConnection conn)
     public TaskRecord Insert(TaskRecord task)
     {
         var id = conn.ExecuteScalar<long>("""
-            INSERT INTO tasks (parent_id, type, title, objective, acceptance_criteria,
+            INSERT INTO tasks (parent_id, type, title, display_name, milestone_id,
+                               objective, acceptance_criteria,
                                context_paths, contract_ops, requirements_ref, assigned_role, status,
                                token_budget, tokens_spent, split_depth, progress_note,
                                branch_name, created_by)
-            VALUES (@ParentId, @Type, @Title, @Objective, @AcceptanceCriteria,
+            VALUES (@ParentId, @Type, @Title, @DisplayName, @MilestoneId,
+                    @Objective, @AcceptanceCriteria,
                     @ContextPaths, @ContractOps, @RequirementsRef, @AssignedRole, @Status,
                     @TokenBudget, @TokensSpent, @SplitDepth, @ProgressNote, @BranchName, @CreatedBy)
             RETURNING id
@@ -89,6 +96,8 @@ public sealed class TaskRepository(IDbConnection conn)
                 task.ParentId,
                 Type = SnakeCaseEnum.ToSnakeCase(task.Type),
                 task.Title,
+                task.DisplayName,
+                task.MilestoneId,
                 task.Objective,
                 task.AcceptanceCriteria,
                 task.ContextPaths,
@@ -195,6 +204,12 @@ public sealed class TaskRepository(IDbConnection conn)
     /// Attaches a task to its parent Feature. Nullable, because a split re-parents the
     /// replacements onto the parent of the task they replace, which may itself have none.
     /// </summary>
+    /// <summary>Files a task under a phase of the plan.</summary>
+    public void SetMilestone(long taskId, long milestoneId) =>
+        conn.Execute("""
+            UPDATE tasks SET milestone_id = @milestoneId, updated_at = datetime('now') WHERE id = @taskId
+            """, new { taskId, milestoneId });
+
     public void SetParent(long childId, long? parentId) =>
         conn.Execute("""
             UPDATE tasks SET parent_id = @parentId, updated_at = datetime('now') WHERE id = @childId

@@ -66,7 +66,7 @@ public class DesignPhaseTests : IDisposable
         Git.Require(_paths.ProjectBareRepo(Project), "show", $"master:{path}").Stdout;
 
     private static string CreateTask(string title, string objective, string requirement) =>
-        ScriptedLlmClient.Tool("create_task",
+        ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
             ("title", title), ("objective", objective), ("requirements_ref", requirement),
             ("acceptance", $"{title} is implemented and its tests pass."));
 
@@ -184,12 +184,12 @@ public class DesignPhaseTests : IDisposable
         // engineer task, so it has no engineer template and is refused here instead of
         // crashing the runner at claim time. Then it recovers.
         var llm = new ScriptedLlmClient(
-            ScriptedLlmClient.Tool("create_task", ("title", "Bad"), ("objective", "")),
-            ScriptedLlmClient.Tool("create_task",
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Bad"), ("objective", "")),
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
                 ("title", "Also bad"), ("objective", "Investigate options"),
                 ("acceptance", "Options are documented."), ("type", "feature")),
             // No acceptance — refused.
-            ScriptedLlmClient.Tool("create_task",
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
                 ("title", "Review and merge"), ("objective", "Review the router, then merge it")),
             CreateTask("Todo storage", "Add and complete todos", "01-todos.md@v1"),
             ScriptedLlmClient.Tool("done", ("summary", "Recovered and created the task.")));

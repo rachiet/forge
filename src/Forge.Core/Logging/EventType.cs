@@ -17,6 +17,7 @@ public enum EventType
     LlmCall,
     LlmNudge,
     LlmRefused,
+    LlmNoToolCall,
     LlmError,
 
     // tool — what an agent actually did, one per tool
@@ -82,6 +83,7 @@ public static class EventTypes
             [EventType.LlmCall] = "llm.call",
             [EventType.LlmNudge] = "llm.nudge",
             [EventType.LlmRefused] = "llm.refused",
+            [EventType.LlmNoToolCall] = "llm.no_tool_call",
             [EventType.LlmError] = "llm.error",
             [EventType.ToolListDir] = "tool.list_dir",
             [EventType.ToolReadFile] = "tool.read_file",

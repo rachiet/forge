@@ -14,6 +14,13 @@ public sealed record TaskRecord
     public long? ParentId { get; init; }
     public required TaskType Type { get; init; }
     public required string Title { get; init; }
+    /// <summary>
+    /// This task as the client reads it on the progress board — a sentence, not an identifier.
+    /// Null only on rows created before the board grouped work by milestone.
+    /// </summary>
+    public string? DisplayName { get; init; }
+    /// <summary>The phase of the plan this task belongs to. Null on a Feature.</summary>
+    public long? MilestoneId { get; init; }
     public required string Objective { get; init; }
     public string? AcceptanceCriteria { get; init; }
     public IReadOnlyList<string> ContextPaths { get; init; } = [];
@@ -42,6 +49,8 @@ public sealed record TaskRecord
         string title,
         string objective,
         int tokenBudget,
+        string? displayName = null,
+        long? milestoneId = null,
         string? acceptanceCriteria = null,
         IReadOnlyList<string>? contextPaths = null,
         RequirementsRef? requirementsRef = null,
@@ -63,6 +72,8 @@ public sealed record TaskRecord
         {
             Type = type,
             Title = title,
+            DisplayName = displayName,
+            MilestoneId = milestoneId,
             Objective = objective,
             TokenBudget = tokenBudget,
             ParentId = parentId,

@@ -62,16 +62,18 @@ public class BoardQueryTests : IDisposable
 
         Assert.Null(Board().Proposal);
         Assert.False(Board().SpecReady);
-        Assert.Empty(Board().Features);
+        Assert.Empty(Board().Plan);
     }
 
     private BoardSnapshot Board() => new BoardQuery(_conn, "demo").Snapshot();
 
-    private TaskRecord Task(TaskType type, string title, string? requirement = null, long? parent = null)
+    private TaskRecord Task(TaskType type, string title, string? milestone = null,
+                            long? parent = null, string? displayName = null)
     {
         var task = _tasks.Insert(TaskRecord.Create(
             type, title, "objective", 10_000,
-            requirementsRef: requirement is null ? null : RequirementsRef.Parse(requirement),
+            displayName: displayName,
+            milestoneId: milestone is null ? null : new MilestoneRepository(_conn).EnsureByName(milestone).Id,
             assignedRole: AgentRole.Engineer));
         if (parent is { } p) _tasks.SetParent(task.Id, p);
         return task;
@@ -101,105 +103,107 @@ public class BoardQueryTests : IDisposable
 
         Assert.False(board.Planned);
         Assert.Equal("planning", board.State);
-        Assert.Empty(board.Requirements);
+        Assert.Empty(board.Plan);
     }
 
     [Fact]
-    public void A_requirements_state_is_derived_from_the_tasks_that_name_it()
+    public void A_phase_is_done_when_every_task_under_it_is()
     {
-        Task(TaskType.Task, "queued", "01-queued.md@v1");
+        Task(TaskType.Task, "queued", "Books API");
 
-        var running = Task(TaskType.Task, "running", "02-underway.md@v1");
+        var running = Task(TaskType.Task, "running", "Library interface");
         Advance(running.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress);
 
-        var complete = Task(TaskType.Task, "complete", "03-finished.md@v2");
+        var complete = Task(TaskType.Task, "complete", "Bootstrap");
         Advance(complete.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress,
             TaskStatus.InReview, TaskStatus.Merging, TaskStatus.Qa, TaskStatus.Done);
 
-        var states = Board().Requirements.ToDictionary(r => r.File, r => r.State);
-        Assert.Equal("pending", states["01-queued.md"]);
-        Assert.Equal("active", states["02-underway.md"]);
-        // The version is stripped, so a bumped requirement stays one group.
-        Assert.Equal("done", states["03-finished.md"]);
+        var states = Board().Plan.ToDictionary(m => m.Name, m => m.State);
+        Assert.Equal("pending", states["Books API"]);
+        Assert.Equal("active", states["Library interface"]);
+        Assert.Equal("done", states["Bootstrap"]);
     }
 
     [Fact]
-    public void Tasks_naming_no_requirement_are_grouped_apart_and_reported_last()
+    public void Phases_appear_in_the_order_they_were_first_named_with_their_tasks_under_them()
     {
-        Task(TaskType.Task, "the feature work", "01-thing.md@v1");
-        Task(TaskType.Chore, "scaffolding", null);
+        Task(TaskType.Task, "storage", "Books API", displayName: "Storing books on disk");
+        Task(TaskType.Task, "page", "Library interface", displayName: "The page you see books on");
+        Task(TaskType.Task, "endpoints", "Books API", displayName: "Adding and deleting books");
 
-        var groups = Board().Requirements;
+        var plan = Board().Plan;
 
-        Assert.Equal(["01-thing.md", ""], groups.Select(r => r.File));
+        Assert.Equal(["Books API", "Library interface"], plan.Select(m => m.Name));
+        Assert.Equal(["Storing books on disk", "Adding and deleting books"],
+            plan[0].Tasks.Select(t => t.Name));
     }
 
     [Fact]
-    public void A_feature_adds_its_cost_to_a_group_without_counting_as_work_in_it()
+    public void A_task_with_no_display_name_falls_back_to_its_title()
     {
-        // The Feature is the container its children are counted in; counting it too would
-        // leave a group one short of complete for the whole build.
-        var feature = Task(TaskType.Feature, "The build");
-        var child = Task(TaskType.Task, "the work", "01-thing.md@v1", parent: feature.Id);
-        Advance(child.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress,
-            TaskStatus.InReview, TaskStatus.Merging, TaskStatus.Qa, TaskStatus.Done);
-        Spend(feature.Id, 0.20m);      // the design turn that decomposed it
+        Task(TaskType.Task, "implement-books-http-api", "Books API");
 
-        var groups = Board().Requirements.ToDictionary(r => r.File);
-
-        Assert.Equal("done", groups["01-thing.md"].State);
-        Assert.Equal(1, groups["01-thing.md"].Total);
-        Assert.Equal(0, groups[""].Total);          // the Feature is not work
-        Assert.Equal(0.20m, groups[""].CostUsd);    // but its money is still shown
+        var task = Assert.Single(Board().Plan[0].Tasks);
+        Assert.Equal("implement-books-http-api", task.Name);
     }
 
     [Fact]
-    public void Two_versions_of_one_requirement_are_the_same_group()
+    public void The_task_a_worker_holds_is_the_one_marked_active()
     {
-        Task(TaskType.Task, "first pass", "01-thing.md@v1");
-        Task(TaskType.Task, "after the change request", "01-thing.md@v2");
+        var idle = Task(TaskType.Task, "queued", "Books API");
+        var held = Task(TaskType.Task, "running", "Books API");
+        Advance(held.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress);
 
-        var group = Assert.Single(Board().Requirements);
-        Assert.Equal(2, group.Total);
+        var states = Board().Plan[0].Tasks.ToDictionary(t => t.Id, t => t.State);
+        Assert.Equal("pending", states[idle.Id]);
+        Assert.Equal("active", states[held.Id]);
     }
 
     [Fact]
-    public void A_features_cost_includes_the_children_it_was_decomposed_into()
+    public void The_first_phase_holds_work_that_was_never_a_task_and_never_shows_as_active()
     {
-        var feature = Task(TaskType.Feature, "Comparison page");
-        var childA = Task(TaskType.Task, "backend", parent: feature.Id);
-        var childB = Task(TaskType.Task, "frontend", parent: feature.Id);
+        new MilestoneRepository(_conn).EnsureFirst(MilestoneRepository.GettingStarted);
+        Task(TaskType.Task, "work", "Books API");
+        Spend(null, 2.50m, AgentRole.Pm);          // intake
+        Spend(null, 1.50m, AgentRole.Principal);   // the design run
 
-        Spend(feature.Id, 0.10m);    // the Principal's own decomposition turn
-        Spend(childA.Id, 1.25m);
-        Spend(childB.Id, 0.65m);
+        var first = Board().Plan[0];
 
-        var item = Assert.Single(Board().Features);
-        Assert.Equal(2.00m, item.CostUsd);
+        Assert.Equal(MilestoneRepository.GettingStarted, first.Name);
+        Assert.Equal(4.00m, first.CostUsd);
+        // It has no tasks to be in flight, so it must not blink once the build is delivered.
+        Assert.Equal("pending", first.State);
+    }
+
+    [Fact]
+    public void A_QA_round_is_charged_to_the_testing_phase_although_it_has_no_task()
+    {
+        new MilestoneRepository(_conn).EnsureByName(MilestoneRepository.Testing);
+        Task(TaskType.Bug, "a bug QA filed", MilestoneRepository.Testing);
+        Spend(null, 3.00m, AgentRole.Qa);
+
+        var testing = Assert.Single(Board().Plan, m => m.Name == MilestoneRepository.Testing);
+        Assert.Equal(3.00m, testing.CostUsd);
     }
 
     [Fact]
     public void Everything_the_page_shows_adds_up_to_the_ledger_total()
     {
+        new MilestoneRepository(_conn).EnsureFirst(MilestoneRepository.GettingStarted);
         var feature = Task(TaskType.Feature, "A feature");
-        var child = Task(TaskType.Task, "its child", parent: feature.Id);
-        var bug = Task(TaskType.Bug, "a bug nobody parented");
+        var child = Task(TaskType.Task, "its child", "Books API", parent: feature.Id);
+        var bug = Task(TaskType.Bug, "a bug", MilestoneRepository.Testing);
 
-        Spend(child.Id, 4.00m);                       // inside a feature
-        Spend(bug.Id, 1.50m);                         // a task under no feature
-        Spend(null, 2.50m, AgentRole.Pm);             // chat / design / QA — no task at all
+        Spend(child.Id, 4.00m);                       // planned work
+        Spend(bug.Id, 1.50m);                         // a fix
+        Spend(null, 2.50m, AgentRole.Pm);             // chat and design — no task at all
+        Spend(null, 0.75m, AgentRole.Qa);             // a QA round — also no task
 
         var board = Board();
-        var features = board.Features.Sum(f => f.CostUsd);
 
-        Assert.Equal(4.00m, features);
-        Assert.Equal(2.50m, board.ProjectLevelCostUsd);
-        Assert.Equal(1.50m, board.UnparentedTaskCostUsd);
-
-        // The property the client depends on: no unexplained money.
-        Assert.Equal(board.TotalCostUsd,
-            features + board.ProjectLevelCostUsd + board.UnparentedTaskCostUsd);
-        Assert.Equal(8.00m, board.TotalCostUsd);
+        // The property the client depends on: every dollar sits in exactly one phase.
+        Assert.Equal(board.TotalCostUsd, board.Plan.Sum(m => m.CostUsd));
+        Assert.Equal(8.75m, board.TotalCostUsd);
     }
 
     [Fact]
@@ -249,26 +253,11 @@ public class BoardQueryTests : IDisposable
     }
 
     [Fact]
-    public void The_task_in_hand_is_reported_with_the_requirement_it_serves()
+    public void Nothing_is_marked_active_when_no_task_is_in_flight()
     {
-        Task(TaskType.Task, "not started yet", "01-later.md@v1");
-        var running = Task(TaskType.Task, "the one being built", "02-now.md@v1");
-        Advance(running.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress);
+        Task(TaskType.Task, "queued", "Books API");
 
-        var inHand = Board().CurrentTask;
-
-        Assert.NotNull(inHand);
-        Assert.Equal("the one being built", inHand.Title);
-        Assert.Equal("in_progress", inHand.Status);
-        Assert.Equal("02-now.md", inHand.Requirement);
-    }
-
-    [Fact]
-    public void Nothing_is_in_hand_when_no_task_is_in_flight()
-    {
-        Task(TaskType.Task, "queued", "01-thing.md@v1");
-
-        Assert.Null(Board().CurrentTask);
+        Assert.DoesNotContain(Board().Plan.SelectMany(m => m.Tasks), t => t.State == "active");
     }
 
     [Fact]
@@ -283,28 +272,25 @@ public class BoardQueryTests : IDisposable
     }
 
     [Fact]
-    public void A_cancelled_features_spend_still_reconciles_instead_of_vanishing()
+    public void Cancelled_work_leaves_the_plan_but_its_spend_stays_in_the_total()
     {
-        // The features section hides a cancelled feature — but its money must not
-        // disappear with it, or the client sees a total no section explains.
-        var kept = Task(TaskType.Feature, "Kept feature");
-        var keptChild = Task(TaskType.Task, "kept child", parent: kept.Id);
-        var cancelled = Task(TaskType.Feature, "Cancelled feature");
-        var orphan = Task(TaskType.Task, "cancelled child", parent: cancelled.Id);
-        _tasks.Transition(cancelled.Id, TaskStatus.Cancelled);
+        // A task the client dropped is not shown as work — but its money must not disappear
+        // with it, or the client sees a total no phase explains.
+        new MilestoneRepository(_conn).EnsureFirst(MilestoneRepository.GettingStarted);
+        var feature = Task(TaskType.Feature, "The build");
+        var kept = Task(TaskType.Task, "kept", "Books API", parent: feature.Id);
+        var dropped = Task(TaskType.Task, "dropped", "Books API", parent: feature.Id);
+        _tasks.Transition(dropped.Id, TaskStatus.Cancelled);
 
-        Spend(keptChild.Id, 3.00m);
-        Spend(cancelled.Id, 0.40m);   // the cancelled feature's own decomposition turn
-        Spend(orphan.Id, 1.60m);
+        Spend(kept.Id, 3.00m);
+        Spend(dropped.Id, 1.60m);
+        Spend(feature.Id, 0.40m);     // the decomposition turn, which is planning
 
         var board = Board();
+        var api = Assert.Single(board.Plan, m => m.Name == "Books API");
 
-        Assert.Single(board.Features);                       // the cancelled one is hidden
-        var features = board.Features.Sum(f => f.CostUsd);
-        Assert.Equal(3.00m, features);
-        Assert.Equal(2.00m, board.UnparentedTaskCostUsd);    // 0.40 + 1.60 land here
-
-        Assert.Equal(board.TotalCostUsd,
-            features + board.ProjectLevelCostUsd + board.UnparentedTaskCostUsd);
+        Assert.Equal(["kept"], api.Tasks.Select(t => t.Name));   // the dropped one is hidden
+        Assert.Equal(4.60m, api.CostUsd);                        // but still charged here
+        Assert.Equal(board.TotalCostUsd, board.Plan.Sum(m => m.CostUsd));
     }
 }

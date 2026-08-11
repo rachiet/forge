@@ -120,8 +120,7 @@ public class ProjectLifecycleTests : IDisposable
         Assert.Equal("planning", board.State);
         Assert.False(board.Planned);
         Assert.False(board.SpecReady);
-        Assert.Empty(board.Requirements);
-        Assert.Empty(board.Features);
+        Assert.Empty(board.Plan);
         // Not empty: a new project opens with Iris's greeting, so the client arrives at a
         // conversation rather than a blank box. It is fixed text, so it costs nothing.
         var opening = Assert.Single(board.Chat);

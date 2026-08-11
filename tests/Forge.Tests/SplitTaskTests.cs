@@ -73,7 +73,7 @@ public class SplitTaskTests : IDisposable
     private ScriptedLlmClient SplitInto(int count)
     {
         var creates = Enumerable.Range(0, count).Select(i =>
-            ScriptedLlmClient.Tool("create_task",
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
                 ("title", $"Piece {i + 1}"),
                 ("objective", $"Build piece {i + 1}"),
                 ("acceptance", $"Piece {i + 1} works")));
@@ -144,7 +144,7 @@ public class SplitTaskTests : IDisposable
         // work outright. The guard also protects the sweep, which needs children to exist.
         var stuck = Stuck(strikes: 1);
         var llm = new ScriptedLlmClient(
-            ScriptedLlmClient.Tool("create_task",
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
                 ("title", "Only piece"), ("objective", "o"), ("acceptance", "a")),
             ScriptedLlmClient.Tool("break_and_relink", ("new_tasks", NextTaskId.ToString())),
             ScriptedLlmClient.Tool("escalate", ("reason", "cannot size this")));
@@ -183,8 +183,8 @@ public class SplitTaskTests : IDisposable
         var ids = $"{NextTaskId},{NextTaskId + 1}";
 
         var llm = new ScriptedLlmClient(
-            ScriptedLlmClient.Tool("create_task", ("title", "A"), ("objective", "o"), ("acceptance", "a")),
-            ScriptedLlmClient.Tool("create_task", ("title", "B"), ("objective", "o"), ("acceptance", "a")),
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "A"), ("objective", "o"), ("acceptance", "a")),
+            ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "B"), ("objective", "o"), ("acceptance", "a")),
             ScriptedLlmClient.Tool("break_and_relink", ("new_tasks", ids)),
             ScriptedLlmClient.Tool("escalate", ("reason", "genuinely needs a client decision")));
         await Runner(llm).RunNextByPriorityAsync();
@@ -232,8 +232,8 @@ public class SplitTaskTests : IDisposable
         var firstPiece = NextTaskId;
         var llm = new ScriptedLlmClient(
             string.Join("\n",
-                ScriptedLlmClient.Tool("create_task", ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
-                ScriptedLlmClient.Tool("create_task", ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
+                ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
+                ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("add_dependency",
                     ("task", (firstPiece + 1).ToString()), ("depends_on", firstPiece.ToString()))),
             ScriptedLlmClient.Tool("break_and_relink", ("new_tasks", $"{firstPiece},{firstPiece + 1}")));
@@ -260,8 +260,8 @@ public class SplitTaskTests : IDisposable
         var piece = NextTaskId;
         var llm = new ScriptedLlmClient(
             string.Join("\n",
-                ScriptedLlmClient.Tool("create_task", ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
-                ScriptedLlmClient.Tool("create_task", ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
+                ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
+                ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("add_dependency",
                     ("task", piece.ToString()), ("depends_on", stuck.Id.ToString()))),
             ScriptedLlmClient.Tool("break_and_relink", ("new_tasks", $"{piece},{piece + 1}")));
@@ -308,8 +308,8 @@ public class SplitTaskTests : IDisposable
         var piece = NextTaskId;
         var llm = new ScriptedLlmClient(
             string.Join("\n",
-                ScriptedLlmClient.Tool("create_task", ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
-                ScriptedLlmClient.Tool("create_task", ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
+                ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
+                ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("add_dependency",
                     ("task", piece.ToString()), ("depends_on", waiting.Id.ToString()))),
             ScriptedLlmClient.Tool("break_and_relink", ("new_tasks", $"{piece},{piece + 1}")),

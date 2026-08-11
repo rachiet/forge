@@ -72,7 +72,7 @@ public sealed class DesignPhase(
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
         var brief = (isChangeRequest ? ChangeRequestBrief() : Brief())
-                  + ProgressSection() + ThemeSection();
+                  + ProgressSection() + PlanSection() + ThemeSection();
 
         var result = await loop
             .RunChatAsync([new LlmMessage("user", brief)], executor, ct)
@@ -119,6 +119,39 @@ public sealed class DesignPhase(
         the file is named in `docs/requirements/`. Work that serves none — scaffolding, a
         chore — is reported separately, so leave its ref off rather than guessing at one.
         """;
+
+    /// <summary>
+    /// The plan section of the brief: how the tasks are grouped and named for the client, who
+    /// reads the board and never sees a task title.
+    /// </summary>
+    private string PlanSection()
+    {
+        var existing = new MilestoneRepository(conn).Names();
+        var reuse = existing.Count == 0 ? "" :
+            $"\n\nPhases already in the plan — reuse a name EXACTLY to add to it: "
+            + string.Join(", ", existing.Select(n => $"`{n}`")) + ".";
+
+        return $"""
+
+
+            ## How the plan reads to the client
+
+            The client watches this build as a list of phases with the work under each. Every
+            `create_task` therefore needs two things beyond the engineering detail:
+
+            - `display_name` — the task in their words, a short sentence. `Adding, listing and
+              deleting books`, never `implement-books-http-api`. They are not technical and
+              they never see the title.
+            - `milestone` — the phase it belongs to, also in their words: `Books API`,
+              `Library interface`. Tasks in the same phase repeat the SAME name and appear as
+              one group, ordered by when you first used it.
+
+            Group the work into a handful of phases that each mean something to someone paying
+            for it — three to six for a project this size, not one per task and not one for
+            everything. `{MilestoneRepository.GettingStarted}` and `{MilestoneRepository.Testing}`
+            are the harness's and are filled in for you; do not create tasks under them.{reuse}
+            """;
+    }
 
     /// <summary>
     /// The theme section of the brief: the themes the kit ships, each with what it is for, and
