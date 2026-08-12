@@ -18,6 +18,9 @@ namespace Forge.Cli.Commands;
 /// </summary>
 public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
 {
+    /// <summary>Consecutive steps that may throw in a --loop run before it gives up.</summary>
+    private const int MaxFailedSteps = 3;
+
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "<project>")]
@@ -81,12 +84,37 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         }
 
         var ran = 0;
+        // Consecutive steps that threw. A step leaves its task claimable, so one failure is
+        // retried by the next; a deterministic one would otherwise spin forever.
+        var failedSteps = 0;
         do
         {
             // Priority: a Principal-owned stuck task (blocked/out-of-budget) is cleared
             // before the engineer advances, because it usually gates the rest of the DAG.
             lease.Beat();
-            var outcome = await runner.RunNextByPriorityAsync(cancellationToken);
+
+            TaskRunOutcome? outcome;
+            try
+            {
+                outcome = await runner.RunNextByPriorityAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (settings.Loop)
+            {
+                // A single loop step is allowed to fail: the run carries on with the rest of
+                // the board. A one-shot run has nothing to carry on to, so it still throws.
+                AnsiConsole.MarkupLineInterpolated(
+                    $"[yellow]Build step failed ({++failedSteps} of {MaxFailedSteps}):[/] {ex.Message}");
+                if (failedSteps < MaxFailedSteps) continue;
+                AnsiConsole.MarkupLineInterpolated(
+                    $"[red]Stopped after {MaxFailedSteps} failed steps.[/] Last error: {ex.Message}");
+                break;
+            }
+
+            failedSteps = 0;
             if (outcome is null)
             {
                 AnsiConsole.MarkupLine(ran == 0

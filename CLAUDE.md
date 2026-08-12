@@ -372,6 +372,13 @@ app for every task. So appearance stops being generated work at all.
 - **Provider errors park work, never crash the process.** The provider is a
   network boundary; a 429 or auth failure ends the instance as `crash` with the
   workspace and progress note intact, so the resume path handles it.
+- **A turn cut off at the output ceiling is a retry, not a parse error.** `AgentLoop`
+  checks `LlmResponse.StopReason` (`max_output_tokens` / `max_tokens` / `MAX_TOKENS` /
+  `length` / `incomplete`) before touching the tool calls: a truncated turn's calls are
+  partial, so none runs, none is carried into the conversation — which would leave results
+  owing on the next request — and the model is told to send it again in smaller pieces.
+  `MaxTruncatedTurns` (3) ends the instance if it will not. Arguments that still fail to
+  parse are refused as a tool error; the throw used to take the whole worker down.
 
 ### Models, providers and cost [DECIDED] (settled while adding multi-provider support)
 

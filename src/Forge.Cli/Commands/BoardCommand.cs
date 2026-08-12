@@ -37,6 +37,9 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         public int Port { get; init; } = 5177;
     }
 
+    /// <summary>Consecutive build steps that may throw before the worker gives up on the board.</summary>
+    private const int MaxFailedTicks = 3;
+
     private readonly SemaphoreSlim _chatLock = new(1, 1);
     // Concurrent because background PM and worker tasks write these while request threads read.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _pmBusy = new();
@@ -410,19 +413,42 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             _paths, project, conn, LlmSetup.Metered(_paths, conn, logger: logger),
             new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger);
 
+        // Consecutive ticks that threw. A tick leaves its task claimable, so one failure is
+        // retried by the next tick; a deterministic one would otherwise spin forever.
+        var failedTicks = 0;
+
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 lease.Beat();
-                var outcome = await runner.RunNextByPriorityAsync(ct).ConfigureAwait(false);
-                if (outcome is null) break;      // board drained
-                if (outcome.ProjectBudgetExhausted)
+
+                // Per tick, so one bad step costs that step and not the build.
+                try
                 {
-                    // Nothing failed; the cap is spent. Stop pulling work — the page's
-                    // budget strip explains, and Raise + Start resumes from here.
-                    _runError[project] = "Project budget exhausted — the build is paused. " +
-                                         "Raise the budget and press Start to continue.";
+                    var outcome = await runner.RunNextByPriorityAsync(ct).ConfigureAwait(false);
+                    if (outcome is null) break;      // board drained
+                    failedTicks = 0;
+                    if (outcome.ProjectBudgetExhausted)
+                    {
+                        // Nothing failed; the cap is spent. Stop pulling work — the page's
+                        // budget strip explains, and Raise + Start resumes from here.
+                        _runError[project] = "Project budget exhausted — the build is paused. " +
+                                             "Raise the budget and press Start to continue.";
+                        break;
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;   // the client pressed stop; the outer handler ends the run
+                }
+                catch (Exception ex)
+                {
+                    logger.Message($"Build step failed ({++failedTicks} of {MaxFailedTicks}): {ex.Message}");
+                    if (failedTicks < MaxFailedTicks) continue;
+
+                    _runError[project] = $"The build stopped after {MaxFailedTicks} failed steps: {ex.Message}";
+                    logger.Event(EventType.ErrorInternal, _runError[project]);
                     break;
                 }
             }
@@ -430,7 +456,10 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
         catch (OperationCanceledException) { /* the client pressed stop */ }
         catch (Exception ex)
         {
+            // The last resort: anything thrown outside the tick itself, so the worker still
+            // exits cleanly and releases its lease rather than taking the host down.
             logger.Message($"Board worker stopped: {ex.Message}");
+            _runError[project] = $"The build stopped unexpectedly: {ex.Message}";
         }
     }
 

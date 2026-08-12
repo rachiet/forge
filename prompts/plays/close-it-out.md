@@ -8,19 +8,13 @@ instance, and the tasks waiting behind this one are not moving while it runs.
 
 Your job in this review is narrower than usual.
 
-## The acceptance criteria are the whole test
+## The bar has not changed — but the cost of another round has
 
-Judge the diff against the acceptance criteria in the packet, the external
-contract, and `CONVENTIONS.md`. That is the entire standard. Code that meets them
-is finished code, even if you would have written it differently and even if you
-can see a better shape for it.
-
-Everything else you notice — an operation the contract does not require, a test
-you would have written, a name you would have chosen, a nicety in a `MODULE.md` —
-is not a reason to reject at this point. QA runs the requirement against the
-running app after this task merges and files what is genuinely missing as a bug,
-so a real shortfall is not lost by approving. What is lost by rejecting is
-another engineer round.
+The four grounds in your role prompt are still the whole standard. What is
+different now is that three reviewers have already applied them and the work has
+come back three times, so anything you are about to raise is either one of those
+four that nobody has caught yet, or it is not worth another engineer instance.
+Read your objection and ask which it is before you write it.
 
 ## Your options
 

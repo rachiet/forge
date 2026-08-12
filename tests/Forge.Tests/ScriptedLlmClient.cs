@@ -43,15 +43,22 @@ public sealed class ScriptedLlmClient(params ScriptedTurn[] turns) : ILlmClient
     /// <summary>What every scripted turn reports as its reason for stopping.</summary>
     public string StopReason { get; init; } = "end_turn";
 
+    /// <summary>
+    /// What the fallback turn reports instead, once the script has run dry. Lets a test script
+    /// a truncated turn and then a normal one, which one shared stop reason cannot express.
+    /// </summary>
+    public string? FallbackStopReason { get; init; }
+
     public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         Requests.Add(request);
-        var turn = _turns.Count > 0 ? _turns.Dequeue() : Fallback;
+        var scripted = _turns.Count > 0;
+        var turn = scripted ? _turns.Dequeue() : Fallback;
 
         return Task.FromResult(new LlmResponse
         {
             Content = turn.Text,
-            StopReason = StopReason,
+            StopReason = scripted ? StopReason : FallbackStopReason ?? StopReason,
             ToolCalls = turn.Calls,
             Usage = new LlmUsage(100, 50),
         });

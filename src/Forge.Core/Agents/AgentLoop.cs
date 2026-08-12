@@ -61,6 +61,12 @@ public sealed class AgentLoop(
     /// </summary>
     private const int MaxRefusedTurns = 5;
 
+    /// <summary>
+    /// Consecutive turns cut off at the output ceiling before the instance ends as a crash.
+    /// One is a long file the model can split; three in a row means it will not.
+    /// </summary>
+    private const int MaxTruncatedTurns = 3;
+
     /// <summary>Fraction of the iteration cap at which the agent is first told to wrap up.</summary>
     private const double IterationNudgeThreshold = 0.70;
 
@@ -155,6 +161,7 @@ public sealed class AgentLoop(
         var iterations = 0;
         var emptyTurns = 0;
         var refusedTurns = 0;
+        var truncatedTurns = 0;
         // The model's most recent output, used as the resume note when it wrote none itself.
         string? lastMessage = null;
 
@@ -207,6 +214,41 @@ public sealed class AgentLoop(
                     ? $" / cache read {response.Usage.CacheReadTokens} write {response.Usage.CacheWriteTokens}"
                     : "") + ")");
 
+            // Cut off at our own output ceiling: whatever it was writing is half-finished, so
+            // a tool call in this turn carries truncated arguments and must not run. The calls
+            // are dropped rather than carried into the conversation, which would leave results
+            // owing on the next request, and the model is told to send the call again smaller.
+            if (IsTruncated(response.StopReason))
+            {
+                log.Event(EventType.LlmNoToolCall,
+                    $"turn {turn}: cut off at the output limit ({truncatedTurns + 1} of {MaxTruncatedTurns}), "
+                    + $"stop reason {response.StopReason}, {response.Usage.TokensOut} output tokens");
+
+                if (++truncatedTurns >= MaxTruncatedTurns)
+                {
+                    var why = $"The model was cut off at the {_recipe.MaxTokens}-token output limit on "
+                            + $"{MaxTruncatedTurns} consecutive turns; it cannot emit a call small enough to run.";
+                    log.Event(EventType.ErrorInternal, why);
+                    return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
+                        why, lastMessage, noteOverride: why);
+                }
+
+                conversation.Add(new LlmMessage("assistant", response.Content is { Length: > 0 } partial
+                    ? partial
+                    : "(cut off at the output limit)"));
+                conversation.Add(new LlmMessage("user", $"""
+                    Your last turn hit the {_recipe.MaxTokens}-token output limit and was cut off
+                    mid-answer, so nothing ran and nothing changed — the tool call it contained
+                    arrived incomplete and was discarded.
+
+                    Send it again in smaller pieces. A whole file in one write_file is the usual
+                    cause: write the file in parts, or split the work across several turns, one
+                    file at a time. Do not restate what you were going to do — call the tool.
+                    """));
+                continue;
+            }
+
+            truncatedTurns = 0;
             conversation.Add(new LlmMessage("assistant", response.Content) { ToolCalls = response.ToolCalls });
             // A turn that only called tools has no text, so its calls stand in as the last
             // thing it said — the resume note is written from this.
@@ -214,7 +256,11 @@ public sealed class AgentLoop(
                 ? response.Content
                 : string.Join(" ", response.ToolCalls.Select(c => $"{c.Name}({c.ArgumentsJson})"));
 
-            var calls = response.ToolCalls.Select(ToToolCall).ToList();
+            // Kept paired with the raw calls: a result carries the provider's own call id, and
+            // a call whose arguments would not parse still owes one.
+            var calls = response.ToolCalls
+                .Select(raw => (Raw: raw, Call: TryToToolCall(raw)))
+                .ToList();
             if (calls.Count == 0)
             {
                 // The turn the parser could make nothing of, recorded with the provider's own
@@ -250,16 +296,20 @@ public sealed class AgentLoop(
             EndReason? end = null;
             var anyAccepted = false;
 
-            for (var index = 0; index < calls.Count; index++)
+            foreach (var (raw, call) in calls)
             {
-                var call = calls[index];
-                var outcome = await toolset.ExecuteAsync(call, ct).ConfigureAwait(false);
+                // Arguments that are not JSON at all — a provider oddity, or a cut-off call the
+                // stop reason did not admit to. Refused with what to do about it, not thrown.
+                var outcome = call is null
+                    ? new ToolOutcome($"ERROR: the arguments for `{raw.Name}` were not valid JSON, so "
+                        + "the call was not run. Send it again as a complete JSON object; if the "
+                        + "content is long, write it in smaller pieces.")
+                    : await toolset.ExecuteAsync(call, ct).ConfigureAwait(false);
                 if (!outcome.Refused) anyAccepted = true;
-                observations.AppendLine($"[{call.Name}]").AppendLine(outcome.Observation).AppendLine();
+                observations.AppendLine($"[{raw.Name}]").AppendLine(outcome.Observation).AppendLine();
                 // Paired to the call by the id the provider issued, so a result cannot be
                 // attached to the wrong one when a turn made several.
-                results.Add(new LlmToolResult(
-                    response.ToolCalls[index].Id, call.Name, outcome.Observation));
+                results.Add(new LlmToolResult(raw.Id, raw.Name, outcome.Observation));
                 if (outcome.End is not { } reason) continue;
                 end = reason;
                 break; // an ending tool ends the turn; later calls in the batch do not run.
@@ -292,6 +342,35 @@ public sealed class AgentLoop(
 
         return Finish(instanceId, EndReason.Iterations, iterations, toolset, task, log,
             $"Iteration cap of {_recipe.IterationCap} turns reached.", lastMessage);
+    }
+
+    /// <summary>
+    /// Stop reasons that mean the provider ended the answer at the output ceiling rather than
+    /// because the model had finished: `max_output_tokens` (OpenAI), `max_tokens` (Anthropic),
+    /// `MAX_TOKENS` (Gemini), plus the bare `length` and `incomplete` some responses carry.
+    /// </summary>
+    private static bool IsTruncated(string? stopReason) =>
+        stopReason is { Length: > 0 } reason
+        && (reason.Contains("max_tokens", StringComparison.OrdinalIgnoreCase)
+         || reason.Contains("max_output_tokens", StringComparison.OrdinalIgnoreCase)
+         || reason.Equals("length", StringComparison.OrdinalIgnoreCase)
+         || reason.Equals("incomplete", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// One provider call as the toolset takes it, or null when its arguments are not valid
+    /// JSON — a turn cut off mid-string arrives that way, and a throw here would take the
+    /// whole worker down instead of the one call.
+    /// </summary>
+    private static ToolCall? TryToToolCall(LlmToolCall call)
+    {
+        try
+        {
+            return ToToolCall(call);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -38,19 +38,36 @@ this code, and that is the point — no one grades their own work.
   rejection for something you could have caught the first time is the most
   expensive way to review.
 
+## What is grounds to send it back
+
+Exactly four things, and nothing else:
+
+1. A **stated acceptance criterion** in the packet is not met.
+2. The **external contract** is violated — a shape, status code or name that
+   differs from the OpenAPI file, or an operation the contract does not define.
+3. A rule **already written in `CONVENTIONS.md`** is broken.
+4. The code is **overfitted** to the examples: it passes the listed cases without
+   solving the general problem.
+
+Everything else you notice is not a rejection. Code you would have written
+differently, a validation you would have duplicated at another layer, a test you
+would have added, a name or a doc sentence you would have phrased otherwise — if
+the four above are satisfied, the work is finished work. Put what you noticed in
+the `approve` note, or pass a `convention` so it becomes a rule for everyone, and
+merge it. A held-out QA suite runs the requirement against the finished app
+later, so a real behavioural shortfall is not lost by approving; another engineer
+round is lost by rejecting.
+
 ## Your verdict
 
 End your review with exactly one:
 
-- **`approve([note])`** — the work is correct, general, and conventional. Merge it.
-- **`request_changes(reason, [convention])`** — send it back. The `reason` is
-  what the engineer must fix, in concrete terms. If the mistake is one likely to
-  recur across tasks, set `convention` to a one-line rule and it will be appended
-  to `CONVENTIONS.md` — so the same mistake is ruled out for everyone, once,
-  instead of being caught over and over. This is how the team gets better: a
-  rejection you turn into a convention is a rejection no future engineer earns.
-
-Prefer approval when the code is correct and conventional even if you would have
-written it differently — your job is to catch what is wrong, not to impose your
-personal style. Reserve `request_changes` for real problems: overfitting, broken
-conventions, contract violations, stale summaries.
+- **`approve([note])`** — none of the four grounds applies. Merge it. Use the note
+  for anything you are knowingly letting through.
+- **`request_changes(reason, [convention])`** — name which of the four grounds it
+  is and what must change, in concrete terms. Do not attach anything outside them.
+  If the mistake is one likely to recur across tasks, set `convention` to a
+  one-line rule and it will be appended to `CONVENTIONS.md` — so the same mistake
+  is ruled out for everyone, once, instead of being caught over and over. This is
+  how the team gets better: a rejection you turn into a convention is a rejection
+  no future engineer earns.

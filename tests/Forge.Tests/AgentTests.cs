@@ -438,27 +438,71 @@ public class AgentLoopTests : IDisposable
     {
         var task = StartTask();
         var sink = new MemoryLogSink();
-        // A response cut off at the output limit looks exactly like a model that did not act,
-        // so the stop reason is the only thing that tells them apart.
-        var llm = new ScriptedLlmClient("Here is the file I am about to write:\n<tool name=\"write_")
-        {
-            Fallback = "still truncated",
-            StopReason = "length",
-        };
+        var llm = new ScriptedLlmClient("I will write the file next.") { Fallback = "still thinking" };
         var loop = new AgentLoop(llm, _conn, new PromptAssembler(PromptLibrary.Resolve()),
             AgentRecipe.Engineer, new ForgeLogger(sink, "proj"));
 
         var result = await loop.RunAsync(task, _executor);
 
         var first = sink.Entries.First(e => e.Type == EventType.LlmNoToolCall);
-        Assert.Contains("stop reason length", first.Message);
-        Assert.Contains("Here is the file", first.Message);
+        Assert.Contains("stop reason end_turn", first.Message);
+        Assert.Contains("I will write the file", first.Message);
 
         // And the exit itself is on the record, which is what was missing.
         Assert.Equal(EndReason.Crash, result.End);
         var exit = Assert.Single(sink.Entries,
             e => e.Type == EventType.ErrorInternal && e.Message.Contains("consecutive turns"));
-        Assert.Contains("length", exit.Message);
+        Assert.Contains("end_turn", exit.Message);
+    }
+
+    [Fact]
+    public async Task A_turn_cut_off_at_the_output_limit_is_told_to_send_it_again_smaller()
+    {
+        var task = StartTask();
+        var sink = new MemoryLogSink();
+        // The provider stopped at our ceiling, so the write_file it was emitting is half a
+        // JSON object. Running it would write a truncated file; parsing it used to throw.
+        var llm = new ScriptedLlmClient(
+            new ScriptedTurn("", [new LlmToolCall("call_1", "write_file",
+                "{\"path\":\"Program.cs\",\"content\":\"public class P { // cut off he")]))
+        {
+            Fallback = ScriptedLlmClient.Tool("done", ("summary", "Wrote it in pieces.")),
+            StopReason = "max_output_tokens",
+            FallbackStopReason = "end_turn",
+        };
+        var loop = new AgentLoop(llm, _conn, new PromptAssembler(PromptLibrary.Resolve()),
+            AgentRecipe.Engineer, new ForgeLogger(sink, "proj"));
+
+        var result = await loop.RunAsync(task, _executor);
+
+        // The instance carried on and finished: the truncated turn cost one round trip.
+        Assert.Equal(EndReason.Done, result.End);
+        Assert.False(File.Exists(Path.Combine(_root, "Program.cs")));
+        Assert.Contains(sink.Entries,
+            e => e.Type == EventType.LlmNoToolCall && e.Message.Contains("cut off at the output limit"));
+        // The model was told what to do about it, and the partial call was not carried back.
+        var retry = llm.Requests[1].Messages[^1];
+        Assert.Contains("smaller pieces", retry.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(llm.Requests[1].Messages, m => m.ToolCalls.Count > 0);
+    }
+
+    [Fact]
+    public async Task Tool_arguments_that_are_not_valid_json_are_refused_rather_than_thrown()
+    {
+        var task = StartTask();
+        // Malformed with no stop reason admitting to it: the loop must still survive it.
+        var llm = new ScriptedLlmClient(
+            new ScriptedTurn("", [new LlmToolCall("call_1", "write_file", "{\"path\":\"a.txt\",")]))
+        {
+            Fallback = ScriptedLlmClient.Tool("done", ("summary", "Recovered.")),
+        };
+        var loop = new AgentLoop(llm, _conn, new PromptAssembler(PromptLibrary.Resolve()),
+            AgentRecipe.Engineer);
+
+        var result = await loop.RunAsync(task, _executor);
+
+        Assert.Equal(EndReason.Done, result.End);
+        Assert.Contains("not valid JSON", llm.Observations(1), StringComparison.Ordinal);
     }
 
     [Fact]
