@@ -201,7 +201,7 @@ public class DesignPhaseTests : IDisposable
         Assert.Equal("Todo storage", _tasks.List().Single().Title);
 
         // The refusals were delivered to the model as observations, not crashes.
-        var observations = string.Join("\n", llm.Requests.Skip(1).Select(r => r.Messages[^1].Content));
+        var observations = string.Join("\n", Enumerable.Range(1, llm.Requests.Count - 1).Select(llm.Observations));
         Assert.Contains("ERROR:", observations);
         Assert.Contains("task, bug, or chore", observations);
 
@@ -229,7 +229,7 @@ public class DesignPhaseTests : IDisposable
         await Design(llm).RunAsync();
 
         // The read succeeded (no REFUSED) — the Principal's scope is the whole workspace.
-        var observation = llm.Requests[1].Messages[^1].Content;
+        var observation = llm.Observations(1);
         Assert.Contains("class Existing", observation);
         Assert.DoesNotContain("REFUSED", observation);
     }

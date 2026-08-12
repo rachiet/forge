@@ -1,5 +1,6 @@
 using System.Data;
 using System.Text;
+using System.Text.Json;
 using Forge.Core.Db;
 using Forge.Core.Llm;
 using Forge.Core.Logging;
@@ -166,6 +167,9 @@ public sealed class AgentLoop(
                     // A snapshot, so a retrying adapter never sees later turns appear in it.
                     Messages = [.. conversation],
                     MaxTokens = _recipe.MaxTokens,
+                    // The provider's own schema layer enforces the shape, so a call cannot
+                    // arrive in a form the toolset would have to guess at.
+                    Tools = AgentToolset.Definitions(_recipe),
                     Attribution = attribution,
                 }, ct).ConfigureAwait(false);
             }
@@ -198,10 +202,14 @@ public sealed class AgentLoop(
                     ? $" / cache read {response.Usage.CacheReadTokens} write {response.Usage.CacheWriteTokens}"
                     : "") + ")");
 
-            conversation.Add(new LlmMessage("assistant", response.Content));
-            lastMessage = response.Content;
+            conversation.Add(new LlmMessage("assistant", response.Content) { ToolCalls = response.ToolCalls });
+            // A turn that only called tools has no text, so its calls stand in as the last
+            // thing it said — the resume note is written from this.
+            lastMessage = response.Content is { Length: > 0 }
+                ? response.Content
+                : string.Join(" ", response.ToolCalls.Select(c => $"{c.Name}({c.ArgumentsJson})"));
 
-            var calls = ToolCallParser.Parse(response.Content);
+            var calls = response.ToolCalls.Select(ToToolCall).ToList();
             if (calls.Count == 0)
             {
                 // The turn the parser could make nothing of, recorded with the provider's own
@@ -221,32 +229,32 @@ public sealed class AgentLoop(
                     return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
                         why, lastMessage);
                 }
-                // Shows the shape rather than naming it: a model that just wrote its own
-                // short form needs to see the one the parser reads.
                 conversation.Add(new LlmMessage("user", """
                     Your last turn contained no tool call, so nothing happened and nothing
                     changed. Text alone is discarded — including a plan, a question, or a
                     request for access you already have.
 
-                    Reply with the call itself, in this exact form:
-
-                    <tool name="read_file">
-                    <arg name="path">src/App/Program.cs</arg>
-                    </tool>
+                    Call a tool now. If you need to see a file first, that call is read_file.
                     """));
                 continue;
             }
 
             emptyTurns = 0;
             var observations = new StringBuilder();
+            var results = new List<LlmToolResult>();
             EndReason? end = null;
             var anyAccepted = false;
 
-            foreach (var call in calls)
+            for (var index = 0; index < calls.Count; index++)
             {
+                var call = calls[index];
                 var outcome = await toolset.ExecuteAsync(call, ct).ConfigureAwait(false);
                 if (!outcome.Refused) anyAccepted = true;
                 observations.AppendLine($"[{call.Name}]").AppendLine(outcome.Observation).AppendLine();
+                // Paired to the call by the id the provider issued, so a result cannot be
+                // attached to the wrong one when a turn made several.
+                results.Add(new LlmToolResult(
+                    response.ToolCalls[index].Id, call.Name, outcome.Observation));
                 if (outcome.End is not { } reason) continue;
                 end = reason;
                 break; // an ending tool ends the turn; later calls in the batch do not run.
@@ -269,13 +277,38 @@ public sealed class AgentLoop(
                     why, lastMessage, noteOverride: why);
             }
 
-            AppendPendingMessages(task?.Id, observations, log);
-            AppendIterationNudge(turn, observations, log);
-            conversation.Add(new LlmMessage("user", observations.ToString().TrimEnd()));
+            // The harness's own words for this turn — queued messages and the turn-cap nudge —
+            // ride alongside the results rather than inside them, since they answer no call.
+            var aside = new StringBuilder();
+            AppendPendingMessages(task?.Id, aside, log);
+            AppendIterationNudge(turn, aside, log);
+            conversation.Add(new LlmMessage("user", aside.ToString().TrimEnd()) { ToolResults = results });
         }
 
         return Finish(instanceId, EndReason.Iterations, iterations, toolset, task, log,
             $"Iteration cap of {_recipe.IterationCap} turns reached.", lastMessage);
+    }
+
+    /// <summary>
+    /// One provider call as the toolset takes it. Arguments arrive as a JSON object and the
+    /// toolset reads them as text, so each value is flattened to its string form.
+    /// </summary>
+    private static ToolCall ToToolCall(LlmToolCall call)
+    {
+        var args = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var document = JsonDocument.Parse(
+            call.ArgumentsJson is { Length: > 0 } json ? json : "{}");
+        if (document.RootElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                args[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString() ?? ""
+                    : property.Value.GetRawText();
+            }
+        }
+        // Raw carries what the model actually sent, so a refusal can quote it back.
+        return new ToolCall(call.Name, args, call.ArgumentsJson);
     }
 
     /// <summary>

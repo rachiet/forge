@@ -6,15 +6,17 @@ using System.Text.Json.Nodes;
 namespace Forge.Core.Llm;
 
 /// <summary>
-/// The OpenAI adapter: translates Forge's request and response records to the Chat Completions
-/// API and back, over HttpClient. Wrap it in MeteredLlmClient before handing it to an agent
-/// loop, or nothing is ledgered and no budget is enforced.
+/// The OpenAI adapter: translates Forge's request and response records to the Responses API and
+/// back, over HttpClient. Tool calls travel in the provider's own `tools` / `function_call`
+/// fields rather than as text the harness has to parse, so a call cannot arrive malformed.
+/// Wrap it in MeteredLlmClient before handing it to an agent loop, or nothing is ledgered and no
+/// budget is enforced.
 /// </summary>
 public sealed class OpenAiLlmClient : ILlmClient
 {
     public const string ApiKeyVariable = "OPENAI_API_KEY";
     public const string ProviderName = "openai";
-    public const string Endpoint = "https://api.openai.com/v1/chat/completions";
+    public const string Endpoint = "https://api.openai.com/v1/responses";
 
     /// <summary>
     /// This provider's answer to each tier. The ids are price-table keys, so every default is
@@ -62,70 +64,146 @@ public sealed class OpenAiLlmClient : ILlmClient
     }
 
     /// <summary>
-    /// The system prompt travels as a `system` message rather than a top-level field.
-    /// `system` and not `developer`: the newer reasoning models accept both (they treat
-    /// system as developer), while older chat models only know system — so system is the
-    /// one spelling that works across everything an operator might pin in llm.json.
+    /// The Responses request: the system prompt as `instructions`, the conversation as `input`,
+    /// and the tool schemas as `tools`. `max_output_tokens` bounds reasoning tokens as well as
+    /// visible output.
     /// </summary>
     internal static string BuildBody(LlmRequest request)
     {
-        var messages = new JsonArray();
-        if (request.System is { Length: > 0 } system)
-            messages.Add(new JsonObject { ["role"] = "system", ["content"] = system });
-
-        foreach (var message in request.Messages)
-        {
-            messages.Add(new JsonObject
-            {
-                ["role"] = message.Role == "assistant" ? "assistant" : "user",
-                ["content"] = message.Content,
-            });
-        }
-
-        // max_completion_tokens bounds reasoning tokens as well as visible output.
-        return new JsonObject
+        var body = new JsonObject
         {
             ["model"] = request.Model,
-            ["max_completion_tokens"] = request.MaxTokens,
-            ["messages"] = messages,
-        }.ToJsonString();
+            ["max_output_tokens"] = request.MaxTokens,
+            ["input"] = BuildInput(request.Messages),
+        };
+
+        if (request.System is { Length: > 0 } system) body["instructions"] = system;
+        if (request.Tools.Count > 0) body["tools"] = BuildTools(request.Tools);
+
+        return body.ToJsonString();
     }
 
     /// <summary>
-    /// Translates CompletionUsage into Forge's four token buckets. `prompt_tokens` includes
-    /// cached tokens, so the cached count is subtracted to leave the uncached remainder that
-    /// TokensIn means everywhere. Cache writes stay inside TokensIn and CacheWriteTokens is
-    /// left at zero, since OpenAI bills them at the ordinary input rate. `completion_tokens`
-    /// already includes reasoning tokens.
+    /// The conversation as Responses input items. A plain turn is a role/content message; a turn
+    /// that called tools becomes one `function_call` item per call, and the results that answer
+    /// them become `function_call_output` items carrying the same `call_id`.
+    /// </summary>
+    private static JsonArray BuildInput(IReadOnlyList<LlmMessage> messages)
+    {
+        var input = new JsonArray();
+        foreach (var message in messages)
+        {
+            if (message.Content is { Length: > 0 })
+            {
+                input.Add(new JsonObject
+                {
+                    ["role"] = message.Role == "assistant" ? "assistant" : "user",
+                    ["content"] = message.Content,
+                });
+            }
+
+            foreach (var call in message.ToolCalls)
+            {
+                input.Add(new JsonObject
+                {
+                    ["type"] = "function_call",
+                    ["call_id"] = call.Id,
+                    ["name"] = call.Name,
+                    ["arguments"] = call.ArgumentsJson,
+                });
+            }
+
+            foreach (var result in message.ToolResults)
+            {
+                input.Add(new JsonObject
+                {
+                    ["type"] = "function_call_output",
+                    ["call_id"] = result.CallId,
+                    ["output"] = result.Output,
+                });
+            }
+        }
+        return input;
+    }
+
+    /// <summary>
+    /// The tool schemas, flat as this API declares them. `strict` is left off deliberately: it
+    /// requires every property to be required and additionalProperties false, which no tool with
+    /// an optional argument can satisfy.
+    /// </summary>
+    private static JsonArray BuildTools(IReadOnlyList<LlmToolDefinition> tools)
+    {
+        var array = new JsonArray();
+        foreach (var tool in tools)
+        {
+            array.Add(new JsonObject
+            {
+                ["type"] = "function",
+                ["name"] = tool.Name,
+                ["description"] = tool.Description,
+                ["parameters"] = JsonNode.Parse(tool.ParametersJson),
+            });
+        }
+        return array;
+    }
+
+    /// <summary>
+    /// Reads the response: text from the `message` items, calls from the `function_call` items,
+    /// and the four token buckets from `usage`. `input_tokens` is the whole prompt and
+    /// `input_tokens_details.cached_tokens` the part of it served from cache, so the cached count
+    /// is subtracted to leave the uncached remainder TokensIn means everywhere. Cache writes stay
+    /// inside TokensIn and CacheWriteTokens is left at zero, since OpenAI bills them at the
+    /// ordinary input rate. `output_tokens` already includes reasoning tokens.
     /// </summary>
     internal static LlmResponse ParseResponse(string payload)
     {
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
 
-        var text = "";
-        string? stopReason = null;
-        if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
+        var text = new StringBuilder();
+        var calls = new List<LlmToolCall>();
+
+        if (root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
         {
-            var choice = choices[0];
-            if (choice.TryGetProperty("message", out var message) &&
-                message.TryGetProperty("content", out var body) &&
-                body.ValueKind == JsonValueKind.String)
+            foreach (var item in output.EnumerateArray())
             {
-                text = body.GetString() ?? "";
+                var type = Text(item, "type");
+                if (type == "function_call")
+                {
+                    calls.Add(new LlmToolCall(
+                        Text(item, "call_id") ?? Text(item, "id") ?? "",
+                        Text(item, "name") ?? "",
+                        Text(item, "arguments") ?? "{}"));
+                }
+                else if (type == "message" && item.TryGetProperty("content", out var parts)
+                                           && parts.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var part in parts.EnumerateArray())
+                        if (Text(part, "type") == "output_text" && Text(part, "text") is { } chunk)
+                            text.Append(chunk);
+                }
             }
-            if (choice.TryGetProperty("finish_reason", out var finish) && finish.ValueKind == JsonValueKind.String)
-                stopReason = finish.GetString();
         }
 
-        var promptTokens = 0;
-        var completionTokens = 0;
+        // `status` is "completed" or "incomplete"; the reason for an incomplete one — hitting
+        // max_output_tokens, say — is the part worth reporting.
+        var stopReason = Text(root, "status");
+        // Present but null on a completed response, so the kind is checked before reading it.
+        if (root.TryGetProperty("incomplete_details", out var incomplete) &&
+            incomplete.ValueKind == JsonValueKind.Object &&
+            Text(incomplete, "reason") is { Length: > 0 } why)
+        {
+            stopReason = why;
+        }
+
+        var inputTokens = 0;
+        var outputTokens = 0;
         var cachedTokens = 0;
         if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
         {
-            promptTokens = Int(usage, "prompt_tokens");
-            completionTokens = Int(usage, "completion_tokens");
-            if (usage.TryGetProperty("prompt_tokens_details", out var details) &&
+            inputTokens = Int(usage, "input_tokens");
+            outputTokens = Int(usage, "output_tokens");
+            if (usage.TryGetProperty("input_tokens_details", out var details) &&
                 details.ValueKind == JsonValueKind.Object)
             {
                 cachedTokens = Int(details, "cached_tokens");
@@ -134,11 +212,17 @@ public sealed class OpenAiLlmClient : ILlmClient
 
         return new LlmResponse
         {
-            Content = text,
+            Content = text.ToString(),
             StopReason = stopReason,
-            Usage = new LlmUsage(Math.Max(0, promptTokens - cachedTokens), completionTokens, cachedTokens),
+            ToolCalls = calls,
+            Usage = new LlmUsage(Math.Max(0, inputTokens - cachedTokens), outputTokens, cachedTokens),
         };
     }
+
+    private static string? Text(JsonElement parent, string name) =>
+        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static int Int(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number

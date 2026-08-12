@@ -132,7 +132,7 @@ public class PmChatTests : IDisposable
         var turn = await Chat(llm).SendAsync("What does the code do?");
 
         // Three refusals, all delivered as observations rather than crashes.
-        var observations = string.Join("\n", llm.Requests.Skip(1).Select(r => r.Messages[^1].Content));
+        var observations = string.Join("\n", Enumerable.Range(1, llm.Requests.Count - 1).Select(llm.Observations));
         Assert.Equal(3, observations.Split("REFUSED:").Length - 1);
         Assert.DoesNotContain("hunter2", observations);
 

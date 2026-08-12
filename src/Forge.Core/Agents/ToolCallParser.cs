@@ -15,7 +15,7 @@ public sealed record ToolCall(string Name, IReadOnlyDictionary<string, string> A
     public string Arg(string name) =>
         Args.TryGetValue(name, out var v) && !string.IsNullOrWhiteSpace(v)
             ? v
-            : throw new ToolCallException($"Tool '{Name}' requires a non-empty <arg name=\"{name}\">.");
+            : throw new ToolCallException($"Tool '{Name}' requires a non-empty `{name}` argument.");
 
     /// <summary>An optional argument, or null when the call did not carry it.</summary>
     public string? Optional(string name) =>

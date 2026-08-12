@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Forge.Core.Agents;
 
@@ -33,6 +35,34 @@ public sealed record ToolDoc(string Summary, params ToolArg[] Args)
         foreach (var arg in Args)
             sb.Append($"\n    {arg.Name} [{(arg.Required ? "Required" : "Optional")}] — {arg.Description}");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The same tool as a JSON Schema for the provider's own tool-calling surface, so the model
+    /// is constrained by the API rather than by a syntax described in the prompt. Every argument
+    /// is a string: the toolset reads them as text and parses what it needs, so declaring a
+    /// number here would only give the schema a way to reject a value the tool would accept.
+    /// </summary>
+    public string ParametersJson()
+    {
+        var properties = new JsonObject();
+        var required = new JsonArray();
+        foreach (var arg in Args)
+        {
+            properties[arg.Name] = new JsonObject
+            {
+                ["type"] = "string",
+                ["description"] = arg.Description,
+            };
+            if (arg.Required) required.Add(arg.Name);
+        }
+
+        return new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = properties,
+            ["required"] = required,
+        }.ToJsonString();
     }
 
     /// <summary>A required argument.</summary>

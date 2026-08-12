@@ -468,7 +468,18 @@ public class TaskRunnerTests : IDisposable
         {
             if (_thrown < throwsFirst) { _thrown++; throw new InvalidOperationException("transient 503"); }
             var content = _turns.Count > 0 ? _turns.Dequeue() : "done";
-            return Task.FromResult(new LlmResponse { Content = content, StopReason = "end_turn", Usage = new LlmUsage(2, 10) });
+            // Parses its own script into calls, the way a provider returns them.
+            var calls = Forge.Core.Agents.ToolCallParser.Parse(content)
+                .Select((call, index) => new LlmToolCall(
+                    $"call_{index}", call.Name, System.Text.Json.JsonSerializer.Serialize(call.Args)))
+                .ToList();
+            return Task.FromResult(new LlmResponse
+            {
+                Content = calls.Count > 0 ? "" : content,
+                StopReason = "end_turn",
+                ToolCalls = calls,
+                Usage = new LlmUsage(2, 10),
+            });
         }
     }
 

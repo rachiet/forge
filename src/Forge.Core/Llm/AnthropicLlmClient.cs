@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Anthropic;
 using Anthropic.Models.Messages;
 using ForgeMessage = Forge.Core.Llm.LlmMessage;
@@ -6,8 +7,9 @@ namespace Forge.Core.Llm;
 
 /// <summary>
 /// The Anthropic adapter: translates Forge's request and response records to the Messages API
-/// and back. Wrap it in MeteredLlmClient before handing it to an agent loop, or nothing is
-/// ledgered and no budget is enforced.
+/// and back. Tool calls travel as the API's own `tool_use` and `tool_result` blocks rather than
+/// as text the harness has to parse. Wrap it in MeteredLlmClient before handing it to an agent
+/// loop, or nothing is ledgered and no budget is enforced.
 /// </summary>
 public sealed class AnthropicLlmClient : ILlmClient
 {
@@ -51,9 +53,9 @@ public sealed class AnthropicLlmClient : ILlmClient
         // Two cache breakpoints: one after the system prompt, which is identical on every
         // turn, and one on the last message, which caches the conversation so far. The next
         // turn then reads that prefix at cache rates and writes only its new suffix.
-        var messages = request.Messages.Select(ToSdkMessage).ToList();
-        if (messages.Count > 0)
-            messages[^1] = WithCacheBreakpoint(request.Messages[^1]);
+        var messages = request.Messages
+            .Select((message, index) => ToSdkMessage(message, cacheHere: index == request.Messages.Count - 1))
+            .ToList();
 
         var parameters = new MessageCreateParams
         {
@@ -61,6 +63,8 @@ public sealed class AnthropicLlmClient : ILlmClient
             MaxTokens = request.MaxTokens,
             Messages = messages,
         };
+        if (request.Tools.Count > 0)
+            parameters = parameters with { Tools = request.Tools.Select(ToSdkTool).ToList() };
         if (request.System is { Length: > 0 } system)
             parameters = parameters with
             {
@@ -90,10 +94,17 @@ public sealed class AnthropicLlmClient : ILlmClient
             .OfType<TextBlock>()
             .Select(block => block.Text));
 
+        var calls = message.Content
+            .Select(block => block.Value)
+            .OfType<ToolUseBlock>()
+            .Select(block => new LlmToolCall(block.ID, block.Name, JsonSerializer.Serialize(block.Input)))
+            .ToList();
+
         return new LlmResponse
         {
             Content = text,
             StopReason = message.StopReason?.ToString(),
+            ToolCalls = calls,
             Usage = new LlmUsage(
                 (int)message.Usage.InputTokens,
                 (int)message.Usage.OutputTokens,
@@ -102,22 +113,75 @@ public sealed class AnthropicLlmClient : ILlmClient
         };
     }
 
-    private static MessageParam ToSdkMessage(ForgeMessage message) => new()
+    /// <summary>
+    /// One turn as the SDK's blocks: its text, the calls an assistant turn made, and the results
+    /// a following turn returns. The last block of the last message carries a cache breakpoint,
+    /// so the next turn reads this whole prefix at cache rates and writes only its new suffix.
+    /// </summary>
+    internal static MessageParam ToSdkMessage(ForgeMessage message, bool cacheHere)
     {
-        Role = message.Role == "assistant" ? Role.Assistant : Role.User,
-        Content = message.Content,
+        var blocks = new List<ContentBlockParam>();
+
+        if (message.Content is { Length: > 0 })
+            blocks.Add(new TextBlockParam { Text = message.Content });
+
+        foreach (var call in message.ToolCalls)
+        {
+            blocks.Add(new ToolUseBlockParam
+            {
+                ID = call.Id,
+                Name = call.Name,
+                Input = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(call.ArgumentsJson) ?? [],
+            });
+        }
+
+        foreach (var result in message.ToolResults)
+            blocks.Add(new ToolResultBlockParam { ToolUseID = result.CallId, Content = result.Output });
+
+        // A turn has to carry something; an empty one would be rejected.
+        if (blocks.Count == 0) blocks.Add(new TextBlockParam { Text = message.Content });
+
+        if (cacheHere) blocks[^1] = WithCacheControl(blocks[^1]);
+
+        return new MessageParam
+        {
+            Role = message.Role == "assistant" ? Role.Assistant : Role.User,
+            Content = blocks,
+        };
+    }
+
+    /// <summary>The same block with a cache breakpoint on it, whichever kind of block it is.</summary>
+    private static ContentBlockParam WithCacheControl(ContentBlockParam block) => block.Value switch
+    {
+        TextBlockParam text => text with { CacheControl = new CacheControlEphemeral() },
+        ToolUseBlockParam use => use with { CacheControl = new CacheControlEphemeral() },
+        ToolResultBlockParam result => result with { CacheControl = new CacheControlEphemeral() },
+        _ => block,
     };
 
     /// <summary>
-    /// The same message with its content as a single text block carrying a cache breakpoint.
-    /// A plain string content cannot carry one; a block list can.
+    /// One tool as the SDK declares it. The JSON Schema Forge holds as text is split into the
+    /// properties map and required list the API takes.
     /// </summary>
-    private static MessageParam WithCacheBreakpoint(ForgeMessage message) => new()
+    internal static ToolUnion ToSdkTool(LlmToolDefinition tool)
     {
-        Role = message.Role == "assistant" ? Role.Assistant : Role.User,
-        Content = new List<ContentBlockParam>
+        using var schema = JsonDocument.Parse(tool.ParametersJson);
+        var root = schema.RootElement;
+
+        var properties = new Dictionary<string, JsonElement>();
+        if (root.TryGetProperty("properties", out var declared) && declared.ValueKind == JsonValueKind.Object)
+            foreach (var property in declared.EnumerateObject())
+                properties[property.Name] = property.Value.Clone();
+
+        var required = new List<string>();
+        if (root.TryGetProperty("required", out var names) && names.ValueKind == JsonValueKind.Array)
+            required.AddRange(names.EnumerateArray().Select(name => name.GetString() ?? "").Where(n => n.Length > 0));
+
+        return new ToolUnion(new Tool
         {
-            new TextBlockParam { Text = message.Content, CacheControl = new CacheControlEphemeral() },
-        },
-    };
+            Name = tool.Name,
+            Description = tool.Description,
+            InputSchema = new InputSchema { Properties = properties, Required = required },
+        });
+    }
 }

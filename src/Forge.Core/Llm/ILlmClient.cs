@@ -2,7 +2,32 @@ using Forge.Core.Model;
 
 namespace Forge.Core.Llm;
 
-public sealed record LlmMessage(string Role, string Content);
+/// <summary>
+/// One tool the model may call, as the provider's schema layer will enforce it. Parameters is a
+/// JSON Schema object; the harness builds it from the tool catalogue so a call cannot arrive in
+/// a shape the toolset does not accept.
+/// </summary>
+public sealed record LlmToolDefinition(string Name, string Description, string ParametersJson);
+
+/// <summary>
+/// A call the model made. Id is the provider's own correlation id and travels back with the
+/// result; Arguments is the argument object as JSON, whatever form the provider reported it in.
+/// </summary>
+public sealed record LlmToolCall(string Id, string Name, string ArgumentsJson);
+
+/// <summary>What one tool produced, paired to the call by the id the provider issued.</summary>
+public sealed record LlmToolResult(string CallId, string Name, string Output);
+
+/// <summary>
+/// One turn of the conversation. Content carries the text; ToolCalls carries what an assistant
+/// turn asked for, and ToolResults what a following turn hands back. A provider that has no
+/// native tool calling sees only Content, so both stay empty there.
+/// </summary>
+public sealed record LlmMessage(string Role, string Content)
+{
+    public IReadOnlyList<LlmToolCall> ToolCalls { get; init; } = [];
+    public IReadOnlyList<LlmToolResult> ToolResults { get; init; } = [];
+}
 
 /// <summary>Who a call belongs to: the instance, its role, and the task it works.</summary>
 public sealed record LlmAttribution(string AgentInstanceId, AgentRole Role, long? TaskId);
@@ -13,6 +38,13 @@ public sealed record LlmRequest
     public string? System { get; init; }
     public required IReadOnlyList<LlmMessage> Messages { get; init; }
     public int MaxTokens { get; init; } = 4096;
+
+    /// <summary>
+    /// The tools this call may use. Empty means a plain completion — the adapter sends no tool
+    /// schema and the model answers in text.
+    /// </summary>
+    public IReadOnlyList<LlmToolDefinition> Tools { get; init; } = [];
+
     public required LlmAttribution Attribution { get; init; }
 }
 
@@ -30,6 +62,12 @@ public sealed record LlmResponse
     public required string Content { get; init; }
     public string? StopReason { get; init; }
     public required LlmUsage Usage { get; init; }
+
+    /// <summary>
+    /// The calls the model made, in the order it made them. Empty on a text answer, which is
+    /// how the loop tells "it acted" from "it talked".
+    /// </summary>
+    public IReadOnlyList<LlmToolCall> ToolCalls { get; init; } = [];
 }
 
 /// <summary>

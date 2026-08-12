@@ -54,10 +54,6 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     /// </summary>
     public static string ToolProtocol(AgentRecipe recipe)
     {
-        var tools = string.Join("\n", recipe.Tools
-            .Where(AgentToolset.Catalogue.ContainsKey)
-            .Select(name => AgentToolset.Catalogue[name].Render(name)));
-
         var sb = new StringBuilder($$$"""
             # Tools
 
@@ -69,18 +65,8 @@ public sealed class PromptAssembler(PromptLibrary prompts)
             to check and nobody to ask: if you need to read something, call read_file
             now rather than saying you are about to.
 
-            You may emit several calls in one turn; they run in order, and you see all
-            the observations before your next turn. Syntax (raw text, no escaping):
-
-            <tool name="write_file">
-            <arg name="path">docs/requirements/INDEX.md</arg>
-            <arg name="content">
-            # Requirements
-            </arg>
-            </tool>
-
-            Available tools:
-            {{{tools}}}
+            You may make several calls in one turn; they run in order, and you see all
+            the observations before your next turn.
 
             Rules the harness enforces mechanically — they are not advice:
             - Every path is relative to your workspace root. Paths outside it are refused.

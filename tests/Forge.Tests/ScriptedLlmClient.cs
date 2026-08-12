@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Forge.Core.Agents;
 using Forge.Core.Llm;
 
 namespace Forge.Tests;
@@ -19,6 +21,19 @@ public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
     /// <summary>The system prompt of the most recent call — used to assert on context assembly.</summary>
     public string? LastSystemPrompt => Requests.LastOrDefault()?.System;
 
+    /// <summary>
+    /// What the harness sent back on the turn before request <paramref name="index"/>: the tool
+    /// results and any text alongside them. Tool output travels in ToolResults now, so a test
+    /// that reads only Content sees an empty string.
+    /// </summary>
+    public string Observations(int index)
+    {
+        var message = Requests[index].Messages[^1];
+        return string.Join("\n", new[] { message.Content }
+            .Concat(message.ToolResults.Select(r => $"[{r.Name}]\n{r.Output}"))
+            .Where(part => part.Length > 0));
+    }
+
     /// <summary>The task packet (first user turn) of the most recent call.</summary>
     public string? LastTaskPacket => Requests.LastOrDefault()?.Messages.FirstOrDefault()?.Content;
 
@@ -32,10 +47,18 @@ public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
     {
         Requests.Add(request);
         var content = _turns.Count > 0 ? _turns.Dequeue() : Fallback;
+        // Scripts are written in the readable `<tool …>` form; the loop reads structured
+        // calls, so the double parses its own script the way a provider would return one.
+        var calls = ToolCallParser.Parse(content)
+            .Select((call, index) => new LlmToolCall(
+                $"call_{index}", call.Name, JsonSerializer.Serialize(call.Args)))
+            .ToList();
+
         return Task.FromResult(new LlmResponse
         {
-            Content = content,
+            Content = calls.Count > 0 ? "" : content,
             StopReason = StopReason,
+            ToolCalls = calls,
             Usage = new LlmUsage(100, 50),
         });
     }

@@ -256,7 +256,7 @@ public class PromptAssemblerTests
 
         Assert.Contains("Role: Software Engineer", prompt);   // Layer A
         Assert.Contains("Task type: Task", prompt);        // Layer B
-        Assert.Contains("<tool name=\"write_file\">", prompt); // generated protocol
+        Assert.Contains("Your entire reply is tool calls", prompt); // generated protocol
         Assert.True(prompt.IndexOf("Role: Software Engineer", StringComparison.Ordinal)
                   < prompt.IndexOf("Task type: Task", StringComparison.Ordinal));
     }
@@ -342,8 +342,8 @@ public class AgentLoopTests : IDisposable
         Assert.Equal(3, result.Iterations);
         Assert.Equal("hi\n", File.ReadAllText(Path.Combine(_root, "hello.txt")));
 
-        // The observation from turn 1 must be visible to turn 2.
-        Assert.Contains("[write_file]", llm.Requests[1].Messages[2].Content);
+        // The observation from turn 1 must be visible to turn 2 — as a tool result now.
+        Assert.Contains("[write_file]", llm.Observations(1));
         Assert.Equal("Wrote hello.txt and read it back.", _tasks.Get(task.Id).ProgressNote);
 
         var instance = Assert.Single(new AgentInstanceRepository(_conn).ForTask(task.Id));
@@ -380,7 +380,7 @@ public class AgentLoopTests : IDisposable
 
         // The message injected before the last turn (turn 2) is imperative and mandatory —
         // it is added by the loop just-in-time, not carried in the static role prompt.
-        var lastTurnUserMessage = llm.Requests[^1].Messages[^1].Content;
+        var lastTurnUserMessage = llm.Observations(llm.Requests.Count - 1);
         Assert.Contains("LAST turn", lastTurnUserMessage);
         Assert.Contains("MUST", lastTurnUserMessage);
         // It rides the conversation (a just-in-time user turn), never the system prompt.
@@ -401,7 +401,8 @@ public class AgentLoopTests : IDisposable
         // shape wrong cannot act on being told a call was missing.
         var nudge = llm.Requests[1].Messages[^1].Content;
         Assert.Contains("no tool call", nudge, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("<tool name=\"read_file\">", nudge, StringComparison.Ordinal);
+        // Names the call to make rather than a syntax — the provider owns the shape now.
+        Assert.Contains("read_file", nudge, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -442,12 +443,13 @@ public class AgentLoopTests : IDisposable
     }
 
     [Fact]
-    public async Task A_refusal_logs_what_the_model_actually_emitted()
+    public async Task A_refusal_logs_the_arguments_the_model_actually_sent()
     {
         var task = StartTask();
         var sink = new MemoryLogSink();
+        // A call naming the wrong argument: the schema lets it through, the tool does not.
         var llm = new ScriptedLlmClient(
-            "<tool name=\"read_file\">src/Whatever.cs</tool>",
+            ScriptedLlmClient.Tool("read_file", ("file", "src/Whatever.cs")),
             ScriptedLlmClient.Tool("done", ("summary", "done")));
         var loop = new AgentLoop(llm, _conn, new PromptAssembler(PromptLibrary.Resolve()),
             AgentRecipe.Engineer, new ForgeLogger(sink, "proj"));
@@ -456,8 +458,8 @@ public class AgentLoopTests : IDisposable
 
         var refusal = Assert.Single(sink.Entries, e => e.Type == EventType.ToolRefused);
         Assert.Contains("requires a non-empty", refusal.Message);
-        // Without the emitted text a refusal names only what was missing, never the
-        // shape that caused it — which is what makes a malformed-call loop diagnosable.
+        // Without the arguments a refusal names only what was missing, never what was sent
+        // instead — which is what makes a malformed-call loop diagnosable.
         Assert.Contains("emitted:", refusal.Message);
         Assert.Contains("src/Whatever.cs", refusal.Message);
     }
@@ -604,7 +606,7 @@ public class AgentLoopTests : IDisposable
 
         await Loop(metered).RunAsync(task, _executor);
 
-        var observations = llm.Requests[2].Messages[^1].Content;
+        var observations = llm.Observations(2);
         Assert.Contains("[message: system_nudge from system]", observations);
         Assert.Contains("Wrap up now", observations);
     }

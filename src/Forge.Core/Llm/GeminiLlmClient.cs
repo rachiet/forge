@@ -6,8 +6,14 @@ namespace Forge.Core.Llm;
 
 /// <summary>
 /// The Google Gemini adapter: translates Forge's request and response records to the v1beta
-/// `generateContent` API and back, over HttpClient. Wrap it in MeteredLlmClient before handing
-/// it to an agent loop, or nothing is ledgered and no budget is enforced.
+/// `generateContent` API and back, over HttpClient. Tool calls travel in the provider's own
+/// `functionCall` and `functionResponse` parts rather than as text the harness has to parse.
+///
+/// `generateContent` and not the newer Interactions API: Interactions keeps conversation state
+/// on Google's side and its documented multi-turn path is `previous_interaction_id`, while every
+/// agent here is stateless and replays its whole conversation each turn. Wrap it in
+/// MeteredLlmClient before handing it to an agent loop, or nothing is ledgered and no budget is
+/// enforced.
 /// </summary>
 public sealed class GeminiLlmClient : ILlmClient
 {
@@ -81,10 +87,41 @@ public sealed class GeminiLlmClient : ILlmClient
         var contents = new JsonArray();
         foreach (var message in request.Messages)
         {
+            var parts = new JsonArray();
+            if (message.Content is { Length: > 0 }) parts.Add(new JsonObject { ["text"] = message.Content });
+
+            foreach (var call in message.ToolCalls)
+            {
+                parts.Add(new JsonObject
+                {
+                    ["functionCall"] = new JsonObject
+                    {
+                        ["name"] = call.Name,
+                        ["args"] = JsonNode.Parse(call.ArgumentsJson),
+                    },
+                });
+            }
+
+            // A result is wrapped in an object because `response` is a structured value, not
+            // a string, and it is paired to its call by name — this API issues no call id.
+            foreach (var result in message.ToolResults)
+            {
+                parts.Add(new JsonObject
+                {
+                    ["functionResponse"] = new JsonObject
+                    {
+                        ["name"] = result.Name,
+                        ["response"] = new JsonObject { ["result"] = result.Output },
+                    },
+                });
+            }
+
+            if (parts.Count == 0) continue;
             contents.Add(new JsonObject
             {
+                // Tool results go back as `user`, the same role the model's caller speaks in.
                 ["role"] = message.Role == "assistant" ? "model" : "user",
-                ["parts"] = new JsonArray(new JsonObject { ["text"] = message.Content }),
+                ["parts"] = parts,
             });
         }
 
@@ -98,8 +135,29 @@ public sealed class GeminiLlmClient : ILlmClient
             {
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = system }),
             };
+        if (request.Tools.Count > 0)
+            body["tools"] = new JsonArray(new JsonObject
+            {
+                ["function_declarations"] = BuildDeclarations(request.Tools),
+            });
 
         return body.ToJsonString();
+    }
+
+    /// <summary>The tool schemas, as this API's function declarations.</summary>
+    private static JsonArray BuildDeclarations(IReadOnlyList<LlmToolDefinition> tools)
+    {
+        var array = new JsonArray();
+        foreach (var tool in tools)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = tool.Name,
+                ["description"] = tool.Description,
+                ["parameters"] = JsonNode.Parse(tool.ParametersJson),
+            });
+        }
+        return array;
     }
 
     /// <summary>
@@ -115,6 +173,7 @@ public sealed class GeminiLlmClient : ILlmClient
         var root = document.RootElement;
 
         var text = new StringBuilder();
+        var calls = new List<LlmToolCall>();
         string? stopReason = null;
         if (root.TryGetProperty("candidates", out var candidates) && candidates.GetArrayLength() > 0)
         {
@@ -135,6 +194,17 @@ public sealed class GeminiLlmClient : ILlmClient
 
                     if (part.TryGetProperty("text", out var value) && value.ValueKind == JsonValueKind.String)
                         text.Append(value.GetString());
+
+                    // No call id is issued, so the name is the correlation key both ways.
+                    if (part.TryGetProperty("functionCall", out var call) &&
+                        call.ValueKind == JsonValueKind.Object)
+                    {
+                        var name = call.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+                            ? n.GetString() ?? "" : "";
+                        var args = call.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+                            ? a.GetRawText() : "{}";
+                        calls.Add(new LlmToolCall(name, name, args));
+                    }
                 }
             }
         }
@@ -153,6 +223,7 @@ public sealed class GeminiLlmClient : ILlmClient
         {
             Content = text.ToString(),
             StopReason = stopReason,
+            ToolCalls = calls,
             Usage = new LlmUsage(Math.Max(0, prompt - cached), output, cached),
         };
     }

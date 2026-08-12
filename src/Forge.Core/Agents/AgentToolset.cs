@@ -263,6 +263,19 @@ public sealed partial class AgentToolset(
                 Required("reason", "what you are blocked on and what decision is needed.")),
         }).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
 
+    /// <summary>
+    /// The tools a recipe may call, as the provider's schema layer will enforce them. Built from
+    /// the same catalogue the prompt is rendered from, so the surface cannot be described twice
+    /// and disagree.
+    /// </summary>
+    public static IReadOnlyList<Llm.LlmToolDefinition> Definitions(AgentRecipe recipe) =>
+    [
+        .. recipe.Tools
+            .Where(Catalogue.ContainsKey)
+            .Select(name => new Llm.LlmToolDefinition(
+                name, Catalogue[name].Summary, Catalogue[name].ParametersJson())),
+    ];
+
     /// <summary>Runs one tool call and logs what it did.</summary>
     public async Task<ToolOutcome> ExecuteAsync(ToolCall call, CancellationToken ct = default)
     {
