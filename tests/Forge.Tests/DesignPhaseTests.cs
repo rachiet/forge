@@ -65,7 +65,7 @@ public class DesignPhaseTests : IDisposable
     private string ShowFromTrunk(string path) =>
         Git.Require(_paths.ProjectBareRepo(Project), "show", $"master:{path}").Stdout;
 
-    private static string CreateTask(string title, string objective, string requirement) =>
+    private static ScriptedTurn CreateTask(string title, string objective, string requirement) =>
         ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),
             ("title", title), ("objective", objective), ("requirements_ref", requirement),
             ("acceptance", $"{title} is implemented and its tests pass."));

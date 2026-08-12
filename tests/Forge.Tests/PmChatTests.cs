@@ -48,7 +48,7 @@ public class PmChatTests : IDisposable
     private string ShowFromTrunk(string path) =>
         Git.Require(_paths.ProjectBareRepo(Project), "show", $"master:{path}").Stdout;
 
-    private static string Reply(string text) => ScriptedLlmClient.Tool("reply", ("message", text));
+    private static ScriptedTurn Reply(string text) => ScriptedLlmClient.Tool("reply", ("message", text));
 
     [Fact]
     public async Task A_plain_answer_is_recorded_as_conversation_and_changes_nothing_in_the_repo()

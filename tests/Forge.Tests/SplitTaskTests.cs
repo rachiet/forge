@@ -80,7 +80,7 @@ public class SplitTaskTests : IDisposable
 
         var ids = string.Join(",", Enumerable.Range(0, count).Select(i => NextTaskId + i));
         return new ScriptedLlmClient(
-            string.Join("\n", creates),
+            ScriptedLlmClient.Turn([.. creates]),
             ScriptedLlmClient.Tool("break_and_relink", ("new_tasks", ids), ("reason", "three endpoints, not one")));
     }
 
@@ -231,7 +231,7 @@ public class SplitTaskTests : IDisposable
 
         var firstPiece = NextTaskId;
         var llm = new ScriptedLlmClient(
-            string.Join("\n",
+            ScriptedLlmClient.Turn(
                 ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("add_dependency",
@@ -259,7 +259,7 @@ public class SplitTaskTests : IDisposable
         var stuck = Stuck(strikes: 1);
         var piece = NextTaskId;
         var llm = new ScriptedLlmClient(
-            string.Join("\n",
+            ScriptedLlmClient.Turn(
                 ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("add_dependency",
@@ -307,7 +307,7 @@ public class SplitTaskTests : IDisposable
         // task, so re-pointing that task at the replacement would close a loop.
         var piece = NextTaskId;
         var llm = new ScriptedLlmClient(
-            string.Join("\n",
+            ScriptedLlmClient.Turn(
                 ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 1"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"), ("title", "Piece 2"), ("objective", "o"), ("acceptance", "a")),
                 ScriptedLlmClient.Tool("add_dependency",

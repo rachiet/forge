@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Forge.Core.Agents;
+using System.Text.Json.Nodes;
 using Forge.Core.Llm;
 
 namespace Forge.Tests;
@@ -9,11 +9,11 @@ namespace Forge.Tests;
 /// was asked. Lets the agent loop be tested end to end without a network call —
 /// the loop is deterministic harness code, so the model is the only thing worth faking.
 /// </summary>
-public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
+public sealed class ScriptedLlmClient(params ScriptedTurn[] turns) : ILlmClient
 {
     public string ModelFor(ModelTier tier) => TestPrices.For(tier);
 
-    private readonly Queue<string> _turns = new(turns);
+    private readonly Queue<ScriptedTurn> _turns = new(turns);
 
     public List<LlmRequest> Requests { get; } = [];
     public int Calls => Requests.Count;
@@ -38,7 +38,7 @@ public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
     public string? LastTaskPacket => Requests.LastOrDefault()?.Messages.FirstOrDefault()?.Content;
 
     /// <summary>Emitted once the script runs dry, so a loop under test can't hang on an empty queue.</summary>
-    public string Fallback { get; init; } = "Nothing left to do.";
+    public ScriptedTurn Fallback { get; init; } = "Nothing left to do.";
 
     /// <summary>What every scripted turn reports as its reason for stopping.</summary>
     public string StopReason { get; init; } = "end_turn";
@@ -46,26 +46,35 @@ public sealed class ScriptedLlmClient(params string[] turns) : ILlmClient
     public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         Requests.Add(request);
-        var content = _turns.Count > 0 ? _turns.Dequeue() : Fallback;
-        // Scripts are written in the readable `<tool …>` form; the loop reads structured
-        // calls, so the double parses its own script the way a provider would return one.
-        var calls = ToolCallParser.Parse(content)
-            .Select((call, index) => new LlmToolCall(
-                $"call_{index}", call.Name, JsonSerializer.Serialize(call.Args)))
-            .ToList();
+        var turn = _turns.Count > 0 ? _turns.Dequeue() : Fallback;
 
         return Task.FromResult(new LlmResponse
         {
-            Content = calls.Count > 0 ? "" : content,
+            Content = turn.Text,
             StopReason = StopReason,
-            ToolCalls = calls,
+            ToolCalls = turn.Calls,
             Usage = new LlmUsage(100, 50),
         });
     }
 
-    public static string Tool(string name, params (string Name, string Value)[] args)
+    /// <summary>One scripted turn that calls a tool, built the way an adapter reports one.</summary>
+    public static ScriptedTurn Tool(string name, params (string Name, string Value)[] args)
     {
-        var body = string.Join("\n", args.Select(a => $"<arg name=\"{a.Name}\">\n{a.Value}\n</arg>"));
-        return $"<tool name=\"{name}\">\n{body}\n</tool>";
+        var arguments = new JsonObject();
+        foreach (var arg in args) arguments[arg.Name] = arg.Value;
+        return new ScriptedTurn("", [new LlmToolCall($"call_{name}", name, arguments.ToJsonString())]);
     }
+
+    /// <summary>Several calls in one turn, which the loop runs in order.</summary>
+    public static ScriptedTurn Turn(params ScriptedTurn[] calls) =>
+        new("", [.. calls.SelectMany(call => call.Calls)]);
+}
+
+/// <summary>
+/// One turn of a script: prose, or the calls a model made. A plain string is prose, so a test
+/// that scripts an agent saying something writes the string and nothing else.
+/// </summary>
+public sealed record ScriptedTurn(string Text, IReadOnlyList<LlmToolCall> Calls)
+{
+    public static implicit operator ScriptedTurn(string text) => new(text, []);
 }

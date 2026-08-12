@@ -62,9 +62,10 @@ public class ReviewAndCiTests : IDisposable
     private static Func<string, CiResult> CiFail =>
         _ => new CiResult(false, "build", "error CS1002: ; expected");
 
-    private static string Engineer(string file, string content, string summary) =>
-        ScriptedLlmClient.Tool("write_file", ("path", file), ("content", content)) + "\n" +
-        ScriptedLlmClient.Tool("done", ("summary", summary));
+    private static ScriptedTurn Engineer(string file, string content, string summary) =>
+        ScriptedLlmClient.Turn(
+            ScriptedLlmClient.Tool("write_file", ("path", file), ("content", content)),
+            ScriptedLlmClient.Tool("done", ("summary", summary)));
 
     [Fact]
     public async Task An_approved_task_that_passes_ci_is_reviewed_and_merged()

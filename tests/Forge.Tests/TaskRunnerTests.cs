@@ -458,26 +458,21 @@ public class TaskRunnerTests : IDisposable
     }
 
     /// <summary>Throws on the first N calls (a transient blip), then replays a script.</summary>
-    private sealed class FlakyThenScriptedLlmClient(int throwsFirst, params string[] turns) : ILlmClient
+    private sealed class FlakyThenScriptedLlmClient(int throwsFirst, params ScriptedTurn[] turns) : ILlmClient
     {
         public string ModelFor(ModelTier tier) => TestPrices.For(tier);
 
         private int _thrown;
-        private readonly Queue<string> _turns = new(turns);
+        private readonly Queue<ScriptedTurn> _turns = new(turns);
         public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
         {
             if (_thrown < throwsFirst) { _thrown++; throw new InvalidOperationException("transient 503"); }
-            var content = _turns.Count > 0 ? _turns.Dequeue() : "done";
-            // Parses its own script into calls, the way a provider returns them.
-            var calls = Forge.Core.Agents.ToolCallParser.Parse(content)
-                .Select((call, index) => new LlmToolCall(
-                    $"call_{index}", call.Name, System.Text.Json.JsonSerializer.Serialize(call.Args)))
-                .ToList();
+            var turn = _turns.Count > 0 ? _turns.Dequeue() : "done";
             return Task.FromResult(new LlmResponse
             {
-                Content = calls.Count > 0 ? "" : content,
+                Content = turn.Text,
                 StopReason = "end_turn",
-                ToolCalls = calls,
+                ToolCalls = turn.Calls,
                 Usage = new LlmUsage(2, 10),
             });
         }

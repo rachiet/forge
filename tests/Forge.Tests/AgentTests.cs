@@ -10,59 +10,27 @@ using TaskStatus = Forge.Core.Model.TaskStatus;
 
 namespace Forge.Tests;
 
-public class ToolCallParserTests
+public class ToolCallTests
 {
-    [Fact]
-    public void Parses_a_call_with_multiline_content_verbatim()
-    {
-        var calls = ToolCallParser.Parse("""
-            I'll write the class now.
-
-            <tool name="write_file">
-            <arg name="path">src/Foo.cs</arg>
-            <arg name="content">
-            public sealed class Foo
-            {
-                public int Value => 1;
-            }
-            </arg>
-            </tool>
-            """);
-
-        var call = Assert.Single(calls);
-        Assert.Equal("write_file", call.Name);
-        Assert.Equal("src/Foo.cs", call.Arg("path"));
-        Assert.Equal(
-            "public sealed class Foo\n{\n    public int Value => 1;\n}",
-            call.Arg("content").ReplaceLineEndings("\n"));
-    }
-
-    [Fact]
-    public void Parses_several_calls_in_one_turn_in_order()
-    {
-        var calls = ToolCallParser.Parse(
-            ScriptedLlmClient.Tool("list_dir", ("path", ".")) + "\nthen\n" +
-            ScriptedLlmClient.Tool("read_file", ("path", "a.txt"), ("start", "3")));
-
-        Assert.Equal(["list_dir", "read_file"], calls.Select(c => c.Name));
-        Assert.Equal(3, calls[1].OptionalInt("start"));
-    }
-
-    [Fact]
-    public void Prose_with_no_tool_block_yields_nothing()
-    {
-        Assert.Empty(ToolCallParser.Parse("I think we should consider refactoring first."));
-    }
+    private static ToolCall Call(params (string Name, string Value)[] args) =>
+        new("read_file", args.ToDictionary(a => a.Name, a => a.Value, StringComparer.Ordinal));
 
     [Fact]
     public void Missing_and_malformed_arguments_are_reported_not_guessed()
     {
-        var call = Assert.Single(ToolCallParser.Parse(
-            ScriptedLlmClient.Tool("read_file", ("path", "a.txt"), ("start", "soon"))));
+        var call = Call(("path", "a.txt"), ("start", "soon"));
 
+        Assert.Equal("a.txt", call.Arg("path"));
         Assert.Throws<ToolCallException>(() => call.Arg("pattern"));
         Assert.Throws<ToolCallException>(() => call.OptionalInt("start"));
         Assert.Null(call.Optional("end"));
+    }
+
+    [Fact]
+    public void An_integer_argument_is_read_as_one_and_a_blank_counts_as_absent()
+    {
+        Assert.Equal(3, Call(("start", "3")).OptionalInt("start"));
+        Assert.Null(Call(("start", "   ")).OptionalInt("start"));
     }
 }
 
@@ -89,8 +57,9 @@ public class AgentToolsetTests : IDisposable
         Directory.Delete(_root, recursive: true);
     }
 
-    private Task<ToolOutcome> Run(string name, params (string, string)[] args) =>
-        _toolset.ExecuteAsync(Assert.Single(ToolCallParser.Parse(ScriptedLlmClient.Tool(name, args))));
+    private Task<ToolOutcome> Run(string name, params (string Name, string Value)[] args) =>
+        _toolset.ExecuteAsync(new ToolCall(name,
+            args.ToDictionary(a => a.Name, a => a.Value, StringComparer.Ordinal)));
 
     [Fact]
     public async Task Write_then_read_round_trips_through_the_workspace()
@@ -108,8 +77,9 @@ public class AgentToolsetTests : IDisposable
     {
         var exec = new ToolExecutor(_root, ["echo"], new SecretsVault(Path.Combine(_root, ".vault")));
         var qa = new AgentToolset(exec, _conn, AgentRecipe.Qa, task: null); // QA is project-scoped
-        Task<ToolOutcome> Qa(string name, params (string, string)[] args) =>
-            qa.ExecuteAsync(Assert.Single(ToolCallParser.Parse(ScriptedLlmClient.Tool(name, args))));
+        Task<ToolOutcome> Qa(string name, params (string Name, string Value)[] args) =>
+            qa.ExecuteAsync(new ToolCall(name,
+                args.ToDictionary(a => a.Name, a => a.Value, StringComparer.Ordinal)));
 
         // No run yet → the bug is refused and nothing is filed. Evidence is mandatory.
         var refused = await Qa("file_bug", ("title", "T"), ("expected", "E"));
@@ -409,10 +379,9 @@ public class AgentLoopTests : IDisposable
     public async Task An_agent_whose_every_call_is_refused_is_cut_off_long_before_the_iteration_cap()
     {
         var task = StartTask();
-        // A tool block with no <arg> wrapper at all: it parses as a call with zero
-        // arguments, so the tool refuses it. A model that keeps re-emitting this shape
-        // would otherwise burn all 40 turns achieving nothing.
-        var llm = new ScriptedLlmClient { Fallback = "<tool name=\"run\">dotnet build</tool>" };
+        // A binary that is not on this recipe's allowlist, so every call is refused. A model
+        // that keeps re-emitting it would otherwise burn all 40 turns achieving nothing.
+        var llm = new ScriptedLlmClient { Fallback = ScriptedLlmClient.Tool("run", ("command", "dotnet build")) };
 
         var result = await Loop(llm).RunAsync(task, _executor);
 
@@ -429,7 +398,7 @@ public class AgentLoopTests : IDisposable
         var task = StartTask();
         // Four refusals, then real work, then four more: neither streak reaches the cap,
         // so the run continues — a boundary hit mid-task must not end the instance.
-        var bad = "<tool name=\"run\">dotnet build</tool>";
+        var bad = ScriptedLlmClient.Tool("run", ("command", "rm -rf /"));   // not on the allowlist
         var llm = new ScriptedLlmClient(
             bad, bad, bad, bad,
             ScriptedLlmClient.Tool("list_dir"),
