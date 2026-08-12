@@ -105,6 +105,16 @@ public sealed class DiscussionRepository(IDbConnection conn)
     private static string Cut(string body, int max) =>
         body.Length <= max ? body.Trim() : body[..max].Trim() + "…";
 
+    /// <summary>
+    /// How many verdicts a reviewer has already recorded on this task. Only ReviewPhase writes
+    /// a 'principal' row, one per verdict, so this is the number of times the work has been
+    /// judged — and, since an approval ends the task, the number of times it was sent back.
+    /// </summary>
+    public int ReviewCount(long taskId) =>
+        conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM discussions WHERE task_id = @taskId AND author = 'principal'",
+            new { taskId });
+
     /// <summary>The marker recording that a play has been attached to a task.</summary>
     private static string PlayMarker(string play) => $"[play] {play}";
 

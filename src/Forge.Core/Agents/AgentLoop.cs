@@ -72,9 +72,13 @@ public sealed class AgentLoop(
     private readonly AgentInstanceRepository _instances = new(conn);
     private readonly ForgeLogger _baseLog = logger ?? ForgeLogger.Null;
 
-    /// <summary>Work a task: the packet is the opening turn.</summary>
+    /// <summary>
+    /// Work a task: the packet is the opening turn. <paramref name="addendum"/> is appended to
+    /// it when the harness has something to say about this run in particular — the play given
+    /// to a Principal implementing a task nothing will review.
+    /// </summary>
     public Task<AgentRunResult> RunAsync(
-        TaskRecord task, ToolExecutor executor, CancellationToken ct = default) =>
+        TaskRecord task, ToolExecutor executor, CancellationToken ct = default, string? addendum = null) =>
         RunAsync(
             assembler.SystemPrompt(_recipe, task, executor.Jail),
             [new LlmMessage("user", PromptAssembler.TaskPacket(
@@ -83,7 +87,8 @@ public sealed class AgentLoop(
                 // Read from the workspace, so the slice is the contract as it stands on this branch.
                 ContractSlice(task, executor.Jail.Root),
                 // Everything said about this task so far, so an instance is not the first to hear it.
-                new DiscussionRepository(conn).History(task.Id)))],
+                new DiscussionRepository(conn).History(task.Id))
+                + (addendum is { Length: > 0 } extra ? $"\n\n{extra.TrimEnd()}" : ""))],
             executor, task, ct);
 
     /// <summary>

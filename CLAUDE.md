@@ -292,11 +292,36 @@ app for every task. So appearance stops being generated work at all.
   (`WorkspaceManager.DiffAgainstTrunk`), ends with `approve` or `request_changes`
   (verdict rides `AgentRunResult`). No run() (CI already built); may write
   CONVENTIONS.md.
-- **Revision loop back to the engineer.** CI failure or a rejected review sets the
-  progress note to the feedback and leaves the task claimable (`in_progress`), so
-  the next `forge run` resumes the engineer with the feedback in its packet — same
-  resume mechanism as a kill. Bounded: `RevisionCap` (5 engineer attempts) →
-  block + escalate to PM, counted from `agent_instances`.
+- **Revision loop back to whoever wrote the code.** CI failure or a rejected review sets
+  the progress note to the feedback and leaves the task claimable (`in_progress`), so the
+  next `forge run` resumes with the feedback in its packet — same resume mechanism as a
+  kill. `TaskRunner.ResumeRecipe` picks the recipe from the newest `agent_instances` row:
+  a Principal implementation resumes the Principal, everything else the assigned role.
+  Handing a failed Principal implementation back to an engineer was a real defect — the
+  engineer is usually already past its cap, so the task bounced straight out again.
+- **Every loop ends on a counter, and no counter resets.** `RevisionCap` (5) counts
+  engineer instances that ended `Done` for the life of the task — CI failures and review
+  rejections alike, since both look the same from here. It used to count only since the
+  last Principal instance, which a `request_changes` reset, so the engineer↔reviewer cycle
+  was unbounded. `PrincipalAttemptCap` (3) does the same for Principal implementations,
+  counted by instance-id prefix. Neither is cleared by anything an agent does.
+- **A spent cap hands the task to a rung of the ladder, never to the client.**
+  `HandToLadder` sets `out_of_budget_count` to the rung it wants (never lowering it) and
+  moves the task to `out_of_budget`: the engineer cap lands on `DirectImplementStrike`, so
+  the Principal implements it directly, and the Principal cap lands one above, the final
+  triage with `cut-it-down`. Why a task cannot pass CI is a technical question, and the
+  client has no way to answer it.
+- **A Principal implementation is not reviewed** — green CI goes straight to `merging`
+  (`Submit`). Reviewer ≠ author still holds everywhere else; this rung exists to escape the
+  review loop, so re-entering it would defeat the escalation. It is told so: the
+  `final-judge` play is appended to its packet, telling it nothing will review the work and
+  to check each acceptance criterion against something concrete before calling `done`. QA
+  is the backstop.
+- **The reviewer is told which round it is** (`ReviewPhase.Brief`), counted from
+  `DiscussionRepository.ReviewCount`, and from the fourth review every round carries the
+  `close-it-out` play: the criteria, the contract and CONVENTIONS.md are the whole standard,
+  approve unless a stated criterion is unmet. Reviews were rejecting for two fresh
+  nitpicks a round, none of them repeats, none of them in the acceptance criteria.
 - **Self-improving write-back**: `request_changes(reason, convention?)`
   — the reason goes to the engineer; an optional `convention` is appended to
   CONVENTIONS.md on trunk (`WorkspaceManager.AppendToTrunkFile`), so a recurring

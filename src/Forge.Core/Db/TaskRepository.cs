@@ -225,6 +225,17 @@ public sealed class TaskRepository(IDbConnection conn)
     /// Sets a task's strike count back to zero, so a task the client sent back does not
     /// return to the Principal already at its ceiling.
     /// </summary>
+    /// <summary>
+    /// Puts a task's strike count at an exact rung of the Principal's ladder, so a failure
+    /// counted somewhere else — engineer attempts used up, Principal attempts used up — can
+    /// hand the task to the rung that answers it.
+    /// </summary>
+    public void SetOutOfBudgetCount(long taskId, int count) =>
+        conn.Execute("""
+            UPDATE tasks SET out_of_budget_count = @count, updated_at = datetime('now')
+            WHERE id = @taskId
+            """, new { taskId, count });
+
     public void ResetOutOfBudgetCount(long taskId) =>
         conn.Execute("""
             UPDATE tasks SET out_of_budget_count = 0, updated_at = datetime('now') WHERE id = @taskId

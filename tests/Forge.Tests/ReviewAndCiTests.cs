@@ -183,7 +183,7 @@ public class ReviewAndCiTests : IDisposable
     }
 
     [Fact]
-    public async Task A_task_that_keeps_failing_is_put_to_the_client_after_the_revision_cap()
+    public async Task A_task_that_keeps_failing_is_handed_to_the_principal_after_the_revision_cap()
     {
         var task = ReadyTask();
 
@@ -194,25 +194,82 @@ public class ReviewAndCiTests : IDisposable
         };
         var runner = Runner(llm, CiFail);
 
-        // Drive attempts until the task blocks. The cap is 5 engineer attempts.
+        // Drive attempts until the task leaves the engineer. The cap is 5 engineer attempts.
         TaskRunOutcome outcome = default!;
         for (var i = 0; i < 8; i++)
         {
             var next = runner.NextTask(AgentRole.Engineer);
             if (next is null) break;
             outcome = await runner.RunAsync(next);
-            if (outcome.Status == TaskStatus.NeedsHuman) break;
+            if (outcome.Status == TaskStatus.OutOfBudget) break;
         }
 
-        // Not `blocked`: the attempt count only rises, so a blocked task the Principal
-        // redirects is re-blocked by the next claim and triage loops on it forever.
-        Assert.Equal(TaskStatus.NeedsHuman, outcome.Status);
+        // The Principal's queue, at the rung that implements the task directly — not the
+        // client, who cannot decide why the build keeps failing.
+        Assert.Equal(TaskStatus.OutOfBudget, outcome.Status);
+        Assert.Equal(2, _tasks.Get(task.Id).OutOfBudgetCount);
         Assert.Equal(5, new AgentInstanceRepository(_conn).ForTask(task.Id)
             .Count(i => i.Role == AgentRole.Engineer));
-        // It goes to the PM, not the Principal: the Principal has already had its say
-        // through five review cycles, and what is left is a scope call for the client.
-        Assert.Contains(new MessageRepository(_conn).Pending("pm"),
+        Assert.Contains(new MessageRepository(_conn).Pending("principal"),
             m => m.Payload.Contains("5 engineer attempts"));
+        Assert.Empty(new MessageRepository(_conn).Pending("pm"));
+    }
+
+    [Fact]
+    public async Task A_principal_implementation_merges_on_green_ci_without_being_reviewed()
+    {
+        var task = ReadyTask();
+        // Nothing in the script answers a review, so a review being run at all would fail here.
+        var llm = new ScriptedLlmClient { Fallback = Engineer("greeting.txt", "hello", "Implemented it myself.") };
+        var runner = Runner(llm, CiPass);
+
+        var submitted = await runner.RunAsync(_tasks.Get(task.Id), AgentRecipe.PrincipalImplementer);
+        Assert.Equal(TaskStatus.Merging, submitted.Status);
+
+        var merged = await runner.RunNextByPriorityAsync();
+        Assert.Equal(TaskStatus.Done, merged!.Status);
+        Assert.Equal("hello\n", ShowFromTrunk("greeting.txt"));
+        // No verdict was recorded, because no reviewer ran.
+        Assert.DoesNotContain(new DiscussionRepository(_conn).ForTask(task.Id), d => d.Author == "principal");
+    }
+
+    [Fact]
+    public async Task A_ci_failure_on_the_principals_own_work_resumes_the_principal_not_an_engineer()
+    {
+        var task = ReadyTask();
+        var llm = new ScriptedLlmClient { Fallback = Engineer("greeting.txt", "hello", "Trying again.") };
+        var runner = Runner(llm, CiFail);
+
+        await runner.RunAsync(_tasks.Get(task.Id), AgentRecipe.PrincipalImplementer);
+        // The task is claimable again; the next run must not hand it to an engineer, which
+        // would leave the Principal's work to someone the revision cap has already stopped.
+        await runner.RunAsync(_tasks.Get(task.Id));
+
+        var instances = new AgentInstanceRepository(_conn).ForTask(task.Id);
+        Assert.Equal(2, instances.Count);
+        Assert.All(instances, i => Assert.StartsWith(
+            AgentRecipe.PrincipalImplementer.InstancePrefix, i.Id, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_principal_that_cannot_pass_ci_either_goes_to_the_final_triage()
+    {
+        var task = ReadyTask();
+        var llm = new ScriptedLlmClient { Fallback = Engineer("greeting.txt", "hello", "Trying again.") };
+        var runner = Runner(llm, CiFail);
+
+        TaskRunOutcome outcome = default!;
+        for (var i = 0; i < 6; i++)
+        {
+            outcome = await runner.RunAsync(_tasks.Get(task.Id), AgentRecipe.PrincipalImplementer);
+            if (outcome.Status == TaskStatus.OutOfBudget) break;
+        }
+
+        // Past the direct-implement rung, which is where the cut-it-down play lives.
+        Assert.Equal(TaskStatus.OutOfBudget, outcome.Status);
+        Assert.Equal(3, _tasks.Get(task.Id).OutOfBudgetCount);
+        Assert.Contains(new MessageRepository(_conn).Pending("principal"),
+            m => m.Payload.Contains("3 Principal implementation attempts"));
     }
 }
 

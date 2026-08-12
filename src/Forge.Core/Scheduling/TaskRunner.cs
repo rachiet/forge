@@ -44,8 +44,11 @@ public sealed class TaskRunner(
     ForgeLogger? logger = null,
     Func<string, CiResult>? ci = null)
 {
-    /// <summary>Engineer attempts on one task before it is blocked and escalated.</summary>
+    /// <summary>Engineer attempts on one task before the Principal takes it over.</summary>
     private const int RevisionCap = 5;
+
+    /// <summary>Principal implementation attempts before the task goes to the final triage.</summary>
+    private const int PrincipalAttemptCap = 3;
 
     /// <summary>How many times a provider crash auto-resumes before the task is handed to the Principal.</summary>
     private const int CrashRetryCap = 2;
@@ -55,6 +58,9 @@ public sealed class TaskRunner(
 
     /// <summary>The play given to the Principal at final triage, once per task.</summary>
     private const string CutItDownPlay = "cut-it-down";
+
+    /// <summary>The play given to a Principal implementing a task no reviewer will see.</summary>
+    private const string FinalJudgePlay = "final-judge";
 
     /// <summary>project_meta key holding the task ids the client was last asked about.</summary>
     private const string AskedKey = "client_asked_about";
@@ -359,7 +365,8 @@ public sealed class TaskRunner(
 
     /// <summary>
     /// Has the Principal implement a task itself, on a fresh budget, after redirecting the
-    /// engineer failed. The result still goes through CI, review and merge.
+    /// engineer failed. The result goes through CI and merges on green: no review, because
+    /// this rung is what a task loops out of review into.
     /// </summary>
     private async Task<TaskRunOutcome> ImplementDirectlyAsync(TaskRecord task, CancellationToken ct)
     {
@@ -937,36 +944,49 @@ public sealed class TaskRunner(
     }
 
     public Task<TaskRunOutcome> RunAsync(TaskRecord task, CancellationToken ct = default) =>
-        RunAsync(task, AgentRecipe.For(task.AssignedRole
-            ?? throw new InvalidOperationException($"Task {task.Id} has no assigned role.")), ct);
+        RunAsync(task, ResumeRecipe(task), ct);
+
+    /// <summary>
+    /// Which recipe runs a claimable task: the one that produced the code sitting in its
+    /// workspace, so CI feedback goes back to whoever wrote it rather than always to an
+    /// engineer. Only a Principal implementation persists that way; a review is a separate
+    /// instance over someone else's work, and everything else follows the assigned role.
+    /// </summary>
+    private AgentRecipe ResumeRecipe(TaskRecord task) =>
+        _instances.ForTask(task.Id).LastOrDefault() is { } last && IsPrincipalImplementation(last.Id)
+            ? AgentRecipe.PrincipalImplementer
+            : AgentRecipe.For(task.AssignedRole
+                ?? throw new InvalidOperationException($"Task {task.Id} has no assigned role."));
+
+    /// <summary>Whether an instance id was minted for a Principal implementing a task itself.</summary>
+    private static bool IsPrincipalImplementation(string instanceId) =>
+        instanceId.StartsWith($"{AgentRecipe.PrincipalImplementer.InstancePrefix}-", StringComparison.Ordinal);
 
     /// <summary>
     /// Run one instance of <paramref name="recipe"/> against the task and integrate or
     /// park it. The recipe is a parameter so the Principal can implement a task directly
-    /// (its own recipe) through the same build → review → merge path as an engineer.
+    /// (its own recipe) through the same build → merge path an engineer's work takes.
     /// </summary>
     public async Task<TaskRunOutcome> RunAsync(TaskRecord task, AgentRecipe recipe, CancellationToken ct = default)
     {
         var log = _log.For(task.Id);
 
-        // Only engineer instances that ended `done` count as revisions — those reached the
-        // gates and were sent back. A budget kill, crash or iteration cap is a park-and-resume.
-        // The Principal implementing directly is the escalation past this cap, so it is exempt.
+        // Only instances that ended `done` count as attempts — those reached the gates and
+        // were sent back. A budget kill, crash or iteration cap is a park-and-resume, counted
+        // elsewhere. Counted for the life of the task: nothing an agent does clears either
+        // count, so a reviewer cannot buy five more attempts by rejecting the work again.
+        var instances = _instances.ForTask(task.Id);
         if (recipe.Role == AgentRole.Engineer)
         {
-            // Counted since the last new direction — a triage, or the client answering — not
-            // for the life of the task, so fresh guidance clears the count.
-            var instances = _instances.ForTask(task.Id);
-            var lastDirection = instances
-                .Where(i => i.Role == AgentRole.Principal)
-                .Select(i => i.StartedAt)
-                .DefaultIfEmpty("")
-                .Max();
-            var attempts = instances.Count(i =>
-                i.Role == AgentRole.Engineer && i.EndReason == EndReason.Done
-                && string.CompareOrdinal(i.StartedAt, lastDirection) > 0);
+            var attempts = instances.Count(i => i.Role == AgentRole.Engineer && i.EndReason == EndReason.Done);
             if (attempts >= RevisionCap)
-                return BlockExhausted(task, log, attempts);
+                return HandToPrincipal(task, log, attempts);
+        }
+        else if (recipe.InstancePrefix == AgentRecipe.PrincipalImplementer.InstancePrefix)
+        {
+            var attempts = instances.Count(i => IsPrincipalImplementation(i.Id) && i.EndReason == EndReason.Done);
+            if (attempts >= PrincipalAttemptCap)
+                return HandToFinalTriage(task, log, attempts);
         }
 
         log.Message($"Starting task {task.Id}: {task.Title}");
@@ -981,10 +1001,15 @@ public sealed class TaskRunner(
         var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
 
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
-        var result = await loop.RunAsync(_tasks.Get(task.Id), executor, ct).ConfigureAwait(false);
+        // A Principal implementation is not reviewed, so it is told so and given the checks
+        // the reviewer would have made. Every other run has a reviewer and gets nothing.
+        var addendum = recipe.InstancePrefix == AgentRecipe.PrincipalImplementer.InstancePrefix
+            ? prompts.Play(FinalJudgePlay)
+            : null;
+        var result = await loop.RunAsync(_tasks.Get(task.Id), executor, ct, addendum).ConfigureAwait(false);
 
         return result.End == EndReason.Done
-            ? Submit(task, branch, result, log)
+            ? Submit(task, branch, recipe, result, log)
             : Park(task, result, log, statusBeforeClaim);
     }
 
@@ -1032,10 +1057,11 @@ public sealed class TaskRunner(
     /// <summary>
     /// Commits and pushes what the agent produced, runs CI over it, and hands it to review by
     /// leaving it in_review for the next tick. Whether it advances is read from git and from
-    /// CI's exit code, not from the agent's claim.
+    /// CI's exit code, not from the agent's claim. A Principal implementation goes straight to
+    /// merging on green CI: it is the escape from the review loop, so it is not reviewed.
     /// </summary>
     private TaskRunOutcome Submit(
-        TaskRecord task, string branch, AgentRunResult result, ForgeLogger log)
+        TaskRecord task, string branch, AgentRecipe recipe, AgentRunResult result, ForgeLogger log)
     {
         // Again before the commit, so the task that scaffolded the web project commits the
         // kit alongside it.
@@ -1076,6 +1102,17 @@ public sealed class TaskRunner(
 
             // Review is the next tick's work, so a worker that dies here strands nothing.
             Transition(task.Id, TaskStatus.InReview, log);
+
+            if (recipe.InstancePrefix == AgentRecipe.PrincipalImplementer.InstancePrefix)
+            {
+                // in_review is a step on the way, not a stop: no reviewer runs on this task.
+                Transition(task.Id, TaskStatus.Merging, log);
+                var merged = $"Principal implementation passed CI; merging unreviewed. {result.ProgressNote}".Trim();
+                _tasks.SetProgressNote(task.Id, merged);
+                log.Message($"Task {task.Id}: implemented by the Principal — review skipped.");
+                return new TaskRunOutcome(task.Id, result.End, TaskStatus.Merging, merged);
+            }
+
             var handoff = $"Submitted for review. {result.ProgressNote}".Trim();
             _tasks.SetProgressNote(task.Id, handoff);
             return new TaskRunOutcome(task.Id, result.End, TaskStatus.InReview, handoff);
@@ -1131,7 +1168,7 @@ public sealed class TaskRunner(
             if (!verdict.Approved)
             {
                 if (verdict.Convention is { Length: > 0 } convention) WriteConvention(convention, log);
-                Transition(task.Id, TaskStatus.InProgress, log);   // back to the engineer
+                Transition(task.Id, TaskStatus.InProgress, log);   // claimable again
                 return RequestRevision(task, log, "review", verdict.Feedback);
             }
 
@@ -1190,9 +1227,9 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Sends a task back to the engineer with feedback, written into the progress note so the
-    /// resuming instance sees it, and recorded as a discussion. The workspace and branch are
-    /// kept for it to revise.
+    /// Sends a task back with feedback, written into the progress note so the resuming instance
+    /// sees it, and recorded as a discussion. The workspace and branch are kept for it to
+    /// revise, and the next claim resumes whoever wrote the code — see <see cref="ResumeRecipe"/>.
     /// </summary>
     private TaskRunOutcome RequestRevision(TaskRecord task, ForgeLogger log, string stage, string feedback)
     {
@@ -1204,7 +1241,7 @@ public sealed class TaskRunner(
         // A review records its own verdict as it makes it; CI has no author of its own.
         if (!string.Equals(stage, "review", StringComparison.OrdinalIgnoreCase))
             new DiscussionRepository(conn).Open(task.Id, "ci", feedback);
-        log.Message($"Task {task.Id}: changes requested at {stage} — back to the engineer");
+        log.Message($"Task {task.Id}: changes requested at {stage} — back to whoever wrote it");
         return new TaskRunOutcome(task.Id, EndReason.Done, TaskStatus.InProgress, $"Changes requested ({stage}).");
     }
 
@@ -1218,17 +1255,42 @@ public sealed class TaskRunner(
     }
 
     /// <summary>
-    /// Parks a task on the client once the engineer has used every attempt. Not `blocked`,
-    /// because the attempt count only rises: a redirected task would re-block on the next claim.
+    /// Hands a task the engineer has used every attempt on to the Principal, at the rung that
+    /// implements it directly: advice has already failed this many times, so the next thing to
+    /// try is the Principal writing the code. Not the client — this is a technical decision.
     /// </summary>
-    private TaskRunOutcome BlockExhausted(TaskRecord task, ForgeLogger log, int attempts)
+    private TaskRunOutcome HandToPrincipal(TaskRecord task, ForgeLogger log, int attempts) =>
+        HandToLadder(task, log, DirectImplementStrike,
+            $"Task stopped after {attempts} engineer attempts that could not pass CI and review. "
+            + "Handed to the Principal to implement directly.");
+
+    /// <summary>
+    /// Hands a task the Principal has used every implementation attempt on to the final triage,
+    /// where the remaining moves are cutting its scope, splitting it or closing it short.
+    /// </summary>
+    private TaskRunOutcome HandToFinalTriage(TaskRecord task, ForgeLogger log, int attempts) =>
+        HandToLadder(task, log, DirectImplementStrike + 1,
+            $"Task stopped after {attempts} Principal implementation attempts that could not pass CI. "
+            + "Handed to the final triage to cut its scope.");
+
+    /// <summary>
+    /// Puts a task on the Principal's out_of_budget queue at an exact rung of the ladder, so a
+    /// cap counted elsewhere lands on the response that fits it. The strike count is set rather
+    /// than incremented: the rung is chosen here, not accumulated. Never lowered, so a task that
+    /// has already climbed past this rung does not repeat one it has had.
+    /// </summary>
+    private TaskRunOutcome HandToLadder(TaskRecord task, ForgeLogger log, int strike, string note)
     {
-        var note = $"Task stopped after {attempts} engineer attempts that could not pass CI and review. " +
-                   "It needs a decision on scope or approach.";
         _tasks.SetProgressNote(task.Id, note);
+        _tasks.SetOutOfBudgetCount(task.Id, Math.Max(_tasks.Get(task.Id).OutOfBudgetCount, strike));
+
+        var current = _tasks.Get(task.Id).Status;
+        if (current != TaskStatus.OutOfBudget && TaskTransitions.IsLegal(current, TaskStatus.OutOfBudget))
+            Transition(task.Id, TaskStatus.OutOfBudget, log);
+
         log.Event(EventType.ErrorInternal, note);
-        Notify(task.Id, MessageType.Escalation, "pm", note);
-        return ParkOnClient(task.Id, note, log);
+        Notify(task.Id, MessageType.Escalation, "principal", note);
+        return new TaskRunOutcome(task.Id, EndReason.Escalated, _tasks.Get(task.Id).Status, note);
     }
 
     private static string Shorten(string text, int max) =>

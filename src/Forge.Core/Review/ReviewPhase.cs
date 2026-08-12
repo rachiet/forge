@@ -37,6 +37,12 @@ public sealed class ReviewPhase(
     private readonly AgentRecipe _recipe = AgentRecipe.PrincipalReview;
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
 
+    /// <summary>The play attached once a review round is not judging the work but re-scoping it.</summary>
+    private const string CloseItOutPlay = "close-it-out";
+
+    /// <summary>How many verdicts a task may collect before every later review carries the play.</summary>
+    private const int CloseItOutAfterReviews = 3;
+
     /// <summary>Reviews a task's branch against trunk and returns the verdict.</summary>
     public async Task<ReviewVerdict> RunAsync(
         TaskRecord task, string branch, WorkspaceManager workspaces, CancellationToken ct = default)
@@ -47,10 +53,23 @@ public sealed class ReviewPhase(
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, log);
 
         var diff = workspaces.DiffAgainstTrunk(task.Id, branch);
+        var discussions = new DiscussionRepository(conn);
+
+        // Verdicts already recorded, so the reviewer is told which round this is rather than
+        // inferring it from a history that only carries the last few entries. Past the
+        // threshold every round carries the play: the condition is durable, unlike the
+        // one-shot triage play, and the round after next is the one that needs it most.
+        var priorVerdicts = discussions.ReviewCount(task.Id);
+        var play = priorVerdicts >= CloseItOutAfterReviews
+            ? "\n\n" + prompts.Play(CloseItOutPlay).TrimEnd()
+            : "";
+        if (play.Length > 0)
+            log.Message($"Task {task.Id}: {priorVerdicts} reviews so far; attaching the {CloseItOutPlay} play.");
+
         var result = await loop
             .RunReviewAsync(
-                [new LlmMessage("user", Brief(task, diff, new DiscussionRepository(conn).History(task.Id),
-                    Ui.UiGate.CustomStyleReport(workspaces.Path(task.Id))))],
+                [new LlmMessage("user", Brief(task, diff, discussions.History(task.Id),
+                    Ui.UiGate.CustomStyleReport(workspaces.Path(task.Id)), priorVerdicts) + play)],
                 task, executor, ct)
             .ConfigureAwait(false);
 
@@ -71,7 +90,7 @@ public sealed class ReviewPhase(
         }
 
         var feedback = result.ReviewFeedback ?? (approved ? "Approved." : "Changes requested.");
-        new DiscussionRepository(conn).Open(task.Id, "principal", feedback);
+        discussions.Open(task.Id, "principal", feedback);
 
         if (approved)
             log.Event(EventType.ReviewApproved, feedback);
@@ -84,11 +103,15 @@ public sealed class ReviewPhase(
     /// <summary>
     /// The reviewer's opening turn: the task, its acceptance criteria, the diff, and what has
     /// already been said about it — without which a fresh reviewer re-argues its own verdicts.
+    /// <paramref name="priorVerdicts"/> is how many times the work has already been judged.
     /// </summary>
-    private static string Brief(TaskRecord task, string diff, string history, string? bespokeStyling) => $"""
+    private static string Brief(
+        TaskRecord task, string diff, string history, string? bespokeStyling, int priorVerdicts) => $"""
         # Review
 
         Task {task.Id}: {task.Title}
+
+        {RoundLine(priorVerdicts)}
 
         ## Objective
         {task.Objective}
@@ -135,4 +158,14 @@ public sealed class ReviewPhase(
 
         {diff}
         """;
+
+    /// <summary>
+    /// States which review round this is, so the cost of another rejection is a fact in the
+    /// packet rather than something the reviewer must infer from a truncated history.
+    /// </summary>
+    private static string RoundLine(int priorVerdicts) => priorVerdicts == 0
+        ? "This is the first review of this task."
+        : $"This is review {priorVerdicts + 1} of this task: the work has already been sent "
+          + $"back {priorVerdicts} time{(priorVerdicts == 1 ? "" : "s")}, and each rejection "
+          + "costs another full engineer round.";
 }
