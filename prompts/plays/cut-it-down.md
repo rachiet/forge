@@ -33,6 +33,18 @@ finished here — close it as it stands and file the remainder.
    `break_and_relink`. Point everything that was waiting on this task at the
    **core** piece only. The cosmetic piece hangs free with no edges into it, so a
    failure there stops nothing.
+
+   Write each piece's acceptance criteria from scratch. Do not carry over the
+   original's wording, and do not describe anything as "already implemented",
+   "existing" or "in place" unless you have just read it in the workspace. A
+   replacement that claims work is done which is not leaves an engineer with an
+   impossible task: it cannot satisfy the criteria without doing work the
+   criteria forbid, and every attempt is rejected for being out of scope.
+
+   Every `contract_ops` operation the original task carried must end up on a
+   piece whose criteria say to BUILD it. A piece that only verifies, documents or
+   tests an operation does not own it, however its `contract_ops` reads — the
+   board will look covered and nothing will implement it.
 3. **Drop it.** Nothing usable exists and nothing downstream needs it.
    `cancel_task(task, reason)` takes it and its dependents off the board. This is
    the last resort — check first whether closing it short would have let the
@@ -52,6 +64,10 @@ fail cost more than one task closed honestly.
 
 Do not leave a dependent waiting on cosmetic work. That is how one unfinished
 detail stalls a whole project.
+
+Do not split implementation away from the thing that implements it. If one piece
+builds an endpoint and another tests it, the test piece must depend on the build
+piece — otherwise the tests are written against code that does not exist yet.
 
 You get this play once. If the task reaches this point again, the harness closes
 it for you: the branch goes through CI and merges if it is green, and the
