@@ -230,7 +230,7 @@ public class PromptAssemblerTests
         TaskType.Task, "Add login", "Users can log in", 60_000,
         acceptanceCriteria: "POST /login returns 200",
         contextPaths: ["src/auth/"],
-        requirementsRef: RequirementsRef.Parse("01-users-auth.md@v2")) with
+        requirementsRef: RequirementsRef.Parse("01-users-auth.md")) with
     {
         Id = 7,
         ProgressNote = progressNote,
@@ -265,7 +265,7 @@ public class PromptAssemblerTests
         Assert.Contains("# Task 7: Add login", packet);
         Assert.Contains("Users can log in", packet);
         Assert.Contains("POST /login returns 200", packet);
-        Assert.Contains("01-users-auth.md@v2", packet);
+        Assert.Contains("01-users-auth.md", packet);
         Assert.Contains("src/auth/", packet);
         Assert.Contains("0 of 60000 tokens", packet);
         Assert.DoesNotContain("predecessor", packet);

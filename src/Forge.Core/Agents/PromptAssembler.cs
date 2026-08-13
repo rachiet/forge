@@ -149,7 +149,7 @@ public sealed class PromptAssembler(PromptLibrary prompts)
             sb.AppendLine("## Acceptance criteria").AppendLine().AppendLine(criteria).AppendLine();
 
         if (task.RequirementsRef is { } req)
-            sb.AppendLine($"## Requirement\n\nImplements `{req}`. Work to this exact version.").AppendLine();
+            sb.AppendLine($"## Requirement\n\nImplements `{req}`.").AppendLine();
 
         if (contractSlice is { Length: > 0 })
         {

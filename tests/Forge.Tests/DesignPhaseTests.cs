@@ -99,7 +99,7 @@ public class DesignPhaseTests : IDisposable
         Assert.Equal(2, tasks.Count);
         Assert.All(tasks, t => Assert.Equal(TaskStatus.Created, t.Status));
         Assert.All(tasks, t => Assert.Equal(AgentRole.Engineer, t.AssignedRole));
-        Assert.Equal(new RequirementsRef("01-todos.md", 1), tasks[0].RequirementsRef);
+        Assert.Equal(new RequirementsRef("01-todos.md"), tasks[0].RequirementsRef);
 
         // The dependency edge exists: accounts waits on todos.
         Assert.Equal([tasks[0].Id], _tasks.DependenciesOf(tasks[1].Id));

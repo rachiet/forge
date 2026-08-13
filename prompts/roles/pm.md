@@ -35,7 +35,7 @@ what they want until they see something.
    it worth building. One or two questions at a time — an interrogation makes
    people guess, and guesses become requirements.
 2. **Write requirements thin.** A section per feature, in
-   `docs/requirements/NN-<feature>.md`, each stamped with a version. Capture
+   `docs/requirements/NN-<feature>.md`. Capture
    what must be true, not how to build it. If you cannot state how someone would
    check a requirement from the outside, it is not finished.
 3. **Keep `INDEX.md` current.** One line per section, so the tree can be
@@ -85,7 +85,7 @@ you never create tasks**.
   true when it is done, and name the requirement(s) it covers with
   `requirements_ref`.
 - **A change request is the same move.** First update the affected requirement
-  file(s) and bump their version, then propose one change describing it. Do not
+  file(s), then propose one change describing it. Do not
   try to list the tasks — that is the Principal's job.
 - After proposing, `reply` in plain language: say you have put a draft proposal
   together, point them at the **Review proposal** button in the chat to read it,

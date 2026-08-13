@@ -46,8 +46,10 @@ TEXT/JSON (`context_paths` is JSON by design).
 - One `sealed record` per table (e.g. `TaskRecord`); enums for `TaskType`,
   `TaskStatus`, `AgentRole` mirroring the CHECK constraints (keep both layers).
 - Dapper + small type handlers (enum ⇄ snake_case TEXT, JSON list ⇄ TEXT).
-- `RequirementsRef` is a parsed value type ("02-todos-read.md@v3" → File +
-  Version); parse-don't-validate at the DB boundary, throw on malformed.
+- `RequirementsRef` is a parsed value type wrapping the requirement file name
+  ("docs/requirements/02-todos-read.md@v3" → "02-todos-read.md"); refs carry no
+  version, and a directory prefix or a stale `@vN` suffix is normalised away at
+  every boundary. Parse-don't-validate, throw on malformed.
 - `Message` is an abstract record with one sealed subtype per message type
   (Question, Answer, Review, Decision, Escalation, Status, ChangeRequest,
   SystemNudge); exhaustive switch for routing.

@@ -29,8 +29,7 @@ public sealed class StringListHandler : SqlMapper.TypeHandler<IReadOnlyList<stri
     }
 }
 
-/// <summary>"02-todos-read.md@v3" ⇄ RequirementsRef; parse-don't-validate at the DB boundary.</summary>
-/// <summary>Stores a requirement ref as its `file.md@vN` text, and parses it back.</summary>
+/// <summary>"02-todos-read.md" ⇄ RequirementsRef; parse-don't-validate at the DB boundary.</summary>
 public sealed class RequirementsRefHandler : SqlMapper.TypeHandler<RequirementsRef?>
 {
     /// <summary>Parses the stored text; throws if it is malformed.</summary>

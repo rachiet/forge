@@ -114,7 +114,7 @@ public sealed partial class AgentToolset(
                 Required("title", "what is being built, in the client's words."),
                 Required("objective", "what must be true when it is done."),
                 Optional("acceptance", "how the client would check it from the outside."),
-                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md@v1`.")),
+                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md`.")),
 
             ["create_task"] = new("put a task on the board. Returns its id.",
                 Required("title", "short imperative name, e.g. `implement-create-poll-endpoint`."),
@@ -132,7 +132,7 @@ public sealed partial class AgentToolset(
                                      + "be finished. If you cannot say what done looks like, the task "
                                      + "is not ready to create."),
                 Optional("type", "`task` (default), `bug`, or `chore`."),
-                Optional("requirements_ref", "the requirement it implements, e.g. `01-todos.md@v1`. "
+                Optional("requirements_ref", "the requirement it implements, e.g. `01-todos.md`. "
                                            + "This is what the client watches progress by, so every "
                                            + "task serving a requirement must name it."),
                 Optional("context_paths", "comma-separated files worth reading first."),
@@ -202,7 +202,7 @@ public sealed partial class AgentToolset(
               + "before calling this. Nothing checked = refused.",
                 Required("title", "the defect in one line."),
                 Required("expected", "what should have happened, quoted from the contract."),
-                Optional("requirements_ref", "the requirement it violates, e.g. `01-todos.md@v1`.")),
+                Optional("requirements_ref", "the requirement it violates, e.g. `01-todos.md`.")),
 
             ["how_to_run"] = new("record the command that starts the app for the client. Call it once, "
                                + "after you have actually started the app.",
@@ -554,7 +554,7 @@ public sealed partial class AgentToolset(
     private ToolOutcome CreateTask(ToolCall call)
     {
         var requirement = call.Optional("requirements_ref") is { } reqRef
-            ? NormalizeRequirementRef(reqRef)
+            ? RequirementsRef.Parse(reqRef)
             : (RequirementsRef?)null;
 
         var contexts = call.Optional("context_paths")?
@@ -666,7 +666,7 @@ public sealed partial class AgentToolset(
             call.Arg("title"),
             call.Arg("objective"),
             call.Optional("acceptance"),
-            call.Optional("requirements_ref") is { } reqRef ? NormalizeRequirementRef(reqRef).ToString() : null);
+            call.Optional("requirements_ref") is { } reqRef ? RequirementsRef.Parse(reqRef).ToString() : null);
         proposal.Save(connection);
 
         return new ToolOutcome(
@@ -689,39 +689,6 @@ public sealed partial class AgentToolset(
             ? parsed
             : throw new ToolCallException(
                 $"Task type '{type}' cannot be assigned to an engineer. Use task, bug, or chore.");
-    }
-
-    /// <summary>
-    /// Parses a requirement ref, accepting the forms a model tends to write: any directory
-    /// prefix is stripped, and a missing version is read from the file's "Version: N" line.
-    /// </summary>
-    private RequirementsRef NormalizeRequirementRef(string reqRef)
-    {
-        var text = reqRef.Trim();
-        var at = text.IndexOf('@');
-        var file = System.IO.Path.GetFileName(at >= 0 ? text[..at] : text);
-        if (file.Length == 0) throw new ToolCallException($"Empty requirement ref '{reqRef}'.");
-
-        if (at >= 0) return RequirementsRef.Parse($"{file}{text[at..]}");
-
-        var version = ReadRequirementVersion(file) ?? 1;
-        return new RequirementsRef(file, version);
-    }
-
-    private int? ReadRequirementVersion(string file)
-    {
-        try
-        {
-            var path = _jail.Resolve(System.IO.Path.Combine("docs", "requirements", file));
-            if (!File.Exists(path)) return null;
-            foreach (var line in File.ReadLines(path))
-            {
-                var match = Regex.Match(line, @"[Vv]ersion:\s*(\d+)");
-                if (match.Success) return int.Parse(match.Groups[1].Value);
-            }
-        }
-        catch { /* best effort — fall back to the default version */ }
-        return null;
     }
 
     /// <summary>
@@ -784,7 +751,7 @@ public sealed partial class AgentToolset(
                 + "automatically as the repro. Do not describe a result you did not observe.");
 
         var requirement = call.Optional("requirements_ref") is { } reqRef
-            ? NormalizeRequirementRef(reqRef)
+            ? RequirementsRef.Parse(reqRef)
             : (RequirementsRef?)null;
 
         var objective = $"""

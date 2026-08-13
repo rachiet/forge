@@ -52,37 +52,31 @@ public class TaskTransitionsTests
 public class RequirementsRefTests
 {
     [Fact]
-    public void Parses_file_and_version()
+    public void Parses_the_requirement_file_name()
     {
-        var r = RequirementsRef.Parse("02-todos-read.md@v3");
+        var r = RequirementsRef.Parse("02-todos-read.md");
         Assert.Equal("02-todos-read.md", r.File);
-        Assert.Equal(3, r.Version);
-        Assert.Equal("02-todos-read.md@v3", r.ToString());
+        Assert.Equal("02-todos-read.md", r.ToString());
     }
 
     [Theory]
-    [InlineData("02-todos-read.md@v1.0", 1)]
-    [InlineData("02-todos-read.md@v2.1.4", 2)]
-    public void A_dotted_version_parses_to_its_major(string text, int expected)
+    [InlineData("02-todos-read.md@v3")]
+    [InlineData("02-todos-read.md@v1.0")]
+    [InlineData("docs/requirements/02-todos-read.md")]
+    [InlineData("  docs/requirements/02-todos-read.md@v2  ")]
+    public void A_directory_prefix_or_a_version_suffix_is_normalised_away(string text)
     {
-        // The PM stamps its requirement files "v1.0"; the Principal quotes that back on every
-        // task it creates. Refusing it rejected an entire design run, twice, for a suffix
-        // nothing in the system reads — coverage matches on the file name alone.
-        var r = RequirementsRef.Parse(text);
-        Assert.Equal("02-todos-read.md", r.File);
-        Assert.Equal(expected, r.Version);
+        // Refs carry no version, but the PM stamps its files "v1.0" and the Principal quotes
+        // that back on every task and every x-requirement. A suffix nothing reads must never
+        // fail a coverage gate — the file name is the whole identity.
+        Assert.Equal("02-todos-read.md", RequirementsRef.Parse(text).File);
     }
 
     [Theory]
     [InlineData("")]
-    [InlineData("02-todos-read.md")]
-    [InlineData("02-todos-read.md@")]
-    [InlineData("02-todos-read.md@3")]
-    [InlineData("02-todos-read.md@v0")]
-    [InlineData("02-todos-read.md@vx")]
-    [InlineData("02-todos-read.md@v1.")]
-    [InlineData("02-todos-read.md@v1.0-draft")]
+    [InlineData("   ")]
     [InlineData("@v3")]
+    [InlineData("docs/requirements/")]
     public void Malformed_refs_throw(string text) =>
         Assert.Throws<FormatException>(() => RequirementsRef.Parse(text));
 }

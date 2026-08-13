@@ -17,7 +17,7 @@ public class RepositoryTests : IDisposable
             TaskType.Task, "Add login", "Users can log in", budget,
             acceptanceCriteria: "POST /login returns 200",
             contextPaths: ["src/auth/", "docs/design/03-contracts/auth.yaml"],
-            requirementsRef: RequirementsRef.Parse("01-users-auth.md@v2"),
+            requirementsRef: RequirementsRef.Parse("01-users-auth.md"),
             assignedRole: AgentRole.Engineer,
             createdBy: "principal"));
 
@@ -32,7 +32,7 @@ public class RepositoryTests : IDisposable
         Assert.Equal(TaskStatus.Created, loaded.Status);
         Assert.Equal(AgentRole.Engineer, loaded.AssignedRole);
         Assert.Equal(["src/auth/", "docs/design/03-contracts/auth.yaml"], loaded.ContextPaths);
-        Assert.Equal(new RequirementsRef("01-users-auth.md", 2), loaded.RequirementsRef);
+        Assert.Equal(new RequirementsRef("01-users-auth.md"), loaded.RequirementsRef);
         Assert.Equal(10_000, loaded.TokenBudget);
         Assert.NotNull(loaded.CreatedAt);
     }

@@ -188,9 +188,19 @@ public sealed class ApiContract
     private static bool IsFailure(string status) =>
         status.StartsWith('4') || status.StartsWith('5') || status.Equals("default", StringComparison.Ordinal);
 
-    /// <summary>The operation's `x-requirement` value, or null when it carries none.</summary>
-    private static string? Requirement(OpenApiOperation operation) =>
-        operation.Extensions.TryGetValue(RequirementExtension, out var value) && value is OpenApiString text
-            ? text.Value?.Trim()
-            : null;
+    /// <summary>
+    /// The operation's `x-requirement` as a bare requirement file name, or null when it carries
+    /// none the gate can use. Normalised through <see cref="Model.RequirementsRef"/>, so a value
+    /// written with a directory prefix or an "@v1" suffix still matches the files on disk.
+    /// </summary>
+    private static string? Requirement(OpenApiOperation operation)
+    {
+        if (operation.Extensions.TryGetValue(RequirementExtension, out var value)
+            && value is OpenApiString { Value: { } raw })
+        {
+            try { return Model.RequirementsRef.Parse(raw).File; }
+            catch (FormatException) { return null; }
+        }
+        return null;
+    }
 }

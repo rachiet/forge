@@ -23,16 +23,16 @@ public class TypeHandlerTests
             new
             {
                 Paths = (IReadOnlyList<string>)["src/a.cs", "docs/design/02-data-model.md"],
-                Ref = (RequirementsRef?)RequirementsRef.Parse("02-todos-read.md@v3"),
+                Ref = (RequirementsRef?)RequirementsRef.Parse("02-todos-read.md"),
             });
 
         var raw = conn.QuerySingle<(string, string)>("SELECT paths, ref FROM probe");
         Assert.Equal("""["src/a.cs","docs/design/02-data-model.md"]""", raw.Item1);
-        Assert.Equal("02-todos-read.md@v3", raw.Item2);
+        Assert.Equal("02-todos-read.md", raw.Item2);
 
         var probe = conn.QuerySingle<HandlerProbe>("SELECT paths AS Paths, ref AS Ref FROM probe");
         Assert.Equal(["src/a.cs", "docs/design/02-data-model.md"], probe.Paths);
-        Assert.Equal(new RequirementsRef("02-todos-read.md", 3), probe.Ref);
+        Assert.Equal(new RequirementsRef("02-todos-read.md"), probe.Ref);
     }
 
     [Theory]

@@ -564,7 +564,7 @@ public class TaskRunnerTests : IDisposable
             // QA round 1: run the check (its output is captured as evidence), file the bug, finish.
             ScriptedLlmClient.Tool("run", ("command", "git status")),
             ScriptedLlmClient.Tool("file_bug", ("title", "Greeting missing"),
-                ("expected", "the greeting should read hello"), ("requirements_ref", "01-notes.md@v1")),
+                ("expected", "the greeting should read hello"), ("requirements_ref", "01-notes.md")),
             ScriptedLlmClient.Tool("done", ("summary", "Found 1 issue.")),
             // Principal triage: accept the bug.
             ScriptedLlmClient.Tool("accept_bug", ("note", "Real defect.")),

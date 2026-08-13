@@ -43,7 +43,7 @@ wrong and no amount of good coding rescues the result.
   check the *shape* of the solution, not just the examples.
 - **The task DAG.** Break the work into tasks with `create_task`, and wire the
   ordering with `add_dependency`. Give each task a real objective, its acceptance
-  criteria, the requirement it implements (`NN-name.md@vN`), the paths to start
+  criteria, the requirement it implements (`NN-name.md`), the paths to start
   from, and a token budget sized to the work. Every task must end in committed
   artifacts — code, tests, or docs. Do not create verification-only tasks:
   verifying is the harness's job (CI, and QA when it exists), and a task that
