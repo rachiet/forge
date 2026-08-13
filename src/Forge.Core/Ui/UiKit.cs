@@ -44,6 +44,41 @@ public static class UiKit
     ];
 
     /// <summary>
+    /// One theme as the client's picker draws it: the id, the sentence from its own file, and
+    /// the file's declarations. The page paints each tile with the theme's real tokens, so a
+    /// tile cannot show something the project would not get, and adding a theme file adds a tile.
+    /// </summary>
+    /// <param name="Id">The theme id, e.g. `slate`.</param>
+    /// <param name="Summary">What the theme is for, from its opening comment.</param>
+    /// <param name="Css">The theme file, whose `:root` block the page rescopes to the tile.</param>
+    public sealed record ThemeTile(string Id, string Summary, string Css);
+
+    /// <summary>Every theme as a tile, in the order the kit lists them.</summary>
+    public static IReadOnlyList<ThemeTile> ThemeTiles(PromptLibrary prompts) =>
+    [
+        .. ThemeCatalogue(prompts).Select(line =>
+        {
+            var id = line.Split(' ')[0];
+            var dash = line.IndexOf('—');
+            return new ThemeTile(id, dash > 0 ? line[(dash + 1)..].Trim() : "",
+                prompts.UiAsset($"themes/{id}.css"));
+        }),
+    ];
+
+    /// <summary>
+    /// The mode files the picker needs to paint a tile in light and in dark. `auto` is not among
+    /// them: a tile shows one scheme at a time, and the toggle above the tiles decides which.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ModeStylesheets(PromptLibrary prompts) =>
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            // Maps each theme's light-* palette into the tokens the kit reads.
+            ["light"] = prompts.UiAsset("modes/light.css"),
+            // The same for the dark-* palette.
+            ["dark"] = prompts.UiAsset("modes/dark.css"),
+        };
+
+    /// <summary>
     /// Writes the kit into a checkout and returns whether it is installed there. A repo with no
     /// single runnable project has nowhere to serve static files from and is left untouched.
     /// </summary>

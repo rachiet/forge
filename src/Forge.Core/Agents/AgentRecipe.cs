@@ -90,7 +90,7 @@ public sealed record AgentRecipe
         // No create_task: the PM hands work over only by proposing requirements the client
         // approves. The bug and task tools resolve what the client was asked about in chat.
         Tools = ["read_file", "list_dir", "grep", "write_file", "propose_requirements",
-                 "reject_bug", "retriage", "cancel_task", "reply", "escalate"],
+                 "offer_theme_choice", "reject_bug", "retriage", "cancel_task", "reply", "escalate"],
         Scope = new PathScope(["PROJECT.md", "STATUS.md", "docs/"]),
         ToolAllowlist = [],
         DefaultBudget = 400_000,

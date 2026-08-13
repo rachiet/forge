@@ -226,6 +226,8 @@
   .btn.primary { background:var(--accent); color:#fff; border-color:transparent; }
   .btn.stop { background:var(--pending); color:#fff; border-color:transparent; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
+  /* A quiet action sitting in a card's header, pushed to its right edge. */
+  .btn.small { margin-left:auto; padding:3px 9px; font-size:.66rem; }
 
   /* budget strip */
   .budget { display:flex; align-items:baseline; gap:8px; justify-content:flex-end;
@@ -295,6 +297,35 @@
   .review ul.al, .review ul.dl { margin:0; padding-left:18px; font-size:.88rem; }
   .review ul.al li { margin:3px 0; }
   .review ul.dl li { margin:3px 0; color:var(--muted); text-decoration:line-through; }
+  /* The theme picker. The tiles carry the themes' own tokens, so everything here is
+     described in those variables and nothing hardcodes a colour. */
+  .theme .knobs { display:flex; flex-wrap:wrap; gap:14px; padding:12px 22px;
+                  border-bottom:1px solid var(--line); font-size:.8rem; color:var(--muted); }
+  .theme .knobs label { display:flex; align-items:center; gap:6px; }
+  .theme .knobs select { font:inherit; padding:3px 6px; border:1px solid var(--line);
+                         border-radius:6px; background:var(--panel); color:var(--ink); }
+  .theme .foot .note { margin-right:auto; font-size:.8rem; color:var(--muted); }
+  .tile { display:block; width:100%; text-align:left; margin:0 0 12px; padding:0; cursor:pointer;
+          border:2px solid var(--line); border-radius:12px; overflow:hidden; background:none;
+          font:inherit; }
+  .tile:hover { border-color:var(--active); }
+  .tile.on { border-color:var(--active); box-shadow:0 0 0 3px color-mix(in oklab, var(--active) 22%, transparent); }
+  .tile .paint { padding:14px 16px; background:var(--fg-canvas); color:var(--fg-ink);
+                 font-family:var(--fg-font-sans); }
+  .tile .name { display:flex; align-items:baseline; gap:8px; margin-bottom:10px;
+                font-weight:var(--fg-heading-weight); letter-spacing:var(--fg-heading-tracking); }
+  .tile .name em { font-style:normal; font-size:.8rem; font-weight:400; color:var(--fg-ink-muted); }
+  .tile .demo { display:flex; gap:10px; align-items:center; }
+  .tile .card { flex:1; background:var(--fg-surface); border:1px solid var(--fg-border);
+                border-radius:calc(8px * var(--fg-radius-base)); padding:9px 11px; font-size:.82rem; }
+  .tile .card .sub { color:var(--fg-ink-muted); font-size:.75rem; margin-top:3px; }
+  .tile .cta { background:oklch(var(--fg-accent-l) var(--fg-accent-c) var(--fg-accent-h));
+               color:var(--fg-on-accent); border-radius:calc(7px * var(--fg-radius-base));
+               padding:7px 13px; font-size:.8rem; }
+  .tile .chip { background:var(--fg-surface-sunken); border:1px solid var(--fg-border);
+                border-radius:999px; padding:5px 10px; font-size:.75rem; color:var(--fg-ink-muted); }
+  .tile .current { margin-left:auto; font-size:.72rem; color:var(--fg-ink-faint); }
+
   /* The chain of changes in the rail: one folded entry per accepted change request. */
   .crrow { padding:9px 16px; border-top:1px solid var(--line); font-size:.86rem;
            display:flex; gap:10px; align-items:baseline; }
@@ -360,6 +391,9 @@
     <aside class="card chat">
       <div class="card-head">
         <h2 id="agentHead">…</h2>
+        <!-- Appearance is a selection, never a conversation: the picker is always one click
+             away, and Iris raises the same dialog when the client asks her about the look. -->
+        <button class="btn small" id="themeBtn">Appearance</button>
       </div>
       <div class="thread" id="thread"></div>
       <p class="thinking hidden" id="thinking"><span id="thinkingWho">…</span> is replying<span>…</span></p>
@@ -398,6 +432,28 @@
   </div>
 </dialog>
 
+<!-- The theme picker. Every tile is drawn with the theme's own tokens, so what the client
+     sees here is what their application gets. Choosing installs it straight away. -->
+<dialog id="themeDialog" class="review theme">
+  <div class="head">
+    <h2>Choose how it looks</h2>
+    <p class="sub">Every theme below is ready to use. Pick one and it is applied straight
+       away — you can change it whenever you like.</p>
+  </div>
+  <div class="knobs">
+    <label>Light or dark <select id="themeMode"></select></label>
+    <label>Accent <select id="themeAccent"></select></label>
+    <label>Spacing <select id="themeDensity"></select></label>
+    <label>Corners <select id="themeRadius"></select></label>
+  </div>
+  <div class="body" id="themeTiles"></div>
+  <div class="foot">
+    <span class="note" id="themeNote"></span>
+    <button class="btn" id="themeClose">Close</button>
+  </div>
+</dialog>
+<style id="themeTileStyles"></style>
+
 
 <script>
 const $ = id => document.getElementById(id);
@@ -425,6 +481,8 @@ const openSections = new Set();
 // per tab, in sessionStorage, so a reload does not re-raise a prompt already dismissed.
 function dismissKey() { return `forge.dismissed.${project}`; }
 let dismissedProposal = sessionStorage.getItem(dismissKey());
+// Whether this tab has already opened the picker for the offer currently standing.
+let themeOfferSeen = false;
 const proposalKey = p => `${p.title}\n${p.objective}\n${p.acceptance || ''}\n${p.changeEntry || ''}`;
 // Whatever the server says the client-facing agent is called. One constant, server-side.
 let agentName = '';
@@ -766,6 +824,15 @@ async function poll() {
       $('reviewDialog').close();
     }
 
+    // Iris has offered the picker. Opened once per offer; choosing clears the flag server-side,
+    // and closing without choosing leaves the Appearance button as the way back in.
+    if (d.themeOffered && !themeOfferSeen) {
+      themeOfferSeen = true;
+      openThemePicker();
+    } else if (!d.themeOffered) {
+      themeOfferSeen = false;
+    }
+
     // A flag, not an explanation: it names what is stuck and points at the chat,
     // where the agent has put what it actually needs in the client's own terms.
     const waiting = d.awaitingClient || [];
@@ -926,6 +993,86 @@ $('reviewBtn').addEventListener('click', () => {
   if (lastBoard) fillReview(lastBoard);
   $('reviewDialog').showModal();
 });
+
+/* ---- the theme picker -------------------------------------------------------------
+   The catalogue comes from the kit's own files: each theme's CSS is rescoped from :root
+   to its tile, and the mode file is layered on top, so a tile is painted by exactly the
+   declarations the project would be built with. Nothing here is generated or guessed. */
+let themes = null;                       // the catalogue, fetched once per open
+let chosen = null;                       // the choice being edited in the dialog
+
+const scopeCss = (css, selector) => css.replace(/:root/g, selector);
+
+function paintTiles() {
+  if (!themes) return;
+  // One style block for every tile: theme declarations first, then the mode that maps them.
+  const mode = chosen.mode === 'auto' ? 'dark' : chosen.mode;
+  $('themeTileStyles').textContent = themes.themes.map(t =>
+    scopeCss(t.css, `.tile[data-theme="${t.id}"] .paint`) +
+    scopeCss(themes.modeCss[mode], `.tile[data-theme="${t.id}"] .paint`) +
+    (chosen.accent ? `.tile[data-theme="${t.id}"] .paint {
+        --fg-accent-h:${themes.accents[chosen.accent].hue};
+        --fg-accent-c:${themes.accents[chosen.accent].chroma}; }` : '')).join('\n');
+
+  $('themeTiles').innerHTML = themes.themes.map(t => `
+    <button class="tile${t.id === chosen.theme ? ' on' : ''}" data-theme="${t.id}">
+      <div class="paint">
+        <div class="name">${esc(t.id)} <em>${esc(t.summary)}</em>
+          ${t.id === chosen.theme ? '<span class="current">in use</span>' : ''}</div>
+        <div class="demo">
+          <div class="card">A card on this theme<div class="sub">with quieter text under it</div></div>
+          <span class="chip">Label</span>
+          <span class="cta">Button</span>
+        </div>
+      </div>
+    </button>`).join('');
+
+  $('themeTiles').querySelectorAll('.tile').forEach(el =>
+    el.addEventListener('click', () => applyTheme({ theme: el.dataset.theme })));
+}
+
+function fillKnob(id, values, selected) {
+  $(id).innerHTML = values.map(v =>
+    `<option value="${esc(v)}"${v === selected ? ' selected' : ''}>${esc(v)}</option>`).join('');
+}
+
+async function openThemePicker() {
+  const r = await fetch(`/api/theme?project=${encodeURIComponent(project)}`);
+  themes = await r.json();
+  chosen = { ...themes.current };
+  fillKnob('themeMode', themes.modes, chosen.mode);
+  fillKnob('themeAccent', ['(theme default)', ...Object.keys(themes.accents)], chosen.accent || '(theme default)');
+  fillKnob('themeDensity', themes.densities, chosen.density);
+  fillKnob('themeRadius', themes.radii, chosen.radius);
+  $('themeNote').textContent = '';
+  paintTiles();
+  if (!$('themeDialog').open) $('themeDialog').showModal();
+}
+
+// Every change is a full choice, so the client can try one thing at a time and see it land.
+async function applyTheme(change) {
+  chosen = { ...chosen, ...change };
+  paintTiles();
+  const r = await fetch('/api/theme', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, ...chosen }),
+  });
+  const body = await r.json().catch(() => ({}));
+  $('themeNote').textContent = !r.ok || body.error ? (body.error || 'Could not apply that theme.')
+    : body.appliedToTrunk ? `Applied: ${body.theme}.`
+    : `Saved: ${body.theme}. It goes into the app when the build finishes.`;
+  poll();
+}
+
+for (const [id, field] of [['themeMode', 'mode'], ['themeAccent', 'accent'],
+                           ['themeDensity', 'density'], ['themeRadius', 'radius']]) {
+  $(id).addEventListener('change', e => applyTheme({
+    [field]: field === 'accent' && e.target.value.startsWith('(') ? null : e.target.value,
+  }));
+}
+
+$('themeClose').addEventListener('click', () => $('themeDialog').close());
+$('themeBtn').addEventListener('click', openThemePicker);
 
 // Keeping the conversation going puts the prompt away: the proposal stays pending, so
 // approving is still possible the moment Iris raises it again, but the client is not

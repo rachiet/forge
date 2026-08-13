@@ -135,6 +135,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 snapshot.BudgetUsd, snapshot.BudgetRemainingUsd, snapshot.BudgetExhausted,
                 snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
                 snapshot.AwaitingClient, snapshot.NeedsClient, snapshot.Delivery,
+                snapshot.ThemeOffered,
                 snapshot.Plan,
                 AgentName = ClientFacing.AgentName,
                 snapshot.ProjectLevelCostUsd,
@@ -232,9 +233,12 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             return Results.Ok(new
             {
                 Current = ThemeChoice.From(new ProjectMetaRepository(conn)),
-                Themes = UiKit.ThemeCatalogue(prompts),
+                Themes = UiKit.ThemeTiles(prompts),
+                ModeCss = UiKit.ModeStylesheets(prompts),
                 Modes = ThemeChoice.Modes,
-                Accents = ThemeChoice.Accents.Keys,
+                // Hue and chroma per accent, so a tile can repaint its accent ramp locally
+                // exactly as theme.css would.
+                Accents = ThemeChoice.Accents.ToDictionary(a => a.Key, a => new { a.Value.Hue, a.Value.Chroma }),
                 Densities = ThemeChoice.Densities.Keys,
                 Radii = ThemeChoice.Radii.Keys,
             });
@@ -258,11 +262,13 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 return Results.BadRequest(new { error = problem });
 
             using var conn = Database.OpenProject(dbPath);
-            choice.Save(new ProjectMetaRepository(conn));
+            var meta = new ProjectMetaRepository(conn);
+            choice.Save(meta);
+            ThemeOffer.Clear(meta);
 
             // A running build owns trunk, so leave the write to its next task.
             var applied = _workerProject != request.Project
-                       && UiKit.ApplyToTrunk(_paths, request.Project, choice, prompts);
+                       && AppearanceChange.ApplyAndRecord(_paths, request.Project, choice, prompts, conn);
 
             LoggerFor(request.Project).Message($"Client set the interface to {choice.Describe()}.");
             return Results.Ok(new { theme = choice.Describe(), appliedToTrunk = applied });

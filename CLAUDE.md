@@ -228,11 +228,25 @@ app for every task. So appearance stops being generated work at all.
 - **The PM stays out of it.** The client says "dark, red tint" in chat, the PM records
   it as a requirement, the Principal turns it into a theme id. A theme is code.
 - **Two doors for a later change.** A change request re-runs the design phase, which
-  can call `choose_theme` again; or the client uses the board's Appearance panel
-  (`POST /api/theme`), which writes `project_meta` and calls `UiKit.ApplyToTrunk` —
-  clone, install, commit, push, no agent. The second door exists because a finished
-  project has no task runs left to render through. It defers to a running worker,
-  which owns trunk.
+  can call `choose_theme` again; or the client uses the board's Appearance picker
+  (`POST /api/theme` → `Board/AppearanceChange.ApplyAndRecord`), which writes
+  `project_meta`, installs the kit and records the choice in the change log — clone,
+  install, commit, push, no agent. The second door exists because a finished project has
+  no task runs left to render through. It defers to a running worker, which owns trunk.
+- **The client picks from tiles painted by the themes themselves.** `UiKit.ThemeTiles`
+  serves each theme's own CSS and `ModeStylesheets` the light/dark mapping; the page
+  rescopes `:root` onto each tile, so a tile is drawn by the exact declarations the
+  project would be built with and cannot drift from it. One tile per row, a mode toggle
+  and the four knobs above them. Adding a theme file adds a tile.
+- **The PM offers, never chooses.** `offer_theme_choice` takes no arguments and only
+  raises the picker (`Board/ThemeOffer`, a `project_meta` flag the page polls); the PM has
+  no `choose_theme`. Its prompt forbids describing themes in prose or writing requirements
+  about colours — appearance is a free, instant, reversible click, and a requirement line
+  about it turns that into paid engineering.
+- **The id lands in `project_meta`; the record lands in the change log.** The requirement
+  text stays behavioural, and `AppearanceChange` stamps `- Theme: …` onto the pending change
+  entry when the client is mid-change-request, or writes its own already-approved entry when
+  they are not. No CR flow, no Feature, no tokens.
 - **`UiGate` is the enforcement, not the prompt.** Prompts are manners; this repo's
   stance is mechanical (the PM cannot read `src/` because `PathScope` refuses it).
   Run from `CiRunner.Run` beside `StaticFileCheck`, and skipped entirely where the kit

@@ -45,7 +45,8 @@ public sealed record BoardSnapshot(
     IReadOnlyList<ChatLine> Chat,
     RequirementsProposal? Proposal = null,
     IReadOnlyList<StuckTask>? AwaitingClient = null,
-    Delivery? Delivery = null)
+    Delivery? Delivery = null,
+    bool ThemeOffered = false)
 {
     /// <summary>Whether the client has to answer something before the build can go on.</summary>
     public bool NeedsClient => AwaitingClient is { Count: > 0 };
@@ -121,7 +122,9 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             Chat(chatLimit),
             proposal,
             AwaitingClient(),
-            HandedOver());
+            HandedOver(),
+            // The PM has asked them to pick a theme; the page opens the picker until they do.
+            Board.ThemeOffer.Pending(new ProjectMetaRepository(conn)));
     }
 
     /// <summary>How to run the finished project, once it has been handed over.</summary>

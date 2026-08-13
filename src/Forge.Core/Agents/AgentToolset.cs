@@ -259,6 +259,15 @@ public sealed partial class AgentToolset(
             ["reply"] = new("say this to the client and end your turn.",
                 Required("message", "plain language, no jargon. This is what they read.")),
 
+            ["offer_theme_choice"] = new(
+                "put the theme picker in front of the client: every theme the kit ships, drawn in "
+              + "its own colours, one per row, with light/dark and the accent beside them. They "
+              + "pick one and it is installed immediately — no task, no cost, and reversible by "
+              + "picking another. Use it whenever appearance comes up, instead of describing "
+              + "themes in words or writing a requirement about colours. It takes no arguments: "
+              + "choosing is theirs, and the themes are fixed. Follow it with `reply` telling them "
+              + "to pick one."),
+
             ["progress_note"] = new("save state for your successor. A fresh instance resumes from this "
                                   + "and the workspace, and nothing else.",
                 Required("note", "what is done, what is left, what you tried that failed, and the "
@@ -329,6 +338,7 @@ public sealed partial class AgentToolset(
                 "approve" => Approve(call),
                 "request_changes" => RequestChanges(call),
                 "reply" => Reply(call),
+                "offer_theme_choice" => OfferThemeChoice(),
                 "progress_note" => ProgressNote(call),
                 "done" => Done(call),
                 "escalate" => Escalate(call),
@@ -662,6 +672,19 @@ public sealed partial class AgentToolset(
             + $"into the repo itself; every engineer is given `{Ui.UiKit.CatalogueFile}` and builds "
             + "pages from its classes. Do not create a task for styling, and do not ask anyone to "
             + "write CSS.");
+    }
+
+    /// <summary>
+    /// Raises the theme picker on the client's page. A flag, not a choice: the themes come from
+    /// the kit's files and the client clicks one, so nothing here is the model's to decide.
+    /// </summary>
+    private ToolOutcome OfferThemeChoice()
+    {
+        Board.ThemeOffer.Raise(new ProjectMetaRepository(connection));
+        return new ToolOutcome(
+            "The theme picker is open on their page, showing every theme in its own colours. "
+            + "Tell them to pick the one they like — it is applied as soon as they click, and "
+            + "they can change it again whenever they want. Do not describe the themes yourself.");
     }
 
     /// <summary>
