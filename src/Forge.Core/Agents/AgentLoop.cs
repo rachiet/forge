@@ -70,6 +70,12 @@ public sealed class AgentLoop(
     /// <summary>Fraction of the iteration cap at which the agent is first told to wrap up.</summary>
     private const double IterationNudgeThreshold = 0.70;
 
+    /// <summary>How much of one context_paths file is inlined into the packet before truncation.</summary>
+    private const int MaxContextFileChars = 8_000;
+
+    /// <summary>How much of the packet in total the inlined context files may take.</summary>
+    private const int MaxContextChars = 24_000;
+
     /// <summary>Re-validated here because `with` on a recipe bypasses the factory checks.</summary>
     private readonly AgentRecipe _recipe = recipe.Validate();
 
@@ -93,7 +99,11 @@ public sealed class AgentLoop(
                 // Read from the workspace, so the slice is the contract as it stands on this branch.
                 ContractSlice(task, executor.Jail.Root),
                 // Everything said about this task so far, so an instance is not the first to hear it.
-                new DiscussionRepository(conn).History(task.Id))
+                new DiscussionRepository(conn).History(task.Id),
+                // The packet's own files, inlined: rediscovering them costs a turn each.
+                ContextFiles(task, executor.Jail.Root),
+                // What earlier instances left in the workspace, read from git rather than described.
+                Workspaces.WorkspaceManager.WorkSoFar(executor.Jail.Root))
                 + (addendum is { Length: > 0 } extra ? $"\n\n{extra.TrimEnd()}" : ""))],
             executor, task, ct);
 
@@ -105,6 +115,34 @@ public sealed class AgentLoop(
         task.ContractOps.Count > 0 && Design.ApiContract.Load(workspace) is { } contract
             ? contract.Slice(task.ContractOps)
             : null;
+
+    /// <summary>
+    /// The contents of the task's context_paths, read from the workspace. A directory contributes
+    /// its MODULE.md, since that is what describes it. Paths outside the jail or outside the
+    /// recipe's scope are skipped silently — the packet is not a way around either.
+    /// </summary>
+    private string? ContextFiles(TaskRecord task, string workspace)
+    {
+        var sb = new StringBuilder();
+        foreach (var relative in task.ContextPaths)
+        {
+            if (sb.Length >= MaxContextChars) break;
+
+            var full = System.IO.Path.GetFullPath(System.IO.Path.Combine(workspace, relative));
+            if (!full.StartsWith(System.IO.Path.GetFullPath(workspace), StringComparison.Ordinal)) continue;
+            if (Directory.Exists(full)) full = System.IO.Path.Combine(full, "MODULE.md");
+            if (!File.Exists(full)) continue;
+
+            var shown = System.IO.Path.GetRelativePath(workspace, full).Replace('\\', '/');
+            if (!_recipe.Scope.Allows(shown)) continue;
+
+            var text = File.ReadAllText(full).TrimEnd();
+            if (text.Length > MaxContextFileChars)
+                text = text[..MaxContextFileChars] + "\n... [truncated — read_file the rest if you need it]";
+            sb.AppendLine($"### {shown}").AppendLine().AppendLine("```").AppendLine(text).AppendLine("```").AppendLine();
+        }
+        return sb.Length == 0 ? null : sb.ToString();
+    }
 
     /// <summary>
     /// Triages a stuck task. The opening turn is a packet the runner assembles describing the

@@ -120,9 +120,17 @@ public sealed class PromptAssembler(PromptLibrary prompts)
     /// The task's contract operations as an OpenAPI fragment, so the engineer is handed the
     /// exact paths, status codes and response schemas it must produce.
     /// </param>
+    /// <param name="contextFiles">
+    /// The contents of the files the packet names, read from the workspace, so an instance does
+    /// not spend its first turns opening them one by one.
+    /// </param>
+    /// <param name="workSoFar">
+    /// The diff of what previous instances have already changed on this task, or null on a first
+    /// attempt.
+    /// </param>
     public static string TaskPacket(
         TaskRecord task, IReadOnlyList<string>? standingGuidance = null, string? contractSlice = null,
-        string? history = null)
+        string? history = null, string? contextFiles = null, string? workSoFar = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Task {task.Id}: {task.Title}").AppendLine();
@@ -161,6 +169,15 @@ public sealed class PromptAssembler(PromptLibrary prompts)
             sb.AppendLine();
         }
 
+        if (contextFiles is { Length: > 0 })
+        {
+            sb.AppendLine("## The files you were pointed at").AppendLine();
+            sb.AppendLine(
+                "Read out of your workspace as they stand now, so you do not have to open them. " +
+                "Anything you edit, re-read afterwards; anything not here, read yourself.").AppendLine();
+            sb.AppendLine(contextFiles.TrimEnd()).AppendLine();
+        }
+
         sb.AppendLine($"## Budget\n\n{task.TokensSpent} of {task.TokenBudget} tokens already spent.").AppendLine();
 
         if (history is { Length: > 0 })
@@ -173,6 +190,17 @@ public sealed class PromptAssembler(PromptLibrary prompts)
                 "reviews contradict each other, say so in your progress note rather than " +
                 "silently picking one.").AppendLine();
             sb.AppendLine(history).AppendLine();
+        }
+
+        if (workSoFar is { Length: > 0 })
+        {
+            sb.AppendLine("## What has already been done on this task").AppendLine();
+            sb.AppendLine(
+                "Your workspace is not empty: this is everything earlier attempts changed, " +
+                "committed and uncommitted, against trunk. It is the repo's own account, not a " +
+                "claim — continue from it rather than starting again or re-reading it file by file.")
+                .AppendLine();
+            sb.AppendLine("```diff").AppendLine(workSoFar.TrimEnd()).AppendLine("```").AppendLine();
         }
 
         if (task.ProgressNote is { Length: > 0 } note)

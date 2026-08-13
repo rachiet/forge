@@ -111,6 +111,24 @@ public class AgentToolsetTests : IDisposable
     }
 
     [Fact]
+    public async Task Grep_and_list_dir_ignore_build_output()
+    {
+        await Run("write_file", ("path", "src/Thing.cs"), ("content", "class Thing { }"));
+        // What MSBuild leaves behind: the same text again, as compiled artifacts nobody wrote.
+        await Run("write_file", ("path", "src/obj/Debug/Thing.dll"), ("content", "class Thing { }"));
+        await Run("write_file", ("path", "src/bin/Debug/Thing.dll"), ("content", "class Thing { }"));
+
+        var hits = await Run("grep", ("pattern", "class Thing"));
+        Assert.Contains("src/Thing.cs", hits.Observation);
+        Assert.DoesNotContain("obj/", hits.Observation);
+        Assert.DoesNotContain("bin/", hits.Observation);
+
+        var listing = await Run("list_dir", ("path", "src"));
+        Assert.Contains("Thing.cs", listing.Observation);
+        Assert.DoesNotContain("obj", listing.Observation);
+    }
+
+    [Fact]
     public async Task Jail_violations_come_back_as_observations_not_crashes()
     {
         var escape = await Run("read_file", ("path", "../../../etc/passwd"));
@@ -261,6 +279,35 @@ public class PromptAssemblerTests
         Assert.Contains("Progress note from your predecessor", packet);
         Assert.Contains("Parser done; wire up the CLI next.", packet);
         Assert.Contains("the repo says what is true", packet);
+    }
+
+    [Fact]
+    public void A_packet_hands_over_the_contents_of_the_files_it_points_at()
+    {
+        var packet = PromptAssembler.TaskPacket(
+            Task(), contextFiles: "### src/auth/MODULE.md\n\n```\nOwns password hashing.\n```");
+
+        Assert.Contains("The files you were pointed at", packet);
+        Assert.Contains("Owns password hashing.", packet);
+    }
+
+    [Fact]
+    public void A_resumed_packet_carries_the_diff_of_what_earlier_attempts_changed()
+    {
+        var packet = PromptAssembler.TaskPacket(
+            Task("Half done."), workSoFar: "Files changed:\nM\tsrc/auth/Login.cs\n\ndiff --git a/src/auth/Login.cs");
+
+        Assert.Contains("What has already been done on this task", packet);
+        Assert.Contains("src/auth/Login.cs", packet);
+    }
+
+    [Fact]
+    public void A_first_attempt_is_told_of_no_earlier_work_and_no_files()
+    {
+        var packet = PromptAssembler.TaskPacket(Task());
+
+        Assert.DoesNotContain("What has already been done on this task", packet);
+        Assert.DoesNotContain("The files you were pointed at", packet);
     }
 }
 

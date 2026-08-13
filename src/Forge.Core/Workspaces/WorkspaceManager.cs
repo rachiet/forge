@@ -148,10 +148,25 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
     /// The task branch's diff against trunk — name-status plus the patch — capped in size. A
     /// reviewer that needs more reads the files directly.
     /// </summary>
-    public string DiffAgainstTrunk(long taskId, string branch, int maxChars = 20_000)
+    public string DiffAgainstTrunk(long taskId, string branch, int maxChars = 20_000) =>
+        Diff(Path(taskId), $"origin/{TrunkBranch}...{branch}", maxChars);
+
+    /// <summary>
+    /// What a workspace has changed so far — committed and uncommitted alike — measured from
+    /// where its branch left trunk, so trunk's own later commits are not reported as its work.
+    /// Empty when nothing has been changed, which is the case on a first attempt.
+    /// </summary>
+    public static string WorkSoFar(string dir, int maxChars = 12_000)
     {
-        var dir = Path(taskId);
-        var range = $"origin/{TrunkBranch}...{branch}";
+        var mergeBase = Git.Run(dir, "merge-base", $"origin/{TrunkBranch}", "HEAD");
+        if (!mergeBase.Ok) return "";
+        var diff = Diff(dir, mergeBase.Output, maxChars);
+        return diff.Contains("diff --git", StringComparison.Ordinal) ? diff : "";
+    }
+
+    /// <summary>Name-status plus the patch for one diff argument, capped in size.</summary>
+    private static string Diff(string dir, string range, int maxChars)
+    {
         var names = Git.Run(dir, "diff", "--name-status", range).Output;
         var patch = Git.Run(dir, "diff", range).Stdout;
         var body = $"Files changed:\n{names}\n\n{patch}";

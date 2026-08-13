@@ -82,10 +82,10 @@ public sealed partial class AgentToolset(
                 Optional("start", "first line to read (1-based). Defaults to the start of the file."),
                 Optional("end", "last line to read. Defaults to a few hundred lines from `start`.")),
 
-            ["list_dir"] = new("list a directory.",
+            ["list_dir"] = new("list a directory. Build output (bin, obj, node_modules) is not shown.",
                 Optional("path", "the directory to list. Defaults to your workspace root.")),
 
-            ["grep"] = new("regex search across files.",
+            ["grep"] = new("regex search across source files. Build output (bin, obj, node_modules) is not searched.",
                 Required("pattern", "the regular expression to search for."),
                 Optional("path", "file or directory to search. Defaults to your workspace root.")),
 
@@ -410,7 +410,7 @@ public sealed partial class AgentToolset(
         if (!Directory.Exists(dir)) return new ToolOutcome($"ERROR: no such directory '{call.Optional("path") ?? "."}'.");
 
         var entries = Directory.EnumerateFileSystemEntries(dir)
-            .Where(e => Path.GetFileName(e) != ".git")
+            .Where(e => !IsGenerated(Path.GetFileName(e)))
             .Where(e => recipe.Scope.Allows(_jail.Relative(e) + (Directory.Exists(e) ? "/" : "")))
             .OrderBy(e => e, StringComparer.Ordinal)
             .Select(e => Directory.Exists(e) ? $"{_jail.Relative(e)}/" : _jail.Relative(e));
@@ -429,7 +429,7 @@ public sealed partial class AgentToolset(
         var files = File.Exists(root)
             ? [root]
             : Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}"))
+                .Where(f => !UnderGeneratedDirectory(_jail.Relative(f)))
                 .Where(f => recipe.Scope.Allows(_jail.Relative(f)));
 
         var hits = new StringBuilder();
@@ -1131,6 +1131,28 @@ public sealed partial class AgentToolset(
         LastProgressNote = $"Escalated: {reason}";
         return new ToolOutcome($"Escalation sent to the {to}; stopping here.", EndReason.Escalated);
     }
+
+    /// <summary>
+    /// Directory names whose contents are produced by a tool, not written by anyone. Searching
+    /// them returns compiled bytes that cost a whole context to no purpose, so list_dir and grep
+    /// skip them.
+    /// </summary>
+    private static readonly HashSet<string> GeneratedDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git",         // git's own object store
+        "bin",          // MSBuild's compiled output
+        "obj",          // MSBuild's intermediates: assemblies, generated sources, nuget assets
+        "node_modules", // installed javascript packages
+        "TestResults",  // test-run artifacts, one directory per run
+        ".vs",          // Visual Studio's per-solution cache
+    };
+
+    /// <summary>Reports whether a single directory or file name is generated output.</summary>
+    private static bool IsGenerated(string name) => GeneratedDirectories.Contains(name);
+
+    /// <summary>Reports whether a workspace-relative path has a generated directory anywhere above it.</summary>
+    private static bool UnderGeneratedDirectory(string relative) =>
+        relative.Split('/', Path.DirectorySeparatorChar).SkipLast(1).Any(IsGenerated);
 
     /// <summary>Caps one observation at <see cref="MaxObservationChars"/>.</summary>
     private static string Truncate(string text) =>
