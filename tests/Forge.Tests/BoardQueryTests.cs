@@ -160,7 +160,7 @@ public class BoardQueryTests : IDisposable
     }
 
     [Fact]
-    public void The_first_phase_holds_work_that_was_never_a_task_and_never_shows_as_active()
+    public void The_first_phase_names_the_work_that_was_never_a_task_and_never_shows_as_active()
     {
         new MilestoneRepository(_conn).EnsureFirst(MilestoneRepository.GettingStarted);
         Task(TaskType.Task, "work", "Books API");
@@ -171,8 +171,27 @@ public class BoardQueryTests : IDisposable
 
         Assert.Equal(MilestoneRepository.GettingStarted, first.Name);
         Assert.Equal(4.00m, first.CostUsd);
-        // It has no tasks to be in flight, so it must not blink once the build is delivered.
+        // The plan exists, so the phase that produced it is finished — and it has nothing in
+        // flight, so it must not blink once the build is delivered.
+        Assert.Equal("done", first.State);
+        // The intake and planning runs are not tasks, so the phase says what they were.
+        var line = Assert.Single(first.Tasks);
+        Assert.Equal("Set up the project and planned the work", line.Name);
+        Assert.Equal("done", line.State);
+        Assert.Equal(4.00m, line.CostUsd);
+    }
+
+    [Fact]
+    public void The_first_phase_is_pending_while_there_is_still_no_plan()
+    {
+        new MilestoneRepository(_conn).EnsureFirst(MilestoneRepository.GettingStarted);
+        Task(TaskType.Feature, "A feature");       // decomposition has not run yet
+        Spend(null, 2.50m, AgentRole.Pm);
+
+        var first = Board().Plan[0];
+
         Assert.Equal("pending", first.State);
+        Assert.Equal("pending", Assert.Single(first.Tasks).State);
     }
 
     [Fact]

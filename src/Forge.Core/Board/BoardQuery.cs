@@ -168,6 +168,9 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             ORDER BY t.id
             """).ToList();
 
+        // The planning run is finished once it has produced work of its own to show.
+        var planned = tasks.Any(t => t.Type != "feature");
+
         // QA runs carry no task, so their spend is attributed by role instead.
         var qaCost = conn.ExecuteScalar<long>(
             "SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger WHERE task_id IS NULL AND role = 'qa'");
@@ -195,14 +198,23 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             var extra = isFirst ? preTaskCost
                 : string.Equals(m.Name, MilestoneRepository.Testing, StringComparison.Ordinal) ? qaCost
                 : 0;
+
+            // The first phase's work — the intake conversation and the planning run — never
+            // became a task, so it is named here rather than leaving the phase reading empty.
+            if (isFirst && shown.Count == 0)
+                shown.Add(new PlanTask(
+                    0, "Set up the project and planned the work",
+                    planned ? "done" : "pending", LedgerRepository.FromNanos(preTaskCost)));
+
             var done = shown.Count(t => t.State == "done");
             var active = shown.Count(t => t.State == "active");
 
             return new PlanMilestone(
                 m.Id, m.Name,
                 // The first phase holds work that never became a task, so it has nothing to be
-                // in flight and must not blink after the project is delivered.
-                isFirst ? "pending" : State(done, shown.Count, active),
+                // in flight and must not blink after the project is delivered: it is finished
+                // once the plan it produced exists.
+                isFirst ? (planned ? "done" : "pending") : State(done, shown.Count, active),
                 LedgerRepository.FromNanos(charged.Sum(t => t.Cost) + extra),
                 done, shown.Count, shown);
         })];
