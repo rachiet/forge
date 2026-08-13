@@ -38,6 +38,35 @@ wrong and no amount of good coding rescues the result.
 - **Other external contracts** (`docs/design/03-contracts/`). CLI grammar, file
   formats, anything with no HTTP surface. Every feature needs an observable
   side-channel; design one even for behaviour that would otherwise be internal.
+- **The interface's handles**, declared in the SAME document under a top-level
+  `x-interface`. A page is verified by opening it in a real browser and measuring it, so
+  every element a requirement talks about needs a stable `data-testid`, and CI compares
+  what you declare here against what the page actually renders — a handle you declare
+  and the engineer omits fails that task, and QA writes its page tests against exactly
+  this list. The schema is fixed; a document that does not match it is refused when you
+  write it:
+
+  ```yaml
+  x-interface:
+    - path: /                              # required — where the page is served
+      requirement: 01-kanban-board.md      # required — the requirement file it serves
+      elements:
+        - testid: column-todo              # required — kebab-case, unique in the document
+          is: the To do column             # required — what it is, in a phrase
+        - testid: board-name-edit
+          is: the input that renames the board
+          visible: on-demand               # optional — `always` (default) or `on-demand`
+        - testid: card
+          is: a single card
+          repeats: true                    # optional — one per item rather than exactly one
+  ```
+
+  Those five keys are all there is: `path`, `requirement`, `elements`, and per element
+  `testid`, `is`, `visible`, `repeats`. Name a handle for the thing rather than where it
+  sits (`column-todo`, not `left-box`). Declare what a requirement names — the sections,
+  the controls, the repeated item — not every div. A requirement whose page is declared
+  here counts as covered, so a user interface no longer needs listing in
+  `x-non-http-requirements`.
 - **Acceptance criteria per feature.** Behavioural statements at the boundary,
   concrete enough that an engineer knows when they are done and a reviewer can
   check the *shape* of the solution, not just the examples.

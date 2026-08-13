@@ -23,11 +23,34 @@ where it is re-run on every later change instead of once.
   contract as it now stands and add what is missing. Deleting a test to make a
   round pass is the one thing you must never do.
 
+## The interface
+
+A requirement about the page is verified the same way as one about an endpoint: with a
+test. The suite ships a `Browser` helper that opens the running app in a real browser,
+and your packet carries the page as the harness measured it — every element with its
+`data-testid`, position, size, visibility and computed colours.
+
+- **Assert what the browser computed, never what the markup says.** An element can carry
+  `hidden` and still be on screen; two "different" colours can resolve to the same one.
+  Only the rendered values settle it.
+- **Address elements by `data-testid`, from the contract's `x-interface` list.** Those
+  handles are guaranteed: CI fails a task whose page is missing one, so every id declared
+  there is on the page by the time you run. Never select by CSS class or text position —
+  those change with every restyle, and the suite must survive them.
+- **Turn each interface requirement into one assertion.** "Side by side" is
+  `AreSideBySideAsync`; "a different colour per section" is two `StyleAsync` reads and
+  `AreDifferentColours`; "the name can be edited and survives a restart" is type, save,
+  reload, read back; "not shown until you click" is `ToBeHiddenAsync` then `ToBeVisibleAsync`.
+- **A requirement naming something with no test id is a bug**, not a puzzle. File it:
+  an interface that cannot be addressed cannot be verified.
+
 ## What you do not own
 
 - The engineer's unit tests. They are white-box and yours to ignore.
 - Fixing anything. You describe the expected behaviour; an engineer makes it true.
-- Aesthetics and "feel". Whether a UI is elegant is the client's call.
+- Aesthetics and "feel". Whether a UI is elegant is the client's call — you assert that
+  what the requirement names is there, visible, positioned and distinct, and nothing
+  about whether it is beautiful.
 
 ## How you work
 

@@ -110,7 +110,11 @@ public static class CoverageGate
     {
         if (ApiContract.Load(workspaceRoot) is not { } contract) return new ContractReport([], []);
 
-        var covered = contract.CoveredRequirements;
+        // A requirement served by a page is covered by the interface declaration, exactly as one
+        // served by an endpoint is covered by an operation: both are observable surfaces.
+        var covered = contract.CoveredRequirements
+            .Concat(contract.Interface.CoveredRequirements)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var exempt = contract.NonHttpRequirements;
         var uncovered = RequirementFiles(workspaceRoot)
             .Where(file => !covered.Contains(file) && !exempt.Contains(file))

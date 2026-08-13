@@ -195,6 +195,49 @@ movable and shareable, so keys must not ride along in that payload.
   guidance) — no more tasks stranded behind a message nobody reads, no DB surgery to
   resume. The autonomous loop never blocks on a human: an escalated task is skipped.
 
+### Verifying an interface [DECIDED] (the browser, and who judges what)
+- **A page is verified by rendering it, never by reading its markup.** `Ui/PageProbe` loads the
+  running app in headless Chromium (Playwright, the one new dependency — nothing else can
+  compute layout or a resolved colour) and reports each element's `data-testid`, box,
+  visibility and computed colours. Markup cannot answer any of those: an element carrying
+  `hidden` renders in full when a class sets `display`, and two "different" tints can resolve
+  to the same colour. Both were live defects; both are now mechanical.
+- **The model authors the assertions; the harness runs them.** QA's suite gains a harness-owned
+  `Browser.cs` helper (`ByTestId`, `BoxAsync`, `StyleAsync`, `AreSideBySideAsync`,
+  `AreDifferentColours`), and the suite author's packet carries the page as the harness measured
+  it — so it writes assertions grounded in what the browser did. A model judging a DOM on every
+  round would be non-deterministic, token-priced and unrepeatable; a test it wrote once re-runs
+  against every later change.
+- **Two tiers, split by what the check needs to know.** Generic health rules
+  (`Ci/PageHealth`, pure functions) know nothing about the project — the app starts, no console
+  errors, no failed requests, nothing hidden-but-visible, no sideways overflow, no unreadable
+  contrast — and run in CI as the `page` step. Requirement-specific assertions live in the
+  acceptance suite, where the contract and requirements are in context.
+- **The browser opens only for work that could change the page.** `PageCheck.TouchesInterface`
+  reads the branch diff: html/css/js/razor/cshtml or anything under `wwwroot/`. A storage task
+  pays nothing. No runnable app, or no browser installable, is a skip — never a failure.
+- **Chromium is installed once per machine** at `<data root>/browsers`, and
+  `PLAYWRIGHT_BROWSERS_PATH` travels into the acceptance run so page tests never download their
+  own inside a workspace that is deleted after merge.
+- **A failed acceptance round attaches a screenshot** of the page, written outside the repo, as
+  machine-captured evidence beside the test output — the `file_bug` rule applied to pixels.
+- **The handles are a contract, in the same document as the operations.** `x-interface` at the
+  top of `openapi.yaml` declares each page (`path`, `requirement`, `elements`) and each element
+  (`testid`, `is`, optional `visible: always|on-demand` and `repeats`). `InterfaceContract.Parse`
+  runs inside `ApiContract.Validate`, so a block written any other way is refused when the
+  Principal writes the file — one shape, enforced at the boundary, no second document a later
+  change request could reinvent. Refusals name the offending key and list the valid ones.
+  The page check then compares declared ids against the rendered DOM: a handle the engineer
+  omitted fails that task, so QA arrives at a page it can address by construction. A requirement
+  served by a declared page counts as covered, so an interface no longer needs
+  `x-non-http-requirements`.
+- **What is NOT checked: whether it looks good.** Taste stays the client's, and the theme picker
+  is where it is exercised. The PM writes interface requirements as observable statements ("the
+  three columns are side by side", "each column's background is visibly different") and never as
+  "elegant" or "subtle" — an unverifiable requirement reaches the client as disappointment. The
+  Principal designs `data-testid` handles for anything a requirement names, the same way it
+  designs an observable side-channel for internal behaviour.
+
 ### How generated interfaces look [DECIDED] (the UI kit)
 Clients describe behaviour, not aesthetics ("a box to type in, a list to see them"),
 and a model writing CSS per task under token pressure produces a different-looking

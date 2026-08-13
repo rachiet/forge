@@ -33,6 +33,13 @@ public sealed class ForgePaths
     /// </summary>
     public string PriceCache => Path.Combine(DataRoot, "prices", "litellm.json");
 
+    /// <summary>
+    /// Where Playwright's browsers are installed. Machine-wide for the same reason as the price
+    /// cache, and emphatically not per workspace: the download is ~100MB, and a task workspace
+    /// is deleted after its merge.
+    /// </summary>
+    public string BrowsersDir => Path.Combine(DataRoot, "browsers");
+
     public string ProjectDir(string project) => Path.Combine(ProjectsDir, ValidName(project));
     public string ProjectDb(string project) => Path.Combine(ProjectDir(project), "project.db");
     /// <summary>The project's bare repo, which is the source of truth for its code.</summary>

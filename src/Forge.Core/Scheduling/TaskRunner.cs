@@ -75,7 +75,10 @@ public sealed class TaskRunner(
     private readonly AgentInstanceRepository _instances = new(conn);
     private readonly WorkspaceManager _workspaces = new(paths, project);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
-    private readonly Func<string, CiResult> _ci = ci ?? CiRunner.Run;
+    // Production CI opens a browser on interface work; the injected one in tests does not, so an
+    // orchestration test needs neither a toolchain nor a browser.
+    private readonly Func<string, CiResult> _ci =
+        ci ?? (workspace => CiRunner.Run(workspace, paths.BrowsersDir));
 
     /// <summary>
     /// Runs the given task, or the next claimable one. Abandoned work — a task left
@@ -753,12 +756,36 @@ public sealed class TaskRunner(
             return null;
         }
 
-        FileAcceptanceFailure(acceptance);
+        FileAcceptanceFailure(acceptance, PageEvidence(workspace));
         return null;
     }
 
+    /// <summary>
+    /// A screenshot of the page as it stands, for a bug an engineer will have to look at. Null
+    /// when the project has no page, or no browser is installed. The image is written outside
+    /// the repo, so a failing round never adds a file to the client's project.
+    /// </summary>
+    private string? PageEvidence(string workspace)
+    {
+        if (AgentToolset.Discover(workspace) is not { } target) return null;
+
+        using var app = AppHost.Start(workspace, target.ProjectPath);
+        if (app?.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl) return null;
+
+        try
+        {
+            var shots = Path.Combine(paths.ProjectDir(project), "screenshots");
+            return Ui.PageProbe.CaptureAsync(baseUrl, ["/"], paths.BrowsersDir, shots)
+                .GetAwaiter().GetResult() is [{ Screenshot: { } file }, ..] ? file : null;
+        }
+        finally
+        {
+            app.Stop();
+        }
+    }
+
     /// <summary>Files one bug for a red acceptance suite, carrying the test output verbatim.</summary>
-    private void FileAcceptanceFailure(AcceptanceResult acceptance)
+    private void FileAcceptanceFailure(AcceptanceResult acceptance, string? screenshot)
     {
         var objective = $"""
             The acceptance suite fails against the contract. Reproduce it, then make it pass.
@@ -772,6 +799,7 @@ public sealed class TaskRunner(
             ```
             {Truncate(acceptance.Output)}
             ```
+            {(screenshot is null ? "" : $"\nA screenshot of the page as it stands: `{screenshot}`")}
             """;
 
         var bug = _tasks.Insert(TaskRecord.Create(
@@ -848,11 +876,80 @@ public sealed class TaskRunner(
             it with the run output attached.
             """)}
 
+            {PageSection(workspace)}
+
             Bugs already on record — do NOT re-file any of these (rejected ones are settled,
             open ones are already tracked; only a regression of a *fixed* bug is fileable again):
             {ledgerText}
 
             When the suite covers every operation, call `done` with a summary.
+            """;
+    }
+
+    /// <summary>
+    /// The interface section of QA's brief: the page as the harness rendered it in a browser,
+    /// element by element with its handle, position, size and colours, plus how to write
+    /// assertions against it. Empty for a project with no page to render — and the measurements
+    /// are the harness's, not the model's, so the assertions it writes are grounded in what the
+    /// browser actually did rather than in what the markup implies.
+    /// </summary>
+    private string PageSection(string workspace)
+    {
+        if (AgentToolset.Discover(workspace) is not { } target) return "";
+
+        using var app = AppHost.Start(workspace, target.ProjectPath);
+        if (app?.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl) return "";
+
+        IReadOnlyList<Ui.PageSnapshot>? pages;
+        try
+        {
+            pages = Ui.PageProbe.CaptureAsync(baseUrl, ["/"], paths.BrowsersDir)
+                .GetAwaiter().GetResult();
+        }
+        finally
+        {
+            app.Stop();
+        }
+        if (pages is not { Count: > 0 }) return "";
+
+        _log.Message("QA brief: captured the rendered page for the suite author");
+
+        // The declared handles, which CI has already proved are on the page. This is the
+        // vocabulary the suite is written in, so it is stated before the measurements.
+        var declared = ApiContract.Load(workspace)?.Interface.Pages ?? [];
+        var handles = declared.Count == 0
+            ? ""
+            : "### The handles the contract declares\n\n"
+              + string.Join("\n", declared.SelectMany(page => page.Elements.Select(
+                  e => $"- `{e.TestId}` on {page.Path} — {e.Is}"
+                     + (e.OnDemand ? " (starts hidden; appears when the client asks for it)" : "")
+                     + (e.Repeats ? " (one per item)" : ""))))
+              + "\n\nCI fails any task whose page is missing one of these, so they are on the "
+              + "page by the time you run. Address elements by these ids and nothing else.\n";
+
+        return $"""
+            ## The interface, as the browser renders it
+
+            {handles}
+
+            The harness opened the running app at {Ui.PageProbe.ViewportWidth}px and measured
+            every element. These are computed values — position, size, visibility and colour as
+            the page actually resolved them, which is the only thing worth asserting about an
+            interface.
+
+            {string.Join("\n", pages.Select(p => p.Describe()))}
+
+            Write page tests with the `Browser` helper already in the suite
+            (`{AcceptanceSuite.Directory}/Browser.cs`): `await using var page = await
+            Browser.OpenAsync("/")`, then `page.ByTestId("board-column-todo")`,
+            `page.BoxAsync(...)` for position and size, `page.StyleAsync(..., "background-color")`
+            for a computed colour, `page.AreSideBySideAsync(a, b, c)` for layout, and
+            `Browser.AreDifferentColours(x, y)` for "these must not look the same".
+
+            Cover every requirement about the interface this way — that a thing is visible, where
+            it sits, that it changes when acted on, that what should differ does. Address
+            elements by `data-testid`. If a requirement names something with no test id at all,
+            file a bug: an interface that cannot be addressed cannot be verified.
             """;
     }
 

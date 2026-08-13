@@ -40,14 +40,22 @@ public sealed class ApiContract
     private readonly OpenApiDocument _document;
 
     /// <summary>Private: an instance exists only if <see cref="Validate"/> accepted the document.</summary>
-    private ApiContract(OpenApiDocument document, IReadOnlyList<ContractOperation> operations)
+    private ApiContract(
+        OpenApiDocument document, IReadOnlyList<ContractOperation> operations, InterfaceContract @interface)
     {
         _document = document;
         Operations = operations;
+        Interface = @interface;
     }
 
     /// <summary>Every operation the document declares, in document order.</summary>
     public IReadOnlyList<ContractOperation> Operations { get; }
+
+    /// <summary>
+    /// The pages and handles the document declares in `x-interface`. Empty for a project with no
+    /// interface, which is why it is a contract with no pages rather than a null.
+    /// </summary>
+    public InterfaceContract Interface { get; }
 
     /// <summary>Just their ids.</summary>
     public IEnumerable<string> OperationIds => Operations.Select(o => o.OperationId);
@@ -125,7 +133,13 @@ public sealed class ApiContract
         foreach (var duplicate in duplicates)
             errors.Add($"operationId '{duplicate}' is used more than once; ids must be unique.");
 
-        return errors.Count > 0 ? (null, errors) : (new ApiContract(document, operations), []);
+        // The interface's handles ride in the same document and are refused by the same write.
+        var (@interface, interfaceErrors) = InterfaceContract.Parse(document.Extensions);
+        errors.AddRange(interfaceErrors);
+
+        return errors.Count > 0
+            ? (null, errors)
+            : (new ApiContract(document, operations, @interface!), []);
     }
 
     /// <summary>

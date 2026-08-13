@@ -35,8 +35,13 @@ public static partial class AcceptanceSuite
     /// <summary>The xUnit trait naming the contract operation a test exercises.</summary>
     public const string OperationTrait = "operation";
 
+    /// <summary>Where Playwright looks for its browsers; the harness installs them once per machine.</summary>
+    public const string BrowsersVariable = "PLAYWRIGHT_BROWSERS_PATH";
+
+    /// <summary>The Playwright version the suite is scaffolded with, pinned so a run is repeatable.</summary>
+    private const string PlaywrightVersion = "1.62.0";
+
     private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>
     /// The contract operations the suite claims to cover, read from the `[Trait("operation",
@@ -122,8 +127,137 @@ public static partial class AcceptanceSuite
             }
 
             """);
+
+        var addedBrowser = Dotnet(workspaceDir, baseUrl: "",
+            "add", ProjectFile, "package", "Microsoft.Playwright", "--version", PlaywrightVersion);
+        if (!addedBrowser.Passed)
+            return "could not add the browser package to the acceptance suite:\n" + addedBrowser.Output;
+
+        File.WriteAllText(Path.Combine(dir, "Browser.cs"), BrowserHelper);
         return null;
     }
+
+    /// <summary>
+    /// The helper QA writes page tests against: it opens the running application in a headless
+    /// browser and hands back what the browser computed — where things are, what colour they
+    /// came out, whether they are visible at all. Written by the harness rather than by QA, so
+    /// every project measures an interface the same way and a fix here improves them all.
+    /// </summary>
+    private static readonly string BrowserHelper = $$"""
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
+        using System.Threading.Tasks;
+        using Microsoft.Playwright;
+
+        namespace AcceptanceTests;
+
+        /// <summary>A page opened in a real browser, and the measurements a test can assert on.</summary>
+        public sealed class Browser : IAsyncDisposable
+        {
+            private IPlaywright? _playwright;
+            private IBrowser? _browser;
+
+            /// <summary>The page under test, once <see cref="OpenAsync"/> has loaded it.</summary>
+            public IPage Page { get; private set; } = null!;
+
+            /// <summary>
+            /// Opens a path of the running application at a desktop width. Use `data-testid`
+            /// selectors: they are the handles the interface was built with.
+            /// </summary>
+            public static async Task<Browser> OpenAsync(string path = "/")
+            {
+                var browser = new Browser();
+                browser._playwright = await Playwright.CreateAsync();
+                browser._browser = await browser._playwright.Chromium.LaunchAsync(
+                    new BrowserTypeLaunchOptions { Headless = true });
+                var context = await browser._browser.NewContextAsync(new BrowserNewContextOptions
+                {
+                    ViewportSize = new ViewportSize { Width = {{PageWidth}}, Height = {{PageHeight}} },
+                });
+                browser.Page = await context.NewPageAsync();
+                await browser.Page.GotoAsync(
+                    Api.BaseUrl.TrimEnd('/') + (path.StartsWith("/") ? path : "/" + path),
+                    new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
+                return browser;
+            }
+
+            /// <summary>An element by its test id.</summary>
+            public ILocator ByTestId(string testId) => Page.Locator($"[data-testid='{testId}']");
+
+            /// <summary>Every element carrying a test id that starts with this prefix, in page order.</summary>
+            public ILocator AllByTestIdPrefix(string prefix) => Page.Locator($"[data-testid^='{prefix}']");
+
+            /// <summary>Where an element rendered. Throws if it is not visible, which is itself the answer.</summary>
+            public async Task<Rect> BoxAsync(ILocator locator)
+            {
+                var box = await locator.BoundingBoxAsync()
+                    ?? throw new InvalidOperationException("The element is not visible, so it has no position.");
+                return new Rect(box.X, box.Y, box.Width, box.Height);
+            }
+
+            /// <summary>A computed CSS property of an element, e.g. `background-color` or `display`.</summary>
+            public Task<string> StyleAsync(ILocator locator, string property) =>
+                locator.EvaluateAsync<string>($"e => getComputedStyle(e).getPropertyValue('{property}')");
+
+            /// <summary>
+            /// Whether these elements are laid out in a row: same top edge, left to right. This is
+            /// how "side by side" is asserted — the markup cannot tell you.
+            /// </summary>
+            public async Task<bool> AreSideBySideAsync(params ILocator[] locators)
+            {
+                var boxes = new List<Rect>();
+                foreach (var locator in locators) boxes.Add(await BoxAsync(locator));
+                for (var i = 1; i < boxes.Count; i++)
+                {
+                    if (Math.Abs(boxes[i].Y - boxes[0].Y) > 4) return false;
+                    if (boxes[i].X <= boxes[i - 1].X) return false;
+                }
+                return true;
+            }
+
+            /// <summary>
+            /// Whether two computed colours are visibly different, on a 0..1 scale of mean channel
+            /// difference. 0.02 is about the smallest difference a person notices on a large area.
+            /// </summary>
+            public static bool AreDifferentColours(string a, string b, double minimum = 0.02)
+            {
+                var (x, y) = (Channels(a), Channels(b));
+                if (x is null || y is null) return false;
+                var mean = (Math.Abs(x[0] - y[0]) + Math.Abs(x[1] - y[1]) + Math.Abs(x[2] - y[2])) / 3.0;
+                return mean >= minimum;
+            }
+
+            /// <summary>Saves a PNG of the page, for a failure worth looking at.</summary>
+            public Task ScreenshotAsync(string path) =>
+                Page.ScreenshotAsync(new PageScreenshotOptions { Path = path, FullPage = true });
+
+            /// <summary>An element's position and size, in CSS pixels.</summary>
+            public sealed record Rect(double X, double Y, double Width, double Height);
+
+            private static double[]? Channels(string colour)
+            {
+                var numbers = System.Text.RegularExpressions.Regex
+                    .Matches(colour ?? "", @"[\d.]+")
+                    .Select(m => double.Parse(m.Value, System.Globalization.CultureInfo.InvariantCulture))
+                    .ToArray();
+                return numbers.Length >= 3 ? [numbers[0] / 255.0, numbers[1] / 255.0, numbers[2] / 255.0] : null;
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                if (_browser is not null) await _browser.CloseAsync();
+                _playwright?.Dispose();
+            }
+        }
+
+        """;
+
+    /// <summary>The width page tests render at, matching the harness's own probe.</summary>
+    private const int PageWidth = Ui.PageProbe.ViewportWidth;
+
+    /// <summary>And the height.</summary>
+    private const int PageHeight = Ui.PageProbe.ViewportHeight;
 
     /// <summary>
     /// Compiles the suite, separately from running it. A suite that does not build has tested
@@ -156,16 +290,16 @@ public static partial class AcceptanceSuite
             return AcceptanceResult.NotRun(
                 "the acceptance suite does not compile, so no test ran:\n" + build.Output);
 
-        using var app = StartApp(workspaceDir, target.ProjectPath);
+        using var app = AppHost.Start(workspaceDir, target.ProjectPath);
         if (app is null)
             return AcceptanceResult.NotRun("the application would not start, so the suite was not run");
 
         // The address is read from the app, never assumed: it is told to bind any free port
         // and prints the one it got.
-        if (app.WaitForListeningUrl(StartupTimeout) is not { } baseUrl)
+        if (app.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl)
             return AcceptanceResult.NotRun(
                 $"the application did not report a listening address within "
-                + $"{StartupTimeout.TotalSeconds:0}s, so the suite was not run:\n{app.Output}");
+                + $"{AppHost.StartupTimeout.TotalSeconds:0}s, so the suite was not run:\n{app.Output}");
 
         var result = Dotnet(workspaceDir, baseUrl, "test", ProjectFile, "--nologo", "--no-build");
         app.Stop();
@@ -173,34 +307,9 @@ public static partial class AcceptanceSuite
     }
 
     /// <summary>
-    /// Starts the application on whatever port the OS gives it, or null if the process will not
-    /// start at all. `--no-launch-profile` is what makes that true: `dotnet run` otherwise
-    /// applies launchSettings.json, whose applicationUrl overrides ASPNETCORE_URLS and binds the
-    /// developer's fixed port — which is already taken as often as not.
-    /// </summary>
-    private static RunningApp? StartApp(string workspaceDir, string project)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = workspaceDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(project);
-        psi.ArgumentList.Add("--no-launch-profile");
-        // Port 0 is "any free one"; the app reports which, and that is what the suite is given.
-        psi.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
-
-        var process = Process.Start(psi);
-        return process is null ? null : new RunningApp(process);
-    }
-
-    /// <summary>
     /// Runs one dotnet command with the base URL in the environment and captures its output.
+    /// The browser location travels with it, so page tests find the Chromium the harness
+    /// installed rather than trying to download their own inside a workspace.
     /// A command that outlives the timeout is killed with its process tree and reported as failed.
     /// </summary>
     private static AcceptanceResult Dotnet(string dir, string baseUrl, params string[] args)
@@ -215,6 +324,8 @@ public static partial class AcceptanceSuite
         };
         foreach (var arg in args) psi.ArgumentList.Add(arg);
         psi.Environment[BaseUrlVariable] = baseUrl;
+        if (Environment.GetEnvironmentVariable(BrowsersVariable) is { Length: > 0 } browsers)
+            psi.Environment[BrowsersVariable] = browsers;
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Could not start dotnet — is the .NET SDK on PATH?");
@@ -233,76 +344,6 @@ public static partial class AcceptanceSuite
         if (err.Length > 0) output.Append('\n').Append(err);
         return new AcceptanceResult(process.ExitCode == 0, true, output.ToString().Trim());
     }
-
-    /// <summary>
-    /// An application the harness started, killed on Stop or Dispose. Its output is drained as
-    /// it arrives — a redirected pipe left unread fills and blocks the app — and watched for the
-    /// address it bound, which is the only trustworthy source of that address.
-    /// </summary>
-    private sealed class RunningApp : IDisposable
-    {
-        private readonly Process _process;
-        private readonly StringBuilder _output = new();
-        private readonly TaskCompletionSource<string> _listening =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public RunningApp(Process process)
-        {
-            _process = process;
-            process.OutputDataReceived += (_, e) => Capture(e.Data);
-            process.ErrorDataReceived += (_, e) => Capture(e.Data);
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-        }
-
-        /// <summary>Everything the app has printed so far, so a failure to start can be reported.</summary>
-        public string Output
-        {
-            get { lock (_output) return _output.ToString().Trim(); }
-        }
-
-        /// <summary>
-        /// The base URL the app reported listening on, or null if it exited or said nothing
-        /// within <paramref name="timeout"/>.
-        /// </summary>
-        public string? WaitForListeningUrl(TimeSpan timeout)
-        {
-            var deadline = DateTime.UtcNow + timeout;
-            while (DateTime.UtcNow < deadline)
-            {
-                if (_listening.Task.Wait(TimeSpan.FromMilliseconds(250)))
-                    return _listening.Task.Result;
-                // Exited without ever listening: waiting out the timeout would tell us nothing.
-                if (_process.HasExited) return null;
-            }
-            return null;
-        }
-
-        /// <summary>Kills the process and its children if it is still alive.</summary>
-        public void Stop()
-        {
-            try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { /* already gone */ }
-        }
-
-        public void Dispose()
-        {
-            Stop();
-            _process.Dispose();
-        }
-
-        private void Capture(string? line)
-        {
-            if (line is null) return;
-            lock (_output) _output.AppendLine(line);
-            if (ListeningPattern().Match(line) is { Success: true } match)
-                _listening.TrySetResult(match.Groups[1].Value.TrimEnd('/'));
-        }
-    }
-
-    /// <summary>Matches Kestrel's `Now listening on: http://127.0.0.1:1234` startup line.</summary>
-    [GeneratedRegex(@"Now listening on:\s*(https?://\S+)")]
-    private static partial Regex ListeningPattern();
 
     /// <summary>Matches `[Trait("operation", "<id>")]`, capturing the operationId.</summary>
     [GeneratedRegex($"""Trait\s*\(\s*"{OperationTrait}"\s*,\s*"([^"]+)"\s*\)""")]

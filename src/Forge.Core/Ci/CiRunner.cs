@@ -32,10 +32,16 @@ public static class CiRunner
     private const string AcceptanceDirectory = "tests/acceptance";
 
     /// <summary>
-    /// Runs `dotnet build`, then `dotnet test`, in the workspace. Returns at the first failure.
-    /// A workspace with no .sln or .csproj is a skip, not a failure.
+    /// Runs `dotnet build`, then `dotnet test`, then — for a task that changed the interface —
+    /// opens the application in a browser and checks the page it renders. Returns at the first
+    /// failure. A workspace with no .sln or .csproj is a skip, not a failure.
     /// </summary>
-    public static CiResult Run(string workspaceDir)
+    /// <param name="workspaceDir">The task's workspace.</param>
+    /// <param name="browsersDir">
+    /// Where Chromium is installed. Null skips the browser check entirely, which is what an
+    /// orchestration test with no toolchain wants.
+    /// </param>
+    public static CiResult Run(string workspaceDir, string? browsersDir = null)
     {
         // Ahead of the buildable gate: a repo of static files has nothing to compile and would
         // otherwise skip the one check that reads what it ships.
@@ -59,7 +65,16 @@ public static class CiRunner
         var build = Dotnet(workspaceDir, "build", "--nologo");
         if (!build.Passed) return build;
 
-        return Dotnet(workspaceDir, "test", "--nologo");
+        var tests = Dotnet(workspaceDir, "test", "--nologo");
+        if (!tests.Passed) return tests;
+
+        // Last, because it needs the application built: what the compiler and the unit tests
+        // cannot see is what the browser draws.
+        if (browsersDir is { Length: > 0 } &&
+            PageCheck.Check(workspaceDir, browsersDir, PageCheck.ChangedFiles(workspaceDir)) is { } broken)
+            return new CiResult(false, "page", broken);
+
+        return tests;
     }
 
     /// <summary>

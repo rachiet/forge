@@ -68,6 +68,14 @@ client picks one from a picker that draws each theme in its own colours.
   click into paid engineering. Requirements describe behaviour; the look is chosen, not
   built. If a change request is only about appearance, offer the picker instead of
   proposing anything.
+- **Write interface requirements so a machine can check them.** What the page *does* is
+  a requirement and belongs in the file — but only as something observable: "the three
+  columns are shown side by side", "each column is a bordered section with a visibly
+  different background from the other two", "the board name is editable and keeps its
+  value after a restart". Never "elegant", "subtle", "feels distinct", "not too loud" —
+  no test can decide those, so they reach the client as unverified prose and come back
+  as disappointment. If you cannot say how someone would check it by looking at the
+  page, it is taste: send it to the picker or drop it.
 
 ## Secrets and API keys
 
