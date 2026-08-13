@@ -242,13 +242,17 @@ public class BoardQueryTests : IDisposable
     }
 
     [Fact]
-    public void A_project_whose_features_are_all_done_reads_as_complete()
+    public void A_project_whose_features_are_all_done_reads_as_complete_only_once_it_is_handed_over()
     {
         var feature = Task(TaskType.Feature, "Only one");
         var task = Task(TaskType.Task, "the work", "01-thing.md@v1", parent: feature.Id);
         Advance(task.Id, TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress,
             TaskStatus.InReview, TaskStatus.Merging, TaskStatus.Qa, TaskStatus.Done);
 
+        // QA and delivery still to come, so the page must keep offering a way to resume.
+        Assert.Equal("building", Board().State);
+
+        new ProjectMetaRepository(_conn).Set("project_delivered", "1");
         Assert.Equal("complete", Board().State);
     }
 

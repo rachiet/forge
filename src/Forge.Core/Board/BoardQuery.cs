@@ -243,11 +243,14 @@ public sealed class BoardQuery(IDbConnection conn, string project)
 
     /// <summary>
     /// How far the plan has got: "planning" until the client approves something to build,
-    /// "complete" once every Feature is done, "building" in between.
+    /// "complete" once every Feature is done AND the project has been handed over, "building"
+    /// in between. Delivery is the last step, so a board whose tasks are all done but which
+    /// has not passed QA is still building — otherwise the page offers no way to resume it.
     /// </summary>
-    private static string ProjectState(IReadOnlyList<BoardItem> features) =>
+    private string ProjectState(IReadOnlyList<BoardItem> features) =>
         features.Count == 0 ? "planning"
-        : features.All(f => f.State == "done") ? "complete"
+        : features.All(f => f.State == "done") && new ProjectMetaRepository(conn).Get("project_delivered") == "1"
+            ? "complete"
         : "building";
 
     private IReadOnlyList<AgentSpend> Agents() =>
