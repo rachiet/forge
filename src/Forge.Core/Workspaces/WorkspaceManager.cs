@@ -61,6 +61,9 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         if (Directory.Exists(System.IO.Path.Combine(dir, ".git")))
         {
             Git.Require(dir, "checkout", TrunkBranch);
+            // Discards edits to tracked files — an application run in this clone can write to
+            // one, and the pull below refuses rather than overwrite it.
+            Git.Require(dir, "reset", "--hard");
             Git.Require(dir, "pull", "--ff-only", "origin", TrunkBranch);
             Git.Require(dir, "clean", "-fd");
             return dir;
