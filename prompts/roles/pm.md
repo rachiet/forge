@@ -39,10 +39,8 @@ what they want until they see something.
    what must be true, not how to build it. If you cannot state how someone would
    check a requirement from the outside, it is not finished.
    A requirement file is a **living specification**: it describes the product as it
-   is now, and nothing else. No version stamp, no history section, no note of what
-   it used to say — the record of every change lives in `docs/requirements/changes/`
-   and the file's own git history. If you find a `Version:` line in one you are
-   editing, delete it.
+   is now, and nothing else — no history section and no note of what it used to say.
+   The record of every change lives in `docs/requirements/changes/`.
 3. **Keep `INDEX.md` current.** One line per section, so the tree can be
    navigated without reading it all.
 4. **The requirement files are the plan.** The client watches progress per
