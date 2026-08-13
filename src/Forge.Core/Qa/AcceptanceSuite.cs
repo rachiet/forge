@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using Forge.Core.Agents;
@@ -157,32 +156,29 @@ public static partial class AcceptanceSuite
             return AcceptanceResult.NotRun(
                 "the acceptance suite does not compile, so no test ran:\n" + build.Output);
 
-        var port = FreePort();
-        var baseUrl = $"http://127.0.0.1:{port}";
+        using var app = StartApp(workspaceDir, target.ProjectPath);
+        if (app is null)
+            return AcceptanceResult.NotRun("the application would not start, so the suite was not run");
 
-        using var app = StartApp(workspaceDir, target.ProjectPath, baseUrl);
-        if (app is null || !WaitForPort(port))
+        // The address is read from the app, never assumed: it is told to bind any free port
+        // and prints the one it got.
+        if (app.WaitForListeningUrl(StartupTimeout) is not { } baseUrl)
             return AcceptanceResult.NotRun(
-                $"the application did not start listening on {baseUrl} within "
-                + $"{StartupTimeout.TotalSeconds:0}s, so the suite was not run");
+                $"the application did not report a listening address within "
+                + $"{StartupTimeout.TotalSeconds:0}s, so the suite was not run:\n{app.Output}");
 
         var result = Dotnet(workspaceDir, baseUrl, "test", ProjectFile, "--nologo", "--no-build");
         app.Stop();
         return result;
     }
 
-    /// <summary>A loopback port the OS reports as free.</summary>
-    private static int FreePort()
-    {
-        using var probe = new TcpListener(System.Net.IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
-    }
-
-    /// <summary>Starts the application bound to the given base URL, or null if it will not start.</summary>
-    private static RunningApp? StartApp(string workspaceDir, string project, string baseUrl)
+    /// <summary>
+    /// Starts the application on whatever port the OS gives it, or null if the process will not
+    /// start at all. `--no-launch-profile` is what makes that true: `dotnet run` otherwise
+    /// applies launchSettings.json, whose applicationUrl overrides ASPNETCORE_URLS and binds the
+    /// developer's fixed port — which is already taken as often as not.
+    /// </summary>
+    private static RunningApp? StartApp(string workspaceDir, string project)
     {
         var psi = new ProcessStartInfo
         {
@@ -195,29 +191,12 @@ public static partial class AcceptanceSuite
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--project");
         psi.ArgumentList.Add(project);
-        // Bind the port the harness chose, ignoring whatever the launch profile says.
-        psi.Environment["ASPNETCORE_URLS"] = baseUrl;
+        psi.ArgumentList.Add("--no-launch-profile");
+        // Port 0 is "any free one"; the app reports which, and that is what the suite is given.
+        psi.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
 
         var process = Process.Start(psi);
         return process is null ? null : new RunningApp(process);
-    }
-
-    /// <summary>Polls the port until something accepts a connection, or the startup timeout passes.</summary>
-    private static bool WaitForPort(int port)
-    {
-        var deadline = DateTime.UtcNow + StartupTimeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                using var probe = new TcpClient();
-                probe.Connect("127.0.0.1", port);
-                if (probe.Connected) return true;
-            }
-            catch (SocketException) { /* not up yet */ }
-            Thread.Sleep(250);
-        }
-        return false;
     }
 
     /// <summary>
@@ -255,22 +234,75 @@ public static partial class AcceptanceSuite
         return new AcceptanceResult(process.ExitCode == 0, true, output.ToString().Trim());
     }
 
-    /// <summary>An application the harness started, killed on Stop or Dispose.</summary>
-    private sealed class RunningApp(Process process) : IDisposable
+    /// <summary>
+    /// An application the harness started, killed on Stop or Dispose. Its output is drained as
+    /// it arrives — a redirected pipe left unread fills and blocks the app — and watched for the
+    /// address it bound, which is the only trustworthy source of that address.
+    /// </summary>
+    private sealed class RunningApp : IDisposable
     {
+        private readonly Process _process;
+        private readonly StringBuilder _output = new();
+        private readonly TaskCompletionSource<string> _listening =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public RunningApp(Process process)
+        {
+            _process = process;
+            process.OutputDataReceived += (_, e) => Capture(e.Data);
+            process.ErrorDataReceived += (_, e) => Capture(e.Data);
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+        }
+
+        /// <summary>Everything the app has printed so far, so a failure to start can be reported.</summary>
+        public string Output
+        {
+            get { lock (_output) return _output.ToString().Trim(); }
+        }
+
+        /// <summary>
+        /// The base URL the app reported listening on, or null if it exited or said nothing
+        /// within <paramref name="timeout"/>.
+        /// </summary>
+        public string? WaitForListeningUrl(TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_listening.Task.Wait(TimeSpan.FromMilliseconds(250)))
+                    return _listening.Task.Result;
+                // Exited without ever listening: waiting out the timeout would tell us nothing.
+                if (_process.HasExited) return null;
+            }
+            return null;
+        }
+
         /// <summary>Kills the process and its children if it is still alive.</summary>
         public void Stop()
         {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); }
             catch (InvalidOperationException) { /* already gone */ }
         }
 
         public void Dispose()
         {
             Stop();
-            process.Dispose();
+            _process.Dispose();
+        }
+
+        private void Capture(string? line)
+        {
+            if (line is null) return;
+            lock (_output) _output.AppendLine(line);
+            if (ListeningPattern().Match(line) is { Success: true } match)
+                _listening.TrySetResult(match.Groups[1].Value.TrimEnd('/'));
         }
     }
+
+    /// <summary>Matches Kestrel's `Now listening on: http://127.0.0.1:1234` startup line.</summary>
+    [GeneratedRegex(@"Now listening on:\s*(https?://\S+)")]
+    private static partial Regex ListeningPattern();
 
     /// <summary>Matches `[Trait("operation", "<id>")]`, capturing the operationId.</summary>
     [GeneratedRegex($"""Trait\s*\(\s*"{OperationTrait}"\s*,\s*"([^"]+)"\s*\)""")]

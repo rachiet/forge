@@ -101,6 +101,14 @@ movable and shareable, so keys must not ride along in that payload.
   tests and does not judge aesthetics — visual "feel" stays the client's call. (A
   persistent, committed acceptance-test suite is a deferred refinement; M5a verifies
   in an ephemeral trunk clone.)
+- **Where there is a contract, QA writes the suite and never starts the app**
+  (`AgentRecipe.QaSuiteAuthor`, `prompts/roles/qa-suite.md`, prefix `qa-suite`). It has no
+  `run`/`serve`/`http`/`file_bug` and an empty binary allowlist; the harness starts the
+  application, runs the suite against it, and files a bug from a red run with the output
+  attached. Exploration bought nothing the suite does not: a live session is one-shot, while
+  a test is re-run against every later change. A project with **no** contract keeps the old
+  exploratory `AgentRecipe.Qa` — nothing to cover mechanically, so driving it by hand is the
+  only way to see anything. `RunQaAsync` picks between them on `ApiContract.Load`.
 - **Bugs are first-class tasks with a triage lifecycle.** `file_bug(title, repro,
   expected, actual, [requirements_ref])` creates a `bug` task born **`triage`**
   (Principal-owned). The Principal `accept_bug` (→ `ready`, an engineer fixes it

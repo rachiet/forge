@@ -171,9 +171,25 @@ public sealed record AgentRecipe
     }).Validate();
 
     /// <summary>
-    /// QA: runs once the board is complete, and writes the black-box acceptance suite against
-    /// the contract for the harness to run. Seeded with the bug ledger so it does not re-file
-    /// what is already open or rejected.
+    /// QA for a project with an OpenAPI contract: writes the acceptance suite from the contract
+    /// and the requirements, and nothing else. It never starts the application — the harness
+    /// owns that, runs the suite against it, and files a bug from a failure with the real
+    /// output attached, so there is nothing an exploratory session could add.
+    /// </summary>
+    public static AgentRecipe QaSuiteAuthor => (Qa with
+    {
+        RolePrompt = "qa-suite",
+        // Its own prefix, so a log or a ledger row says which kind of QA round this was.
+        InstancePrefix = "qa-suite",
+        Tools = ["read_file", "list_dir", "grep", "write_file", "done", "escalate"],
+        // No run(), so no binary it could reach: the harness builds and runs the suite.
+        ToolAllowlist = [],
+    }).Validate();
+
+    /// <summary>
+    /// QA for a project with no contract — a CLI tool, a library — where there are no
+    /// operations to cover and the only way to judge it is to drive it. Runs once the board is
+    /// complete, seeded with the bug ledger so it does not re-file what is open or rejected.
     /// </summary>
     public static AgentRecipe Qa => (new AgentRecipe
     {

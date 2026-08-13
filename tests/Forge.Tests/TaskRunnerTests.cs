@@ -1,3 +1,4 @@
+using Dapper;
 using Forge.Core;
 using Forge.Core.Agents;
 using Forge.Core.Db;
@@ -532,6 +533,26 @@ public class TaskRunnerTests : IDisposable
         Assert.Null(meta.Get("qa_verified_count"));
         Assert.Equal("1", meta.Get("qa_escalated"));
         Assert.Null(meta.Get("project_delivered"));
+    }
+
+    [Fact]
+    public async Task Qa_on_a_project_with_a_contract_writes_the_suite_and_never_starts_the_app()
+    {
+        // The app is the harness's to start: QA writes the tests, the harness runs them and
+        // files what fails. A round that tries to drive the app itself is refused the tool.
+        WriteToTrunk(Forge.Core.Design.ApiContract.Path, Contract);
+        DoneTask();
+
+        var llm = new ScriptedLlmClient(
+            ScriptedLlmClient.Tool("serve", ("command", "dotnet run --project src/App/App.csproj")),
+            ScriptedLlmClient.Tool("done", ("summary", "Nothing to run, then.")))
+        { Fallback = ScriptedLlmClient.Tool("done", ("summary", "done")) };
+
+        await DrainAsync(Runner(llm), maxSteps: 10);
+
+        var instanceIds = _conn.Query<string>("SELECT id FROM agent_instances").ToList();
+        Assert.Contains(instanceIds, id => id.StartsWith("qa-suite-", StringComparison.Ordinal));
+        Assert.Contains("no tool 'serve' is available", llm.Observations(1), StringComparison.Ordinal);
     }
 
     [Fact]

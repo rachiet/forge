@@ -590,10 +590,16 @@ public sealed class TaskRunner(
     /// </summary>
     private async Task<TaskRunOutcome> RunQaAsync(CancellationToken ct)
     {
-        var recipe = AgentRecipe.Qa;
         _log.Message("QA phase: verifying the finished project against the client's requirements");
 
         var workspace = _workspaces.PrepareTrunkClone(paths.RoleWorkspace(project, "qa"));
+
+        // A project with a contract is judged by its suite, which is written from the contract
+        // and run by the harness — so that QA never starts the application. One without has no
+        // operations to cover, and driving it by hand is the only way to see anything at all.
+        var recipe = ApiContract.Load(workspace) is not null
+            ? AgentRecipe.QaSuiteAuthor
+            : AgentRecipe.Qa;
 
         // The project, its framework and its package versions are the harness's to decide, not
         // QA's to remember. A round once invented a Microsoft.NET.Test.Sdk version that does not
@@ -629,7 +635,8 @@ public sealed class TaskRunner(
         var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
         var result = await RunWithCrashRetryAsync(() =>
-            loop.RunChatAsync([new LlmMessage("user", QaBrief(workspace))], executor, ct)).ConfigureAwait(false);
+            loop.RunChatAsync([new LlmMessage("user", QaBrief(workspace, recipe))], executor, ct))
+            .ConfigureAwait(false);
 
         // The round never ran, so the watermark must not move and nothing is escalated:
         // raising the budget re-runs QA as if this had not happened.
@@ -780,8 +787,11 @@ public sealed class TaskRunner(
     private static string Truncate(string output, int max = 6_000) =>
         output.Length <= max ? output : $"... [{output.Length - max} earlier chars omitted]\n{output[^max..]}";
 
-    private string QaBrief(string workspace)
+    private string QaBrief(string workspace, AgentRecipe recipe)
     {
+        // The suite author has no way to run anything, so the paragraphs about driving the app
+        // and filing by hand would be instructions it cannot follow.
+        var writesOnly = recipe.InstancePrefix == AgentRecipe.QaSuiteAuthor.InstancePrefix;
         var ledger = _tasks.BugLedger();
         var ledgerText = ledger.Count == 0
             ? "(no bugs on record yet)"
@@ -816,6 +826,13 @@ public sealed class TaskRunner(
             - If a suite is already there, update it to match the contract as it now stands
               and add tests for anything new, rather than starting again.
 
+            {(writesOnly ? """
+            You cannot start the application and have no tool that could: the harness starts it,
+            runs your suite against it, and files a bug from any failure with the real output
+            attached. So everything you would have checked by hand belongs in the suite as a
+            test. Write it so it can run twice against the same instance — create what you
+            need, assert, then clean up.
+            """ : $"""
             Run it yourself while you work — `serve` the app and `run` the tests — so you hand
             over a suite you have seen execute. When it is right, call `done`.
 
@@ -824,6 +841,7 @@ public sealed class TaskRunner(
             Use `file_bug` only for something the suite cannot express — a requirement with no
             observable channel at all. A failing test is not filed by hand; the harness files
             it with the run output attached.
+            """)}
 
             Bugs already on record — do NOT re-file any of these (rejected ones are settled,
             open ones are already tracked; only a regression of a *fixed* bug is fileable again):
