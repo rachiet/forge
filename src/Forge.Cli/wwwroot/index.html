@@ -289,6 +289,17 @@
                   display:flex; gap:10px; justify-content:flex-end; }
   .review .objective { margin:0 0 4px; }
   .review .accept { margin:0; color:var(--muted); font-size:.86rem; }
+  /* A change reads as two short lists: what the product no longer does, then what it does now. */
+  .review .l { margin:12px 0 4px; font-family:var(--mono); font-size:.62rem;
+               letter-spacing:.16em; text-transform:uppercase; color:var(--muted); }
+  .review ul.al, .review ul.dl { margin:0; padding-left:18px; font-size:.88rem; }
+  .review ul.al li { margin:3px 0; }
+  .review ul.dl li { margin:3px 0; color:var(--muted); text-decoration:line-through; }
+  /* The chain of changes in the rail: one folded entry per accepted change request. */
+  .crrow { padding:9px 16px; border-top:1px solid var(--line); font-size:.86rem;
+           display:flex; gap:10px; align-items:baseline; }
+  .crrow .n { font-family:var(--mono); font-size:.7rem; color:var(--muted); }
+  .crrow .pending { margin-left:auto; font-size:.7rem; color:var(--active); }
 </style>
 </head>
 <body>
@@ -548,6 +559,17 @@ function renderRail(d) {
           ${esc(sec.title)}</summary>
           <div class="specbody">${markdown(sec.markdown)}</div></details>`).join('')}
       </details>
+    </section>`;
+  }
+
+  // The requirements say what the product is; this says how it got there. One row per change
+  // request, oldest first, so a spec that keeps being rewritten still has a history.
+  if ((d.changes || []).length) {
+    html += `<section class="card"><div class="card-head"><h2>Changes</h2>
+        <span class="sub">${d.changes.length}</span></div>
+      ${d.changes.map(c => `<div class="crrow"><span class="n">CR-${String(c.number).padStart(3,'0')}</span>
+        <span>${esc(c.title)}</span>
+        ${c.approved ? '' : '<span class="pending">awaiting you</span>'}</div>`).join('')}
     </section>`;
   }
 
@@ -864,17 +886,30 @@ for (const [id, action] of [['resumeBtn', 'start'], ['stopBtn', 'stop']]) {
   });
 }
 
-// The draft, rendered from the pending proposal and the requirement files it covers.
+// The draft. A first build shows the whole specification, because all of it is new; a change
+// to a built product shows only what the change does to it — the client has read the rest.
 function fillReview(d) {
   const p = d.proposal;
   if (!p) return;
+  const changes = d.specChanges || [];
   $('reviewHead').textContent = p.title;
-  $('reviewSub').textContent = `Proposed by ${agentName}. Nothing is built until you approve.`;
-  const sections = d.spec.filter(s => s.file.toLowerCase() !== 'index.md');
+  $('reviewSub').textContent = changes.length
+    ? `A change to what you have. Proposed by ${agentName}; nothing is built until you approve.`
+    : `Proposed by ${agentName}. Nothing is built until you approve.`;
+
+  const detail = changes.length
+    ? changes.map(c => `<h3>${esc(c.file)}</h3>
+        ${c.removed.length ? `<p class="l">No longer</p><ul class="dl">${
+          c.removed.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
+        ${c.added.length ? `<p class="l">Now</p><ul class="al">${
+          c.added.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}`).join('')
+    : d.spec.filter(s => s.file.toLowerCase() !== 'index.md')
+        .map(s => `<h3>${esc(s.title)}</h3>${markdown(s.markdown)}`).join('');
+
   $('reviewBody').innerHTML = `
     <p class="objective">${esc(p.objective)}</p>
     ${p.acceptance ? `<p class="accept">${esc(p.acceptance)}</p>` : ''}
-    ${sections.map(s => `<h3>${esc(s.title)}</h3>${markdown(s.markdown)}`).join('')}`;
+    ${detail}`;
 }
 
 $('reviewBtn').addEventListener('click', () => {

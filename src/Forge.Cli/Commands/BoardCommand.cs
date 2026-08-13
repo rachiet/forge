@@ -12,6 +12,7 @@ using Forge.Core.Model;
 using Forge.Core.Scheduling;
 using Forge.Core.Secrets;
 using Forge.Core.Ui;
+using Forge.Core.Workspaces;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -141,6 +142,10 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 // Read whenever there is anything committed: the page shows it in the rail once
                 // the client has approved, and in the review dialog while it is still a draft.
                 Spec = SpecReader.Read(_paths, project),
+                // What this change does to the spec, and the chain of changes behind it. Empty
+                // on a first build, where the whole specification IS the change.
+                SpecChanges = SpecReader.Changes(_paths, project, SpecBaseline.Get(conn)),
+                Changes = ChangeLog.Read(_paths, project),
                 PmBusy = _pmBusy.GetValueOrDefault(project),
                 PmError = _pmError.GetValueOrDefault(project),
                 RunError = _runError.GetValueOrDefault(project),
@@ -186,6 +191,13 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             }
             if (request.Decision != "approve")
                 return Results.BadRequest(new { error = $"Unknown decision '{request.Decision}'." });
+
+            // The entry becomes the durable record of this change the moment it is accepted;
+            // stamped before the Feature opens, so no design run can read it as still pending.
+            if (proposal.ChangeEntry is { Length: > 0 } entry)
+                new WorkspaceManager(_paths, request.Project).EditTrunkFile(
+                    _paths.RoleWorkspace(request.Project, "pm"), entry,
+                    ChangeLog.Approve, $"docs(pm): {System.IO.Path.GetFileName(entry)} approved");
 
             var feature = proposal.Approve(conn);
 

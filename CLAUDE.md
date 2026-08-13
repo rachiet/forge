@@ -153,6 +153,27 @@ movable and shareable, so keys must not ride along in that payload.
   always a fresh QA cycle. Specs live in the **client** repo (requirements/contracts
   updated before the change; MODULE.md by the engineer during it).
 
+### A change is a delta, everywhere [DECIDED]
+- **The requirement file is a living spec; the history is a separate log.** `NN-*.md`
+  always describes the product as it is now — the PM edits it in place and DELETES what
+  the change supersedes, because every consumer (Principal, engineer, QA) reads it as
+  current truth, and a stale line becomes a bug filed against correct work. There is no
+  version stamp: the chain lives in `docs/requirements/changes/NNN-<slug>.md`
+  (`Board/ChangeLog.cs`), one append-only entry per change request holding the client's
+  own words, what changed, and **what was removed**.
+- **The entry is written at proposal time and stamped on approval.** `propose_requirements`
+  requires `change_request` and `changes` once a Feature exists (refusing otherwise), writes
+  the entry carrying `Status: proposed`, and the approve endpoint rewrites that line to
+  `Status: approved <date>` on trunk before the Feature opens. Redrafting a pending proposal
+  reuses its number and replaces its file, so one ask is never two entries.
+- **`spec_baseline_sha` is what the client last received** (`Board/SpecBaseline.cs`), recorded
+  by `DeliverAsync` at handover. Everything after it is the pending change.
+- **Nobody re-reads the whole spec.** The review dialog renders `SpecReader.Changes` — the
+  added and removed requirement lines since the baseline — and only falls back to the full
+  document on a first build, where all of it is new. The Principal's CR brief is seeded with
+  the same delta plus a pointer to the entry, and told that every unlisted line is settled.
+  Re-reading a rewritten spec is how a change request turns into a redesign of finished work.
+
 ### QA/triage hardening [DECIDED] (settled after the first live QA run)
 - **A bug carries machine-captured evidence, not model prose.** `file_bug(title,
   expected, [requirements_ref])` no longer takes a free-form `actual`/`repro`; the

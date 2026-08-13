@@ -89,6 +89,23 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
         return CommitAndPushTrunk(dir, message);
     }
 
+    /// <summary>
+    /// Rewrites a file on trunk and pushes it, without going through a task branch. The transform
+    /// is given the current contents and returns the new ones, or null to leave the file alone.
+    /// False when the file is missing or the transform declined.
+    /// </summary>
+    public bool EditTrunkFile(
+        string cloneDir, string relativePath, Func<string, string?> transform, string message)
+    {
+        var dir = PrepareTrunkClone(cloneDir);
+        var path = System.IO.Path.Combine(dir, relativePath);
+        if (!File.Exists(path)) return false;
+
+        if (transform(File.ReadAllText(path)) is not { } updated) return false;
+        File.WriteAllText(path, updated);
+        return CommitAndPushTrunk(dir, message);
+    }
+
     /// <summary>Commits and pushes whatever a role changed in a trunk clone. False if nothing changed.</summary>
     public bool CommitAndPushTrunk(string dir, string message)
     {

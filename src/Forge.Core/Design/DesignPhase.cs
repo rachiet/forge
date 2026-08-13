@@ -74,7 +74,7 @@ public sealed class DesignPhase(
             workspace, _recipe.ToolAllowlist, vault, agentHome: paths.AgentHome(project));
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
-        var brief = (isChangeRequest ? ChangeRequestBrief() : Brief())
+        var brief = (isChangeRequest ? ChangeRequestBrief() + ChangeSection() : Brief())
                   + ProgressSection() + PlanSection() + ThemeSection();
 
         var result = await loop
@@ -252,6 +252,38 @@ public sealed class DesignPhase(
     /// The brief for a project that already exists: read the code, write an impact note, update
     /// the contract, and create only the delta tasks — or escalate if the change is ill-advised.
     /// </summary>
+    /// <summary>
+    /// The requirement lines this change added and removed, and the entry recording what the
+    /// client asked for. Given verbatim so the Principal plans the delta it can see rather than
+    /// re-reading the whole specification and re-deciding settled work.
+    /// </summary>
+    private string ChangeSection()
+    {
+        var changes = Board.SpecReader.Changes(paths, project, Board.SpecBaseline.Get(conn));
+        if (changes.Count == 0) return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine().AppendLine("## The change, exactly").AppendLine();
+        sb.AppendLine("This is every requirement line that changed since the client last received "
+                    + "the product. Nothing else in the requirements moved: treat every unlisted "
+                    + "line as settled, and do not redesign, retitle or re-plan work it covers.")
+          .AppendLine();
+
+        foreach (var change in changes)
+        {
+            sb.AppendLine($"### {change.File}").AppendLine();
+            foreach (var line in change.Removed) sb.AppendLine($"- REMOVED: {line}");
+            foreach (var line in change.Added) sb.AppendLine($"- ADDED: {line}");
+            sb.AppendLine();
+        }
+
+        if (Board.ChangeLog.Read(paths, project).LastOrDefault() is { } entry)
+            sb.AppendLine($"The client's own words are in `{entry.File}`. Read it if the intent "
+                        + "behind a line is unclear.").AppendLine();
+
+        return sb.ToString();
+    }
+
     private static string ChangeRequestBrief() => $"""
         # Change request — impact analysis
 

@@ -577,6 +577,9 @@ public sealed class TaskRunner(
 
         _meta.Set("run_command", delivery.Command);
         _meta.Set("run_dir", delivery.Directory);
+        // What the client has now. The next change request is shown, and planned, as the
+        // difference from this commit rather than as the whole specification again.
+        Board.SpecBaseline.Record(paths, project, conn);
         _log.Message($"Project complete — checked out to {checkout}; run with: {delivery.Command}");
 
         var chat = new PmChat(paths, project, conn, llm, vault, prompts, _log);

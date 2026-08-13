@@ -114,7 +114,15 @@ public sealed partial class AgentToolset(
                 Required("title", "what is being built, in the client's words."),
                 Required("objective", "what must be true when it is done."),
                 Optional("acceptance", "how the client would check it from the outside."),
-                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md`.")),
+                Optional("requirements_ref", "the requirement file it covers, e.g. `01-todos.md`."),
+                Optional("change_request", "REQUIRED on an already-built project: what the client "
+                                         + "asked for, in their own words, quoted from the chat."),
+                Optional("changes", "REQUIRED on an already-built project: what you added, altered "
+                                  + "or deleted in the requirement file(s), by section. This is what "
+                                  + "the client reads before approving — they are not shown the whole "
+                                  + "specification again."),
+                Optional("removed", "what the change takes OUT of the requirements, when it "
+                                  + "supersedes existing behaviour. Omit when it removes nothing.")),
 
             ["create_task"] = new("put a task on the board. Returns its id.",
                 Required("title", "short imperative name, e.g. `implement-create-poll-endpoint`."),
@@ -662,17 +670,70 @@ public sealed partial class AgentToolset(
     /// </summary>
     private ToolOutcome ProposeRequirements(ToolCall call)
     {
+        var title = call.Arg("title");
+        var requirement = call.Optional("requirements_ref") is { } reqRef
+            ? RequirementsRef.Parse(reqRef).ToString()
+            : null;
+
+        // A project that already has a Feature has been built; this proposal is a change to it,
+        // and the client reads the change rather than the whole specification again.
+        var isChange = _tasks.List().Any(t => t.Type == TaskType.Feature);
+        string? entryPath = null;
+        if (isChange)
+        {
+            if (call.Optional("change_request") is not { Length: > 0 } asked)
+                return new ToolOutcome(
+                    "ERROR: this project is already built, so this is a change request and needs "
+                    + "`change_request` — what the client asked for, in their own words — and "
+                    + "`changes`, what you altered in the requirement files. Add `removed` when the "
+                    + "change takes a requirement out.");
+            if (call.Optional("changes") is not { Length: > 0 } changed)
+                return new ToolOutcome(
+                    "ERROR: `changes` is missing. Say what you added, altered or deleted in the "
+                    + "requirement file(s) — the client is shown this instead of the whole spec.");
+
+            entryPath = WriteChangeEntry(title, asked, changed, call.Optional("removed"), requirement);
+        }
+
         var proposal = new Board.RequirementsProposal(
-            call.Arg("title"),
+            title,
             call.Arg("objective"),
             call.Optional("acceptance"),
-            call.Optional("requirements_ref") is { } reqRef ? RequirementsRef.Parse(reqRef).ToString() : null);
+            requirement,
+            entryPath);
         proposal.Save(connection);
 
         return new ToolOutcome(
             $"Proposed to the client for approval: {proposal.Title}. They now see " +
             "Approve & start building, or can keep talking to you. Tell them what you " +
-            "have written and ask them to approve it.");
+            "have written and ask them to approve it."
+            + (entryPath is null ? "" : $" Recorded as {entryPath}; it is stamped approved when they accept."));
+    }
+
+    /// <summary>
+    /// Writes the change-request entry into the workspace, replacing the one an earlier draft of
+    /// this same proposal wrote. Returns its repo-relative path.
+    /// </summary>
+    private string WriteChangeEntry(
+        string title, string asked, string changed, string? removed, string? requirement)
+    {
+        // A proposal the client has not accepted yet is still the same change: reuse its number
+        // and its file, so redrafting does not leave CR-002 sitting beside CR-001 for one ask.
+        var pending = Board.ChangeLog.PendingIn(_jail.Root);
+        var number = pending is null
+            ? Board.ChangeLog.NextNumber(_jail.Root)
+            : int.Parse(System.IO.Path.GetFileName(pending).Split('-')[0]);
+
+        var path = Board.ChangeLog.PathFor(number, title);
+        var resolved = _jail.Resolve(path);
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(resolved)!);
+        File.WriteAllText(resolved, Board.ChangeLog.Render(number, title, asked, changed, removed, requirement));
+
+        // The title may have changed with the redraft, and its slug is in the file name.
+        if (pending is { } stale && !stale.Equals(path, StringComparison.Ordinal))
+            File.Delete(_jail.Resolve(stale));
+
+        return path;
     }
 
     /// <summary>

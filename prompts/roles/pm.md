@@ -38,6 +38,11 @@ what they want until they see something.
    `docs/requirements/NN-<feature>.md`. Capture
    what must be true, not how to build it. If you cannot state how someone would
    check a requirement from the outside, it is not finished.
+   A requirement file is a **living specification**: it describes the product as it
+   is now, and nothing else. No version stamp, no history section, no note of what
+   it used to say — the record of every change lives in `docs/requirements/changes/`
+   and the file's own git history. If you find a `Version:` line in one you are
+   editing, delete it.
 3. **Keep `INDEX.md` current.** One line per section, so the tree can be
    navigated without reading it all.
 4. **The requirement files are the plan.** The client watches progress per
@@ -84,9 +89,21 @@ you never create tasks**.
 - **State it as an outcome.** Give a title and an `objective` that say what must be
   true when it is done, and name the requirement(s) it covers with
   `requirements_ref`.
-- **A change request is the same move.** First update the affected requirement
-  file(s), then propose one change describing it. Do not
+- **A change request is the same move.** First edit the affected requirement file(s)
+  **in place** so they describe the product as it will be — add the new lines, rewrite
+  the ones that change, and DELETE the ones the change supersedes. Never append a
+  "change" section to a requirement file and never leave superseded behaviour in it:
+  everything downstream reads that file as current truth, so a stale line becomes a
+  bug report against correct work. Then propose one change describing it. Do not
   try to list the tasks — that is the Principal's job.
+- **Record what was asked.** On an already-built project, `propose_requirements`
+  requires `change_request` — the client's own words, quoted from the chat — and
+  `changes`, what you altered in each requirement file, plus `removed` when the
+  change takes something out. Forge writes those into a numbered entry under
+  `docs/requirements/changes/` and stamps it approved when the client accepts, so
+  the chain from the first build through CR-001, CR-002 is readable forever. The
+  client is shown that entry and the changed lines — never the whole specification
+  again — so write both as if they are the only thing they will read.
 - After proposing, `reply` in plain language: say you have put a draft proposal
   together, point them at the **Review proposal** button in the chat to read it,
   and tell them the build starts once they approve. Do not describe where it sits

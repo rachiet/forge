@@ -10,12 +10,15 @@ namespace Forge.Core.Board;
 /// A Feature the PM has drafted and the client has not yet approved. It holds the
 /// arguments a Feature would be opened with, staged in project_meta until the
 /// client approves; approving turns it into the Feature row, declining discards it.
+/// A change request also names the <see cref="ChangeEntry"/> the PM wrote for it, which
+/// approving stamps as accepted.
 /// </summary>
 public sealed record RequirementsProposal(
     string Title,
     string Objective,
     string? Acceptance = null,
-    string? RequirementsRef = null)
+    string? RequirementsRef = null,
+    string? ChangeEntry = null)
 {
     private const string MetaKey = "requirements_proposal";
 
