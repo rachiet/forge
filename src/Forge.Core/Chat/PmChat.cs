@@ -66,7 +66,8 @@ public sealed class PmChat(
             + "End with `reply`.]";
 
         var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);
-        var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspace, _recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
         var conversation = PromptAssembler.Conversation(History()).ToList();
@@ -100,7 +101,8 @@ public sealed class PmChat(
             + items;
 
         var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);
-        var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspace, _recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
         var conversation = PromptAssembler.Conversation(History()).ToList();
@@ -124,7 +126,8 @@ public sealed class PmChat(
         _log.Message($"client → pm: {Summarise(clientMessage)}");
 
         var workspace = _workspaces.PrepareTrunkClone(WorkspacePath);
-        var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspace, _recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
         var conversation = PromptAssembler.Conversation(History()).ToList();

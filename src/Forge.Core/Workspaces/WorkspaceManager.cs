@@ -14,6 +14,9 @@ public sealed class WorkspaceManager(ForgePaths paths, string project)
 
     public string BareRepo => paths.ProjectBareRepo(project);
 
+    /// <summary>HOME for the project's agent-run commands, outside every working clone.</summary>
+    public string AgentHome => paths.AgentHome(project);
+
     public string Path(long taskId) => paths.TaskWorkspace(project, taskId);
 
     public bool Exists(long taskId) => Directory.Exists(Path(taskId));

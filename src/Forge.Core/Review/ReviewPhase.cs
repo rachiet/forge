@@ -48,7 +48,8 @@ public sealed class ReviewPhase(
         TaskRecord task, string branch, WorkspaceManager workspaces, CancellationToken ct = default)
     {
         var log = _log.For(task.Id);
-        var executor = new ToolExecutor(workspaces.Path(task.Id), _recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspaces.Path(task.Id), _recipe.ToolAllowlist, vault, agentHome: workspaces.AgentHome);
         // Bind logging to the task, so a review's events sit alongside the rest of its story.
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, log);
 

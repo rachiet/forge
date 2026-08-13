@@ -70,7 +70,8 @@ public sealed class DesignPhase(
             : "Design phase: Principal starting");
 
         var workspace = new WorkspaceManager(paths, project).PrepareTrunkClone(WorkspacePath);
-        var executor = new ToolExecutor(workspace, _recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspace, _recipe.ToolAllowlist, vault, agentHome: paths.AgentHome(project));
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), _recipe, _log);
 
         var brief = (isChangeRequest ? ChangeRequestBrief() : Brief())

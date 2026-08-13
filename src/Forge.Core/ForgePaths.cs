@@ -49,6 +49,13 @@ public sealed class ForgePaths
     /// <summary>The directory holding a project's task and role workspaces.</summary>
     public string WorkspacesDir(string project) => Path.Combine(ProjectDir(project), "workspaces");
 
+    /// <summary>
+    /// HOME for every command an agent runs. Outside <see cref="WorkspacesDir"/> so the caches
+    /// a toolchain writes there (.dotnet, .local/share/NuGet) never land inside a git checkout,
+    /// and shared across a project's tasks so a fresh workspace does not repopulate them.
+    /// </summary>
+    public string AgentHome(string project) => Path.Combine(ProjectDir(project), "agent-home");
+
     /// <summary>The tool executor's jail for one task. Created on claim, deleted after merge.</summary>
     public string TaskWorkspace(string project, long taskId) =>
         Path.Combine(WorkspacesDir(project), $"task-{taskId}");

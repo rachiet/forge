@@ -302,7 +302,8 @@ public sealed class TaskRunner(
         var branch = task.BranchName ?? WorkspaceManager.BranchName(task);
         if (task.BranchName is null) SetBranch(task.Id, branch);
         _workspaces.Prepare(task, branch);
-        var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            _workspaces.Path(task.Id), recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
 
         var before = _tasks.List().Select(t => t.Id).ToHashSet();
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
@@ -632,7 +633,8 @@ public sealed class TaskRunner(
             return new TaskRunOutcome(0, EndReason.Done, TaskStatus.Qa, regression);
         }
 
-        var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspace, recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
         var result = await RunWithCrashRetryAsync(() =>
             loop.RunChatAsync([new LlmMessage("user", QaBrief(workspace, recipe))], executor, ct))
@@ -915,7 +917,8 @@ public sealed class TaskRunner(
         log.Message($"Principal triaging bug {bug.Id}: {bug.Title}");
 
         var workspace = _workspaces.PrepareTrunkClone(paths.RoleWorkspace(project, "bug-triage"));
-        var executor = new ToolExecutor(workspace, recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            workspace, recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
 
         var result = await RunWithCrashRetryAsync(() =>
@@ -1016,7 +1019,8 @@ public sealed class TaskRunner(
         _workspaces.Prepare(task, branch);
         InstallUiKit(task.Id, log);
         log.Event(EventType.GitBranch, $"prepared workspace on {branch}");
-        var executor = new ToolExecutor(_workspaces.Path(task.Id), recipe.ToolAllowlist, vault);
+        var executor = new ToolExecutor(
+            _workspaces.Path(task.Id), recipe.ToolAllowlist, vault, agentHome: _workspaces.AgentHome);
 
         var loop = new AgentLoop(llm, conn, new PromptAssembler(prompts), recipe, _log);
         // A Principal implementation is not reviewed, so it is told so and given the checks

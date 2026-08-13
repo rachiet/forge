@@ -115,10 +115,18 @@ public sealed partial class ToolExecutor(
     IReadOnlyCollection<string> allowedBinaries,
     SecretsVault vault,
     TimeSpan? defaultTimeout = null,
-    IReadOnlyDictionary<string, string>? environment = null)
+    IReadOnlyDictionary<string, string>? environment = null,
+    string? agentHome = null)
 {
     private readonly PathJail _jail = new(jailRoot);
     private readonly TimeSpan _defaultTimeout = defaultTimeout ?? TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// HOME for child processes. Defaults to a directory beside the jail rather than inside it,
+    /// because a toolchain writing its caches into the jail puts them in the agent's checkout.
+    /// </summary>
+    private readonly string _agentHome = agentHome ??
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(jailRoot))!, "agent-home");
 
     /// <summary>Extra variables to hand child processes, on top of the allowlist.</summary>
     private readonly IReadOnlyDictionary<string, string> _environment =
@@ -220,7 +228,7 @@ public sealed partial class ToolExecutor(
 
     /// <summary>
     /// Replaces the child's environment with one built from an allowlist instead of inherited,
-    /// so Forge's own provider keys are never visible to it, and points HOME at the workspace.
+    /// so Forge's own provider keys are never visible to it, and points HOME at the agent home.
     /// Raises the bar; it is not a sandbox.
     /// </summary>
     private void ScrubEnvironment(ProcessStartInfo psi)
@@ -240,8 +248,11 @@ public sealed partial class ToolExecutor(
         psi.Environment.Clear();
         foreach (var (name, value) in passThrough) psi.Environment[name] = value;
         foreach (var (name, value) in _environment) psi.Environment[name] = value;
-        psi.Environment["HOME"] = _jail.Root;
-        psi.Environment["USERPROFILE"] = _jail.Root;
+        // Created here rather than at construction: a child process needs it to exist, and by
+        // then the jail's parent directory certainly does.
+        Directory.CreateDirectory(_agentHome);
+        psi.Environment["HOME"] = _agentHome;
+        psi.Environment["USERPROFILE"] = _agentHome;
     }
 
     /// <summary>Environment variables a child process may inherit.</summary>

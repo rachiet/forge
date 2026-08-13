@@ -104,6 +104,8 @@ public class ToolExecutorEnvironmentTests : IDisposable
 
     private readonly string _jail = Path.Combine(Path.GetTempPath(), $"forge-envjail-{Guid.NewGuid():N}");
 
+    private readonly string _home = Path.Combine(Path.GetTempPath(), $"forge-envhome-{Guid.NewGuid():N}");
+
     public ToolExecutorEnvironmentTests()
     {
         Directory.CreateDirectory(_jail);
@@ -120,10 +122,12 @@ public class ToolExecutorEnvironmentTests : IDisposable
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", null);
         Environment.SetEnvironmentVariable("GEMINI_API_KEY", null);
         Directory.Delete(_jail, recursive: true);
+        if (Directory.Exists(_home)) Directory.Delete(_home, recursive: true);
     }
 
     private ToolExecutor Executor(IReadOnlyDictionary<string, string>? environment = null) =>
-        new(_jail, ["env", "sh"], new SecretsVault(Path.Combine(_jail, ".vault")), environment: environment);
+        new(_jail, ["env", "sh"], new SecretsVault(Path.Combine(_jail, ".vault")),
+            environment: environment, agentHome: _home);
 
     [Fact]
     public async Task Forges_own_credentials_do_not_reach_a_process_the_agent_ran()
@@ -147,10 +151,24 @@ public class ToolExecutorEnvironmentTests : IDisposable
         var result = await Executor().RunAsync("env");
 
         Assert.Contains("PATH=", result.Stdout);
-        // HOME is redirected into the jail so a child cannot read ~/forge_env.
-        Assert.Contains($"HOME={_jail}", result.Stdout);
+        // HOME is redirected to the agent home so a child cannot read ~/forge_env.
+        Assert.Contains($"HOME={_home}", result.Stdout);
         Assert.DoesNotContain(
             $"HOME={Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}\n", result.Stdout);
+    }
+
+    /// <summary>
+    /// The caches a toolchain writes to HOME must not land in the checkout the agent commits,
+    /// so HOME is a directory of its own and the jail stays as git left it.
+    /// </summary>
+    [Fact]
+    public async Task A_commands_home_is_outside_the_jail_and_the_harness_creates_it()
+    {
+        var result = await Executor().RunAsync("sh -c 'echo $HOME > $HOME/marker'");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(File.Exists(Path.Combine(_home, "marker")));
+        Assert.False(File.Exists(Path.Combine(_jail, "marker")));
     }
 
     [Fact]
