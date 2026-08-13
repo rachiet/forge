@@ -420,6 +420,12 @@ let providers = [];
 // section inside it — would snap shut every 3s while the client was reading it.
 let specOpen = false;
 const openSections = new Set();
+// The draft the client put away with "Keep chatting". Identified by its content, so a
+// proposal Iris revises is a different draft and asks to be read again. Per project and
+// per tab, in sessionStorage, so a reload does not re-raise a prompt already dismissed.
+function dismissKey() { return `forge.dismissed.${project}`; }
+let dismissedProposal = sessionStorage.getItem(dismissKey());
+const proposalKey = p => `${p.title}\n${p.objective}\n${p.acceptance || ''}\n${p.changeEntry || ''}`;
 // Whatever the server says the client-facing agent is called. One constant, server-side.
 let agentName = '';
 
@@ -487,6 +493,8 @@ function selectProject(name) {
   project = name;
   location.hash = encodeURIComponent(name);
   lastChatId = 0;                       // force a chat repaint for the new project
+  // Each project has its own dismissed draft; switching must not carry one across.
+  dismissedProposal = sessionStorage.getItem(dismissKey());
   $('thread').innerHTML = '';
   poll();
 }
@@ -746,7 +754,9 @@ async function poll() {
   measureHeader();
 
     const bar = $('approveBar');
-    bar.classList.toggle('hidden', !d.proposal);
+    // Dismissed by "Keep chatting" until the draft itself changes: the client has said they
+    // want to talk, not read, and the prompt returns the moment Iris proposes something new.
+    bar.classList.toggle('hidden', !d.proposal || proposalKey(d.proposal) === dismissedProposal);
     if (d.proposal) {
       $('approveTitle').textContent = d.proposal.title;
       // Kept current while the dialog is open, so a proposal the PM revises mid-read
@@ -917,9 +927,17 @@ $('reviewBtn').addEventListener('click', () => {
   $('reviewDialog').showModal();
 });
 
-// Closing changes nothing: the proposal stays pending and the button reopens it, so
-// the client can read it again after asking about it in the chat.
-$('keepBtn').addEventListener('click', () => $('reviewDialog').close());
+// Keeping the conversation going puts the prompt away: the proposal stays pending, so
+// approving is still possible the moment Iris raises it again, but the client is not
+// asked to read the same draft twice. A revised draft has a different key and returns.
+$('keepBtn').addEventListener('click', () => {
+  if (lastBoard?.proposal) {
+    dismissedProposal = proposalKey(lastBoard.proposal);
+    sessionStorage.setItem(dismissKey(), dismissedProposal);
+    $('approveBar').classList.add('hidden');
+  }
+  $('reviewDialog').close();
+});
 
 // Approving opens the Feature and starts the build in one step, so this is the only
 // place a build begins.
