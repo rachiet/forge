@@ -119,6 +119,23 @@ public class ThemePickerTests : IDisposable
     }
 
     [Fact]
+    public void The_copy_the_client_runs_gets_the_new_theme_without_waiting_for_a_handover()
+    {
+        SeedRunnableProject();
+        // The delivered checkout, as DeliverAsync leaves it.
+        new WorkspaceManager(_paths, Project).PrepareTrunkClone(_paths.ProjectBuild(Project));
+
+        AppearanceChange.Apply(_paths, Project, new ThemeChoice("carbon", "dark"), _prompts);
+
+        // Not the repo this time: the folder the client opens and runs, which is a copy taken at
+        // delivery and would otherwise serve the old stylesheet until the next one.
+        var served = File.ReadAllText(Path.Combine(
+            _paths.ProjectBuild(Project), "src", "App", "wwwroot", "forge-ui", "theme.css"));
+        Assert.Contains("Theme: carbon", served);
+        Assert.Contains("Mode: dark", served);
+    }
+
+    [Fact]
     public void Changing_the_theme_is_not_a_change_request_and_leaves_no_record_behind()
     {
         SeedRunnableProject();

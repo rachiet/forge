@@ -19,8 +19,8 @@ public static class AppearanceChange
     private const string CloneRole = "theme";
 
     /// <summary>
-    /// Installs the choice on trunk. False when the repo has no runnable project to install
-    /// into, in which case nothing is written at all.
+    /// Installs the choice on trunk and into the copy the client runs. False when the repo has
+    /// no runnable project to install into, in which case nothing is written at all.
     /// </summary>
     public static bool Apply(
         ForgePaths paths, string project, ThemeChoice choice, PromptLibrary prompts)
@@ -30,6 +30,14 @@ public static class AppearanceChange
 
         if (!UiKit.Ensure(clone, choice, prompts)) return false;
 
-        return workspaces.CommitAndPushTrunk(clone, $"style: {choice.Describe()}");
+        var committed = workspaces.CommitAndPushTrunk(clone, $"style: {choice.Describe()}");
+
+        // The handover checkout is a copy taken at delivery, not a live clone, so it would go on
+        // serving the old stylesheet until the next handover. One file — theme.css — is
+        // rewritten in place, and a reload of the running app shows the new theme.
+        if (Directory.Exists(paths.ProjectBuild(project)))
+            UiKit.Ensure(paths.ProjectBuild(project), choice, prompts);
+
+        return committed;
     }
 }
