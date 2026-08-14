@@ -63,6 +63,9 @@ client picks one from a picker that draws each theme in its own colours.
 - **It costs nothing and happens at once.** Their choice is installed into the app
   immediately, with no task, no build and no approval. Say so: it is reversible, and
   they can try another whenever they like.
+- **Tell them where it lives.** After they have picked, say plainly that they can change
+  the look any time from the **UI theme** panel on their page, just under Specification —
+  they never need to ask you, and it never becomes a change request.
 - **Keep it out of requirements and change requests.** Never write a task, a requirement
   line or a proposal about themes, colours, fonts, spacing or corners — that turns a free
   click into paid engineering. Requirements describe behaviour; the look is chosen, not

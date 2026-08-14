@@ -136,6 +136,9 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 snapshot.Provider, snapshot.Planned, snapshot.SpecReady, snapshot.Proposal,
                 snapshot.AwaitingClient, snapshot.NeedsClient, snapshot.Delivery,
                 snapshot.ThemeOffered,
+                // The look the project is built with, named on the rail so the client can see
+                // and change it without asking anyone.
+                Theme = ThemeName(conn),
                 snapshot.Plan,
                 AgentName = ClientFacing.AgentName,
                 snapshot.ProjectLevelCostUsd,
@@ -486,6 +489,13 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
     public sealed record BudgetChange(string Project, decimal? BudgetUsd);
     public sealed record RunRequest(string Project, string Action);
     public sealed record ProposalDecision(string Project, string Decision);
+    /// <summary>The project's current look, as the rail card names it.</summary>
+    private static object ThemeName(System.Data.IDbConnection conn)
+    {
+        var choice = ThemeChoice.From(new ProjectMetaRepository(conn));
+        return new { choice.Theme, choice.Mode, choice.Accent, Describe = choice.Describe() };
+    }
+
     public sealed record ThemeChange(
         string Project, string? Theme, string? Mode, string? Accent, string? Density, string? Radius);
 }

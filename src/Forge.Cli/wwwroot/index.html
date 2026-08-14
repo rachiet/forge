@@ -226,8 +226,6 @@
   .btn.primary { background:var(--accent); color:#fff; border-color:transparent; }
   .btn.stop { background:var(--pending); color:#fff; border-color:transparent; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
-  /* A quiet action sitting in a card's header, pushed to its right edge. */
-  .btn.small { margin-left:auto; padding:3px 9px; font-size:.66rem; }
 
   /* budget strip */
   .budget { display:flex; align-items:baseline; gap:8px; justify-content:flex-end;
@@ -326,6 +324,21 @@
                 border-radius:999px; padding:5px 10px; font-size:.75rem; color:var(--fg-ink-muted); }
   .tile .current { margin-left:auto; font-size:.72rem; color:var(--fg-ink-faint); }
 
+  /* The UI theme card: the look the project is built with, and one click to change it.
+     The swatches are painted by the theme's own tokens, injected into #themeRowStyles. */
+  .themerow { display:flex; align-items:center; gap:12px; width:100%; padding:12px 16px;
+              background:none; border:0; font:inherit; color:inherit; cursor:pointer; text-align:left; }
+  .themerow:hover { background:var(--sunken); }
+  .themerow .swatches { display:inline-flex; gap:4px; }
+  .themerow .sw { width:16px; height:16px; border-radius:4px; border:1px solid var(--line); }
+  .themerow .sw-canvas { background:var(--fg-canvas, var(--sunken)); }
+  .themerow .sw-surface { background:var(--fg-surface, var(--surface)); }
+  .themerow .sw-ink { background:var(--fg-ink, var(--ink)); }
+  .themerow .sw-accent { background:oklch(var(--fg-accent-l, .6) var(--fg-accent-c, .14) var(--fg-accent-h, 240)); }
+  .themerow .which { font-size:.9rem; }
+  .themerow .change { margin-left:auto; font-family:var(--mono); font-size:.68rem;
+                      letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+
   /* The chain of changes in the rail: one folded entry per accepted change request. */
   .crrow { padding:9px 16px; border-top:1px solid var(--line); font-size:.86rem;
            display:flex; gap:10px; align-items:baseline; }
@@ -391,9 +404,6 @@
     <aside class="card chat">
       <div class="card-head">
         <h2 id="agentHead">…</h2>
-        <!-- Appearance is a selection, never a conversation: the picker is always one click
-             away, and Iris raises the same dialog when the client asks her about the look. -->
-        <button class="btn small" id="themeBtn">Appearance</button>
       </div>
       <div class="thread" id="thread"></div>
       <p class="thinking hidden" id="thinking"><span id="thinkingWho">…</span> is replying<span>…</span></p>
@@ -450,9 +460,11 @@
   <div class="foot">
     <span class="note" id="themeNote"></span>
     <button class="btn" id="themeClose">Close</button>
+    <button class="btn primary" id="themeApply" disabled>Apply</button>
   </div>
 </dialog>
 <style id="themeTileStyles"></style>
+<style id="themeRowStyles"></style>
 
 
 <script>
@@ -628,6 +640,18 @@ function renderRail(d) {
     </section>`;
   }
 
+  // Directly under the specification, because it is the one part of the product the client
+  // changes themselves: a theme is a selection from the kit, applied without a build.
+  html += `<section class="card">
+    <div class="card-head"><h2>UI theme</h2></div>
+    <button class="themerow" id="themeRow">
+      <span class="swatches" aria-hidden="true">${
+        ['canvas', 'surface', 'ink', 'accent'].map(t => `<i class="sw sw-${t}"></i>`).join('')}</span>
+      <span class="which">${esc(d.theme?.describe || 'the default look')}</span>
+      <span class="change">Change</span>
+    </button>
+  </section>`;
+
   // The requirements say what the product is; this says how it got there. One row per change
   // request, oldest first, so a spec that keeps being rewritten still has a history.
   if ((d.changes || []).length) {
@@ -696,6 +720,8 @@ function renderRail(d) {
       { label: 'All agents', value: d.totalCostUsd });
   }
   $('rail').innerHTML = html;
+  // The rail is rebuilt on every poll, so the theme row is re-bound and repainted with it.
+  paintThemeRow();
   const card = $('specCard');
   if (card) card.addEventListener('toggle', () => { specOpen = card.open; });
   for (const sec of document.querySelectorAll('details.spec')) {
@@ -997,28 +1023,32 @@ $('reviewBtn').addEventListener('click', () => {
 /* ---- the theme picker -------------------------------------------------------------
    The catalogue comes from the kit's own files: each theme's CSS is rescoped from :root
    to its tile, and the mode file is layered on top, so a tile is painted by exactly the
-   declarations the project would be built with. Nothing here is generated or guessed. */
-let themes = null;                       // the catalogue, fetched once per open
-let chosen = null;                       // the choice being edited in the dialog
+   declarations the project would be built with. Nothing here is generated or guessed.
+   Choosing a tile only selects it; Apply is what changes the project. */
+let themes = null;                       // the catalogue, fetched once and kept
+let chosen = null;                       // the selection being edited in the dialog
 
 const scopeCss = (css, selector) => css.replace(/:root/g, selector);
 
+/// The declarations that paint one theme, in the mode and accent currently selected.
+function themeCss(theme, selector, choice) {
+  const mode = choice.mode === 'auto' ? 'dark' : choice.mode;
+  return scopeCss(theme.css, selector) + scopeCss(themes.modeCss[mode], selector) +
+    (choice.accent ? `${selector} {
+        --fg-accent-h:${themes.accents[choice.accent].hue};
+        --fg-accent-c:${themes.accents[choice.accent].chroma}; }` : '');
+}
+
 function paintTiles() {
   if (!themes) return;
-  // One style block for every tile: theme declarations first, then the mode that maps them.
-  const mode = chosen.mode === 'auto' ? 'dark' : chosen.mode;
-  $('themeTileStyles').textContent = themes.themes.map(t =>
-    scopeCss(t.css, `.tile[data-theme="${t.id}"] .paint`) +
-    scopeCss(themes.modeCss[mode], `.tile[data-theme="${t.id}"] .paint`) +
-    (chosen.accent ? `.tile[data-theme="${t.id}"] .paint {
-        --fg-accent-h:${themes.accents[chosen.accent].hue};
-        --fg-accent-c:${themes.accents[chosen.accent].chroma}; }` : '')).join('\n');
+  $('themeTileStyles').textContent = themes.themes
+    .map(t => themeCss(t, `.tile[data-theme="${t.id}"] .paint`, chosen)).join('\n');
 
   $('themeTiles').innerHTML = themes.themes.map(t => `
     <button class="tile${t.id === chosen.theme ? ' on' : ''}" data-theme="${t.id}">
       <div class="paint">
         <div class="name">${esc(t.id)} <em>${esc(t.summary)}</em>
-          ${t.id === chosen.theme ? '<span class="current">in use</span>' : ''}</div>
+          ${t.id === (themes.current.theme || '') ? '<span class="current">in use</span>' : ''}</div>
         <div class="demo">
           <div class="card">A card on this theme<div class="sub">with quieter text under it</div></div>
           <span class="chip">Label</span>
@@ -1027,8 +1057,13 @@ function paintTiles() {
       </div>
     </button>`).join('');
 
+  // A click selects, and nothing more: the project changes when Apply is pressed.
   $('themeTiles').querySelectorAll('.tile').forEach(el =>
-    el.addEventListener('click', () => applyTheme({ theme: el.dataset.theme })));
+    el.addEventListener('click', () => { chosen = { ...chosen, theme: el.dataset.theme }; paintTiles(); }));
+
+  const changed = JSON.stringify(chosen) !== JSON.stringify(themes.current);
+  $('themeApply').disabled = !changed;
+  $('themeApply').textContent = changed ? `Apply ${chosen.theme}` : 'Apply';
 }
 
 function fillKnob(id, values, selected) {
@@ -1036,9 +1071,21 @@ function fillKnob(id, values, selected) {
     `<option value="${esc(v)}"${v === selected ? ' selected' : ''}>${esc(v)}</option>`).join('');
 }
 
-async function openThemePicker() {
+/// The catalogue, fetched once per project and reused by the dialog and the rail swatches.
+async function loadThemes() {
   const r = await fetch(`/api/theme?project=${encodeURIComponent(project)}`);
   themes = await r.json();
+  return themes;
+}
+
+async function openThemePicker() {
+  // Shown before the catalogue is fetched, so the dialog opens on the click that asked for it
+  // and no tile can be selected by a mouse-up that lands after it appears.
+  $('themeTiles').innerHTML = '';
+  $('themeNote').textContent = 'Loading themes…';
+  if (!$('themeDialog').open) $('themeDialog').showModal();
+
+  await loadThemes();
   chosen = { ...themes.current };
   fillKnob('themeMode', themes.modes, chosen.mode);
   fillKnob('themeAccent', ['(theme default)', ...Object.keys(themes.accents)], chosen.accent || '(theme default)');
@@ -1046,13 +1093,13 @@ async function openThemePicker() {
   fillKnob('themeRadius', themes.radii, chosen.radius);
   $('themeNote').textContent = '';
   paintTiles();
-  if (!$('themeDialog').open) $('themeDialog').showModal();
 }
 
-// Every change is a full choice, so the client can try one thing at a time and see it land.
-async function applyTheme(change) {
-  chosen = { ...chosen, ...change };
-  paintTiles();
+// Applying installs the selection into the project's interface there and then: no change
+// request, no build, no conversation. A running build owns the repo, so it lands after it.
+async function applyTheme() {
+  $('themeApply').disabled = true;
+  $('themeNote').textContent = 'Applying…';
   const r = await fetch('/api/theme', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project, ...chosen }),
@@ -1061,18 +1108,41 @@ async function applyTheme(change) {
   $('themeNote').textContent = !r.ok || body.error ? (body.error || 'Could not apply that theme.')
     : body.appliedToTrunk ? `Applied: ${body.theme}.`
     : `Saved: ${body.theme}. It goes into the app when the build finishes.`;
+  if (r.ok && !body.error) themes.current = { ...chosen };
+  paintTiles();
+  paintThemeRow();
   poll();
 }
 
+// The knobs are part of the same selection; changing one repaints the tiles rather than
+// changing the project.
 for (const [id, field] of [['themeMode', 'mode'], ['themeAccent', 'accent'],
                            ['themeDensity', 'density'], ['themeRadius', 'radius']]) {
-  $(id).addEventListener('change', e => applyTheme({
-    [field]: field === 'accent' && e.target.value.startsWith('(') ? null : e.target.value,
-  }));
+  $(id).addEventListener('change', e => {
+    chosen = { ...chosen, [field]:
+      field === 'accent' && e.target.value.startsWith('(') ? null : e.target.value };
+    paintTiles();
+  });
 }
 
+/// Paints the rail card's swatches in the project's actual theme, so the row shows the look
+/// rather than only naming it. Fetches the catalogue once, then repaints from memory.
+async function paintThemeRow() {
+  if (!$('themeRow')) return;
+  if (!themes) await loadThemes();
+  $('themeRowStyles').textContent = themes.themes
+    .filter(t => t.id === themes.current.theme)
+    .map(t => themeCss(t, '.themerow .swatches', themes.current)).join('');
+}
+
+$('themeApply').addEventListener('click', applyTheme);
+
+// Delegated, because the rail is rebuilt every poll: a listener bound to the row itself is
+// lost with the element, and a click landing during a rebuild would do nothing.
+$('rail').addEventListener('click', e => {
+  if (e.target.closest('#themeRow')) openThemePicker();
+});
 $('themeClose').addEventListener('click', () => $('themeDialog').close());
-$('themeBtn').addEventListener('click', openThemePicker);
 
 // Keeping the conversation going puts the prompt away: the proposal stays pending, so
 // approving is still possible the moment Iris raises it again, but the client is not
