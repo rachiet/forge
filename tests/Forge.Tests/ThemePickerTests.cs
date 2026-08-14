@@ -101,12 +101,12 @@ public class ThemePickerTests : IDisposable
     }
 
     [Fact]
-    public void Choosing_installs_the_theme_on_trunk_and_records_it_without_an_agent()
+    public void Choosing_installs_the_theme_on_trunk_without_an_agent()
     {
         SeedRunnableProject();
         var choice = new ThemeChoice("vivid", "dark", "teal");
 
-        var applied = AppearanceChange.ApplyAndRecord(_paths, Project, choice, _prompts, _conn);
+        var applied = AppearanceChange.Apply(_paths, Project, choice, _prompts);
 
         Assert.True(applied);
         // The stylesheet the application serves now carries the chosen theme and mode.
@@ -114,26 +114,20 @@ public class ThemePickerTests : IDisposable
         Assert.Contains("Theme: vivid", css);
         Assert.Contains("Mode: dark", css);
 
-        // And the choice is in the change log, accepted — the client made it themselves.
-        var entry = Assert.Single(ChangeLog.Read(_paths, Project));
-        Assert.True(entry.Approved);
-        Assert.Contains(choice.Describe(), entry.Markdown);
-
-        // Not a single token was spent doing any of it.
+        // Not a single token was spent doing it.
         Assert.Equal(0, new LedgerRepository(_conn).ProjectTotals().TokensIn);
     }
 
     [Fact]
-    public void Trying_a_second_theme_replaces_the_record_rather_than_stacking_entries()
+    public void Changing_the_theme_is_not_a_change_request_and_leaves_no_record_behind()
     {
         SeedRunnableProject();
-        AppearanceChange.ApplyAndRecord(_paths, Project, new ThemeChoice("vivid", "dark"), _prompts, _conn);
-        AppearanceChange.ApplyAndRecord(_paths, Project, new ThemeChoice("paper", "light"), _prompts, _conn);
+        AppearanceChange.Apply(_paths, Project, new ThemeChoice("vivid", "dark"), _prompts);
+        AppearanceChange.Apply(_paths, Project, new ThemeChoice("paper", "light"), _prompts);
 
-        // Two clicks while trying themes on are one decision, so the log gets one entry each
-        // time the client settles — never a pile of half-choices in between.
-        var entries = ChangeLog.Read(_paths, Project);
-        Assert.Equal(2, entries.Count);
+        // A theme is a setting, not something that was asked for and built: the change log stays
+        // the record of requirements, and the client can flip themes as often as they like.
+        Assert.Empty(ChangeLog.Read(_paths, Project));
         Assert.Contains("paper", ShowFromTrunk("src/App/wwwroot/forge-ui/theme.css"));
     }
 }

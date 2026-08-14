@@ -271,7 +271,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
 
             // A running build owns trunk, so leave the write to its next task.
             var applied = _workerProject != request.Project
-                       && AppearanceChange.ApplyAndRecord(_paths, request.Project, choice, prompts, conn);
+                       && AppearanceChange.Apply(_paths, request.Project, choice, prompts);
 
             LoggerFor(request.Project).Message($"Client set the interface to {choice.Describe()}.");
             return Results.Ok(new { theme = choice.Describe(), appliedToTrunk = applied });

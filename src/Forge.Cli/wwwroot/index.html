@@ -324,20 +324,19 @@
                 border-radius:999px; padding:5px 10px; font-size:.75rem; color:var(--fg-ink-muted); }
   .tile .current { margin-left:auto; font-size:.72rem; color:var(--fg-ink-faint); }
 
-  /* The UI theme card: the look the project is built with, and one click to change it.
-     The swatches are painted by the theme's own tokens, injected into #themeRowStyles. */
-  .themerow { display:flex; align-items:center; gap:12px; width:100%; padding:12px 16px;
-              background:none; border:0; font:inherit; color:inherit; cursor:pointer; text-align:left; }
-  .themerow:hover { background:var(--sunken); }
-  .themerow .swatches { display:inline-flex; gap:4px; }
-  .themerow .sw { width:16px; height:16px; border-radius:4px; border:1px solid var(--line); }
-  .themerow .sw-canvas { background:var(--fg-canvas, var(--sunken)); }
-  .themerow .sw-surface { background:var(--fg-surface, var(--surface)); }
-  .themerow .sw-ink { background:var(--fg-ink, var(--ink)); }
-  .themerow .sw-accent { background:oklch(var(--fg-accent-l, .6) var(--fg-accent-c, .14) var(--fg-accent-h, 240)); }
-  .themerow .which { font-size:.9rem; }
-  .themerow .change { margin-left:auto; font-family:var(--mono); font-size:.68rem;
-                      letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+  /* The UI theme card shows the theme by wearing it: the row is painted with that theme's own
+     tokens, injected into #themeRowStyles, so the name and the colours cannot disagree. */
+  .themerow { display:flex; align-items:center; gap:12px; width:100%; padding:16px;
+              background:var(--fg-canvas, var(--surface)); color:var(--fg-ink, var(--ink));
+              font-family:var(--fg-font-sans, var(--sans)); border:0; cursor:pointer; text-align:left; }
+  .themerow .which { font-size:1rem; font-weight:var(--fg-heading-weight, 600);
+                     letter-spacing:var(--fg-heading-tracking, 0); }
+  .themerow .change { margin-left:auto; font-size:.75rem; letter-spacing:.06em;
+                      text-transform:uppercase; padding:6px 12px;
+                      border-radius:calc(7px * var(--fg-radius-base, 1));
+                      background:oklch(var(--fg-accent-l, .6) var(--fg-accent-c, .14) var(--fg-accent-h, 240));
+                      color:var(--fg-on-accent, #fff); }
+  .themerow:hover .change { filter:brightness(1.08); }
 
   /* The chain of changes in the rail: one folded entry per accepted change request. */
   .crrow { padding:9px 16px; border-top:1px solid var(--line); font-size:.86rem;
@@ -642,12 +641,11 @@ function renderRail(d) {
 
   // Directly under the specification, because it is the one part of the product the client
   // changes themselves: a theme is a selection from the kit, applied without a build.
+  const themeName = (d.theme?.theme || 'slate');
   html += `<section class="card">
     <div class="card-head"><h2>UI theme</h2></div>
     <button class="themerow" id="themeRow">
-      <span class="swatches" aria-hidden="true">${
-        ['canvas', 'surface', 'ink', 'accent'].map(t => `<i class="sw sw-${t}"></i>`).join('')}</span>
-      <span class="which">${esc(d.theme?.describe || 'the default look')}</span>
+      <span class="which">${esc(themeName[0].toUpperCase() + themeName.slice(1))}</span>
       <span class="change">Change</span>
     </button>
   </section>`;
@@ -1108,7 +1106,10 @@ async function applyTheme() {
   $('themeNote').textContent = !r.ok || body.error ? (body.error || 'Could not apply that theme.')
     : body.appliedToTrunk ? `Applied: ${body.theme}.`
     : `Saved: ${body.theme}. It goes into the app when the build finishes.`;
-  if (r.ok && !body.error) themes.current = { ...chosen };
+  if (r.ok && !body.error) {
+    themes.current = { ...chosen };
+    $('themeDialog').close();
+  }
   paintTiles();
   paintThemeRow();
   poll();
@@ -1132,7 +1133,7 @@ async function paintThemeRow() {
   if (!themes) await loadThemes();
   $('themeRowStyles').textContent = themes.themes
     .filter(t => t.id === themes.current.theme)
-    .map(t => themeCss(t, '.themerow .swatches', themes.current)).join('');
+    .map(t => themeCss(t, '.themerow', themes.current)).join('');
 }
 
 $('themeApply').addEventListener('click', applyTheme);

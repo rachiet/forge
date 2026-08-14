@@ -286,10 +286,11 @@ app for every task. So appearance stops being generated work at all.
   no `choose_theme`. Its prompt forbids describing themes in prose or writing requirements
   about colours — appearance is a free, instant, reversible click, and a requirement line
   about it turns that into paid engineering.
-- **The id lands in `project_meta`; the record lands in the change log.** The requirement
-  text stays behavioural, and `AppearanceChange` stamps `- Theme: …` onto the pending change
-  entry when the client is mid-change-request, or writes its own already-approved entry when
-  they are not. No CR flow, no Feature, no tokens.
+- **The id lands in `project_meta` and nowhere else.** A theme is a setting, not something that
+  was asked for and built: `AppearanceChange.Apply` installs the kit and commits the stylesheet,
+  and writes no change-log entry, no requirement line and no task. The client flips themes as
+  often as they like, and the change log stays the record of what was actually requested. The
+  requirement text stays behavioural either way.
 - **`UiGate` is the enforcement, not the prompt.** Prompts are manners; this repo's
   stance is mechanical (the PM cannot read `src/` because `PathScope` refuses it).
   Run from `CiRunner.Run` beside `StaticFileCheck`, and skipped entirely where the kit
