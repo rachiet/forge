@@ -101,13 +101,15 @@ public static class PageProbe
         };
 
         var url = baseUrl.TrimEnd('/') + (path.StartsWith('/') ? path : "/" + path);
+        int? status = null;
         try
         {
-            await page.GotoAsync(url, new PageGotoOptions
+            var response = await page.GotoAsync(url, new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.NetworkIdle,
                 Timeout = (float)LoadTimeout.TotalMilliseconds,
             }).ConfigureAwait(false);
+            status = response?.Status;
         }
         catch (PlaywrightException ex)
         {
@@ -135,7 +137,7 @@ public static class PageProbe
                 e.TestId, e.Tag, e.Role, e.Text, e.Classes,
                 new PageBox(e.X, e.Y, e.Width, e.Height),
                 e.Visible, e.MarkedHidden, e.Background, e.Ink)).ToList(),
-            errors, failures, shot);
+            errors, failures, shot, status);
     }
 
     /// <summary>

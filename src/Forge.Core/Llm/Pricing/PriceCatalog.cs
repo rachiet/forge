@@ -81,6 +81,22 @@ public sealed class PriceCatalog
             "will not run a model it cannot price. Check the model id in the agent recipe.");
     }
 
+    /// <summary>
+    /// How many output tokens one model will emit in a single turn, as the table reports it, or
+    /// null when it lists none. The same entry that prices a model states its ceiling, so the
+    /// caller that already resolved a model id needs no second table to size a request against
+    /// it. A miss is not fatal the way a missing rate is — the caller falls back to its own
+    /// default — so this does not force a refresh.
+    /// </summary>
+    public int? MaxOutputFor(string model) =>
+        Snapshot.Models.TryGetValue(model, out var entry)
+        && entry.ValueKind == JsonValueKind.Object
+        && entry.TryGetProperty("max_output_tokens", out var max)
+        && max.TryGetInt32(out var tokens)
+        && tokens > 0
+            ? tokens
+            : null;
+
     public TimeSpan Age() => _clock() - Snapshot.FetchedAt;
 
     public bool IsStale() => Age() > _ttl;

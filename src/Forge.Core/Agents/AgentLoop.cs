@@ -186,6 +186,12 @@ public sealed class AgentLoop(
         // Resolved once per instance: the model must not change under a conversation.
         var model = llm.ModelFor(_recipe.Tier);
 
+        // What this model will emit in one turn, rather than one number for every provider: a
+        // document that does not fit the ceiling cannot be written at all, and the turns spent
+        // discovering that are paid for in full. The recipe's own figure is the fallback for a
+        // model nothing describes.
+        var maxTokens = llm.MaxOutputFor(_recipe.Tier) ?? _recipe.MaxTokens;
+
         var instanceId = _instances.NewId(_recipe.InstancePrefix);
         _instances.Start(instanceId, _recipe.Role, model, task?.Id);
         log.Event(EventType.InstanceStart,
@@ -216,7 +222,7 @@ public sealed class AgentLoop(
                     System = system,
                     // A snapshot, so a retrying adapter never sees later turns appear in it.
                     Messages = [.. conversation],
-                    MaxTokens = _recipe.MaxTokens,
+                    MaxTokens = maxTokens,
                     // The provider's own schema layer enforces the shape, so a call cannot
                     // arrive in a form the toolset would have to guess at.
                     Tools = AgentToolset.Definitions(_recipe),
@@ -264,7 +270,7 @@ public sealed class AgentLoop(
 
                 if (++truncatedTurns >= MaxTruncatedTurns)
                 {
-                    var why = $"The model was cut off at the {_recipe.MaxTokens}-token output limit on "
+                    var why = $"The model was cut off at the {maxTokens}-token output limit on "
                             + $"{MaxTruncatedTurns} consecutive turns; it cannot emit a call small enough to run.";
                     log.Event(EventType.ErrorInternal, why);
                     return Finish(instanceId, EndReason.Crash, iterations, toolset, task, log,
@@ -275,7 +281,7 @@ public sealed class AgentLoop(
                     ? partial
                     : "(cut off at the output limit)"));
                 conversation.Add(new LlmMessage("user", $"""
-                    Your last turn hit the {_recipe.MaxTokens}-token output limit and was cut off
+                    Your last turn hit the {maxTokens}-token output limit and was cut off
                     mid-answer, so nothing ran and nothing changed — the tool call it contained
                     arrived incomplete and was discarded.
 

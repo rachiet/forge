@@ -27,8 +27,15 @@ public static class PageCheck
     /// <param name="changedFiles">
     /// The files this task changed. Empty means "run it anyway" — a caller with no diff to hand.
     /// </param>
+    /// <param name="requirement">
+    /// The requirement file this task is building, e.g. `01-clients.md`. A declared page carries
+    /// the requirement it serves, so this is what says which pages are this task's to produce:
+    /// a page it owns and did not build fails, and a page another task owns is left alone until
+    /// that task runs. Null checks every page the application actually serves.
+    /// </param>
     public static string? Check(
-        string workspaceDir, string browsersDir, IReadOnlyList<string>? changedFiles = null)
+        string workspaceDir, string browsersDir,
+        IReadOnlyList<string>? changedFiles = null, string? requirement = null)
     {
         if (changedFiles is { Count: > 0 } && !TouchesInterface(changedFiles)) return null;
         if (AgentToolset.Discover(workspaceDir) is not { } target) return null;
@@ -53,7 +60,15 @@ public static class PageCheck
                 .GetAwaiter().GetResult();
             if (pages is null) return null;   // no browser on this machine: nothing to report
 
-            var problems = PageHealth.Problems(pages).Concat(MissingHandles(declared, pages)).ToList();
+            // A page nothing serves yet belongs to a task that has not run. Judging it here
+            // fails whichever task happens to be in flight for work it was never given.
+            var missing = pages.Where(p => p.NotFound).ToList();
+            var rendered = pages.Where(p => !p.NotFound).ToList();
+
+            var problems = PageHealth.Problems(rendered)
+                .Concat(MissingHandles(declared, rendered))
+                .Concat(Unbuilt(declared, missing, requirement))
+                .ToList();
             return problems.Count == 0
                 ? null
                 : "The page was opened in a browser and these are what it showed:\n\n"
@@ -62,6 +77,29 @@ public static class PageCheck
         finally
         {
             app.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Declared pages this task was meant to build and did not. A page is this task's when the
+    /// contract says it serves the requirement the task names; every other unserved page is
+    /// another task's still-unwritten work and is passed over silently. With no requirement to
+    /// go on, nothing is owed — the acceptance run at the end of the board is what finally
+    /// insists every declared page exists.
+    /// </summary>
+    private static IEnumerable<string> Unbuilt(
+        Design.InterfaceContract? declared, IReadOnlyList<PageSnapshot> missing, string? requirement)
+    {
+        if (declared is null || requirement is not { Length: > 0 }) yield break;
+
+        foreach (var page in declared.Pages)
+        {
+            if (!page.Requirement.Equals(requirement, StringComparison.OrdinalIgnoreCase)) continue;
+            if (missing.All(m => m.Path != page.Path)) continue;
+
+            yield return $"{page.Path}: nothing is served at this path, but the contract declares "
+                       + $"it as the page for {page.Requirement}, which is this task's requirement. "
+                       + "Build the page, or move the declaration to the task that will.";
         }
     }
 
@@ -108,9 +146,12 @@ public static class PageCheck
     /// <summary>
     /// Whether a change could alter what the page renders: its markup, styling, scripts, or the
     /// static files it serves. A change to storage or a domain class cannot, so it pays nothing.
+    /// The UI kit is excluded, since the harness installs it into every task's workspace — a
+    /// task that wrote no page would otherwise look like interface work on the strength of files
+    /// it never touched.
     /// </summary>
     public static bool TouchesInterface(IEnumerable<string> changedFiles) =>
-        changedFiles.Any(file =>
+        changedFiles.Where(file => !Ui.UiKit.IsKitFile(file)).Any(file =>
             file.Contains("wwwroot/", StringComparison.OrdinalIgnoreCase) ||
             file.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
             file.EndsWith(".css", StringComparison.OrdinalIgnoreCase) ||

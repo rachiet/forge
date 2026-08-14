@@ -41,7 +41,7 @@ public static class CiRunner
     /// Where Chromium is installed. Null skips the browser check entirely, which is what an
     /// orchestration test with no toolchain wants.
     /// </param>
-    public static CiResult Run(string workspaceDir, string? browsersDir = null)
+    public static CiResult Run(string workspaceDir, string? browsersDir = null, string? requirement = null)
     {
         // Ahead of the buildable gate: a repo of static files has nothing to compile and would
         // otherwise skip the one check that reads what it ships.
@@ -71,7 +71,8 @@ public static class CiRunner
         // Last, because it needs the application built: what the compiler and the unit tests
         // cannot see is what the browser draws.
         if (browsersDir is { Length: > 0 } &&
-            PageCheck.Check(workspaceDir, browsersDir, PageCheck.ChangedFiles(workspaceDir)) is { } broken)
+            PageCheck.Check(workspaceDir, browsersDir, PageCheck.ChangedFiles(workspaceDir), requirement)
+                is { } broken)
             return new CiResult(false, "page", broken);
 
         return tests;

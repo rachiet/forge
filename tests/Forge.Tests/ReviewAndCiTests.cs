@@ -50,7 +50,7 @@ public class ReviewAndCiTests : IDisposable
                 assignedRole: AgentRole.Engineer, createdBy: "principal")).Id,
             TaskStatus.Ready);
 
-    private TaskRunner Runner(ILlmClient llm, Func<string, CiResult> ci) => new(
+    private TaskRunner Runner(ILlmClient llm, Func<string, TaskRecord, CiResult> ci) => new(
         _paths, Project, _conn,
         new MeteredLlmClient(llm, _conn, TestPrices.Catalog),
         new SecretsVault(_paths.VaultDir), PromptLibrary.Resolve(), logger: null, ci: ci);
@@ -58,9 +58,9 @@ public class ReviewAndCiTests : IDisposable
     private string ShowFromTrunk(string path) =>
         Git.Require(_paths.ProjectBareRepo(Project), "show", $"master:{path}").Stdout;
 
-    private static Func<string, CiResult> CiPass => _ => CiResult.Skip("stub: pass");
-    private static Func<string, CiResult> CiFail =>
-        _ => new CiResult(false, "build", "error CS1002: ; expected");
+    private static Func<string, TaskRecord, CiResult> CiPass => (_, _) => CiResult.Skip("stub: pass");
+    private static Func<string, TaskRecord, CiResult> CiFail =>
+        (_, _) => new CiResult(false, "build", "error CS1002: ; expected");
 
     private static ScriptedTurn Engineer(string file, string content, string summary) =>
         ScriptedLlmClient.Turn(
@@ -170,7 +170,7 @@ public class ReviewAndCiTests : IDisposable
 
         // A gate blowing up (git failure, review crash) must not leave the task in
         // in_review/merging, which the claim query never picks up.
-        var outcome = await Runner(llm, _ => throw new InvalidOperationException("git exploded"))
+        var outcome = await Runner(llm, (_, _) => throw new InvalidOperationException("git exploded"))
             .RunAsync(_tasks.Get(task.Id));
 
         Assert.Equal(TaskStatus.Blocked, outcome.Status);

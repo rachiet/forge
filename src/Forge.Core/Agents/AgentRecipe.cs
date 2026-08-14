@@ -44,6 +44,11 @@ public sealed record AgentRecipe
     /// <summary>How many turns one instance of this role may take.</summary>
     public int IterationCap { get; init; } = 40;
 
+    /// <summary>
+    /// Output tokens per turn to ask for when nothing knows the model's own ceiling. The client
+    /// answers first (<see cref="Llm.ILlmClient.MaxOutputFor"/>), since how much a model will
+    /// emit is provider knowledge; this is the floor a model absent from the price table gets.
+    /// </summary>
     public int MaxTokens { get; init; } = 8_192;
 
     /// <summary>Prefix for this role's agent_instances ids, e.g. `eng-20260718-093012`.</summary>

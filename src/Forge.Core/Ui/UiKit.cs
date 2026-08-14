@@ -20,6 +20,19 @@ public static class UiKit
     /// <summary>The one stylesheet an application may add of its own.</summary>
     public const string AppStylesheet = "app.css";
 
+    /// <summary>
+    /// Whether a repo-relative path is one of the kit's own files rather than the application's.
+    /// The harness writes these into every workspace, so anything reading a diff to judge what a
+    /// task did must discount them.
+    /// </summary>
+    public static bool IsKitFile(string path)
+    {
+        var normalised = path.Replace('\\', '/');
+        return normalised.Contains(KitDirectory, StringComparison.OrdinalIgnoreCase)
+            || normalised.Equals(CatalogueFile, StringComparison.OrdinalIgnoreCase)
+            || normalised.EndsWith($"/{CatalogueFile}", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>The theme ids the kit ships, read from the templates on disk.</summary>
     public static IReadOnlyList<string> Themes(PromptLibrary prompts) => prompts.UiThemes();
 

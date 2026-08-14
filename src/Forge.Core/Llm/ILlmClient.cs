@@ -85,6 +85,14 @@ public interface ILlmClient
 
     /// <summary>The concrete model id this provider uses for the given tier.</summary>
     string ModelFor(ModelTier tier);
+
+    /// <summary>
+    /// The most output tokens this tier's model will emit in one turn, or null when nothing
+    /// knows: the caller then sizes the request from its own default. A ceiling belongs here for
+    /// the same reason a model id does — it is provider knowledge, and a recipe that named its
+    /// own number would be naming a provider quantity again.
+    /// </summary>
+    int? MaxOutputFor(ModelTier tier) => null;
 }
 
 /// <summary>

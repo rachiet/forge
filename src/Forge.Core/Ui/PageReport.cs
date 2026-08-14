@@ -49,6 +49,10 @@ public sealed record PageElement(
 /// <param name="ConsoleErrors">Console errors and page exceptions, in the order they happened.</param>
 /// <param name="FailedRequests">Requests that failed or returned 4xx/5xx, as `status url`.</param>
 /// <param name="Screenshot">Absolute path of the screenshot taken, when one was.</param>
+/// <param name="Status">
+/// The HTTP status the navigation returned, or null when the browser reported none. This is how
+/// "the page exists" is told from "it is broken": a path nothing serves answers 404.
+/// </param>
 public sealed record PageSnapshot(
     string Path,
     string Title,
@@ -57,10 +61,14 @@ public sealed record PageSnapshot(
     IReadOnlyList<PageElement> Elements,
     IReadOnlyList<string> ConsoleErrors,
     IReadOnlyList<string> FailedRequests,
-    string? Screenshot = null)
+    string? Screenshot = null,
+    int? Status = null)
 {
     /// <summary>Whether the page needs sideways scrolling at the width it was rendered at.</summary>
     public bool OverflowsSideways => ScrollWidth > ViewportWidth + 1;
+
+    /// <summary>Whether nothing was served at this path: it has not been built yet.</summary>
+    public bool NotFound => Status is 404;
 
     /// <summary>
     /// The page as an agent reads it: one line per element with its handle, position, size and

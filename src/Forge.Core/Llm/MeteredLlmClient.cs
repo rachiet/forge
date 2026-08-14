@@ -29,6 +29,14 @@ public sealed class MeteredLlmClient(
 
     public string ModelFor(ModelTier tier) => inner.ModelFor(tier);
 
+    /// <summary>
+    /// The tier's output ceiling, read from the same price table entry that rates the model.
+    /// The adapter answers first where it knows better; otherwise the table decides, and a model
+    /// the table does not describe returns null for the caller to default.
+    /// </summary>
+    public int? MaxOutputFor(ModelTier tier) =>
+        inner.MaxOutputFor(tier) ?? prices.MaxOutputFor(inner.ModelFor(tier));
+
     /// <summary>Checks the budgets, makes the call, then ledgers what it cost.</summary>
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {

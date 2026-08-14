@@ -42,7 +42,7 @@ public sealed class TaskRunner(
     SecretsVault vault,
     PromptLibrary prompts,
     ForgeLogger? logger = null,
-    Func<string, CiResult>? ci = null)
+    Func<string, TaskRecord, CiResult>? ci = null)
 {
     /// <summary>Engineer attempts on one task before the Principal takes it over.</summary>
     private const int RevisionCap = 5;
@@ -76,9 +76,10 @@ public sealed class TaskRunner(
     private readonly WorkspaceManager _workspaces = new(paths, project);
     private readonly ForgeLogger _log = logger ?? ForgeLogger.Null;
     // Production CI opens a browser on interface work; the injected one in tests does not, so an
-    // orchestration test needs neither a toolchain nor a browser.
-    private readonly Func<string, CiResult> _ci =
-        ci ?? (workspace => CiRunner.Run(workspace, paths.BrowsersDir));
+    // orchestration test needs neither a toolchain nor a browser. The task travels with the
+    // workspace because the browser check judges only the pages this task's requirement owns.
+    private readonly Func<string, TaskRecord, CiResult> _ci =
+        ci ?? ((workspace, task) => CiRunner.Run(workspace, paths.BrowsersDir, task.RequirementsRef?.File));
 
     /// <summary>
     /// Runs the given task, or the next claimable one. Abandoned work — a task left
@@ -483,7 +484,7 @@ public sealed class TaskRunner(
             if (_workspaces.HasCommitsAhead(task.Id, branch))
             {
                 _workspaces.PushBranch(task.Id, branch);
-                if (_ci(_workspaces.Path(task.Id)) is { Passed: true })
+                if (_ci(_workspaces.Path(task.Id), task) is { Passed: true })
                 {
                     Transition(task.Id, TaskStatus.InProgress, log);
                     Transition(task.Id, TaskStatus.InReview, log);
@@ -897,13 +898,20 @@ public sealed class TaskRunner(
     {
         if (AgentToolset.Discover(workspace) is not { } target) return "";
 
+        // Every page the contract declares, not just the root: QA runs on a complete board, so
+        // all of them exist, and a page it never saw is one it writes assertions for blind.
+        var declared = ApiContract.Load(workspace)?.Interface.Pages ?? [];
+        var visit = declared.Select(page => page.Path).Distinct().ToArray() is { Length: > 0 } fromContract
+            ? fromContract
+            : ["/"];
+
         using var app = AppHost.Start(workspace, target.ProjectPath);
         if (app?.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl) return "";
 
         IReadOnlyList<Ui.PageSnapshot>? pages;
         try
         {
-            pages = Ui.PageProbe.CaptureAsync(baseUrl, ["/"], paths.BrowsersDir)
+            pages = Ui.PageProbe.CaptureAsync(baseUrl, visit, paths.BrowsersDir)
                 .GetAwaiter().GetResult();
         }
         finally
@@ -912,11 +920,10 @@ public sealed class TaskRunner(
         }
         if (pages is not { Count: > 0 }) return "";
 
-        _log.Message("QA brief: captured the rendered page for the suite author");
+        _log.Message($"QA brief: captured {pages.Count} rendered page(s) for the suite author");
 
         // The declared handles, which CI has already proved are on the page. This is the
         // vocabulary the suite is written in, so it is stated before the measurements.
-        var declared = ApiContract.Load(workspace)?.Interface.Pages ?? [];
         var handles = declared.Count == 0
             ? ""
             : "### The handles the contract declares\n\n"
@@ -934,10 +941,22 @@ public sealed class TaskRunner(
 
             The harness opened the running app at {Ui.PageProbe.ViewportWidth}px and measured
             every element. These are computed values — position, size, visibility and colour as
-            the page actually resolved them, which is the only thing worth asserting about an
-            interface.
+            the page actually resolved them.
 
             {string.Join("\n", pages.Select(p => p.Describe()))}
+
+            This is what the page looks like right now, not what it is supposed to look like. It
+            was measured on an empty database, and the client can change the theme, density and
+            corner radius with one click, which moves every number and every colour above. So:
+            the requirements say what to assert, and this table only says what to address and
+            what state it starts in. Where the two disagree the requirement wins — write the
+            assertion the requirement calls for and file a bug for the difference, rather than
+            recording what you see as correct.
+
+            Never assert an absolute position, size or colour string from this table. Assert the
+            relations instead — `AreSideBySideAsync` and `AreDifferentColours` compute them from
+            the page as it stands when the test runs, so they survive a theme the client picks
+            later. Element ids are the stable part; everything else here is a snapshot.
 
             Write page tests with the `Browser` helper already in the suite
             (`{AcceptanceSuite.Directory}/Browser.cs`): `await using var page = await
@@ -1213,7 +1232,7 @@ public sealed class TaskRunner(
         {
             // CI runs before review, so the Principal never reviews code that does not build.
             log.Event(EventType.CiRun, "dotnet build/test");
-            var ci = _ci(_workspaces.Path(task.Id));
+            var ci = _ci(_workspaces.Path(task.Id), task);
             if (!ci.Passed)
             {
                 log.Event(EventType.CiFailed, ci.Summary);

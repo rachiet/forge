@@ -114,13 +114,18 @@ public sealed class AnthropicLlmClient : ILlmClient
     }
 
     /// <summary>
-    /// One turn as the SDK's blocks: its text, the calls an assistant turn made, and the results
-    /// a following turn returns. The last block of the last message carries a cache breakpoint,
-    /// so the next turn reads this whole prefix at cache rates and writes only its new suffix.
+    /// One turn as the SDK's blocks: the results a following turn returns, its text, and the
+    /// calls an assistant turn made. Results come first because the API refuses a turn whose
+    /// tool_result blocks do not open it. The last block of the last message carries a cache
+    /// breakpoint, so the next turn reads this whole prefix at cache rates and writes only its
+    /// new suffix.
     /// </summary>
     internal static MessageParam ToSdkMessage(ForgeMessage message, bool cacheHere)
     {
         var blocks = new List<ContentBlockParam>();
+
+        foreach (var result in message.ToolResults)
+            blocks.Add(new ToolResultBlockParam { ToolUseID = result.CallId, Content = result.Output });
 
         if (message.Content is { Length: > 0 })
             blocks.Add(new TextBlockParam { Text = message.Content });
@@ -134,9 +139,6 @@ public sealed class AnthropicLlmClient : ILlmClient
                 Input = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(call.ArgumentsJson) ?? [],
             });
         }
-
-        foreach (var result in message.ToolResults)
-            blocks.Add(new ToolResultBlockParam { ToolUseID = result.CallId, Content = result.Output });
 
         // A turn has to carry something; an empty one would be rejected.
         if (blocks.Count == 0) blocks.Add(new TextBlockParam { Text = message.Content });

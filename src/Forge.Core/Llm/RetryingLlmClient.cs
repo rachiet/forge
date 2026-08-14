@@ -52,6 +52,8 @@ public sealed class RetryingLlmClient(
 
     public string ModelFor(ModelTier tier) => inner.ModelFor(tier);
 
+    public int? MaxOutputFor(ModelTier tier) => inner.MaxOutputFor(tier);
+
     public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         var delay = FirstDelay;
