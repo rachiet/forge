@@ -49,13 +49,14 @@ public static class Schema
             ('pm','principal','engineer','qa','researcher')),
           status TEXT NOT NULL DEFAULT 'created' CHECK(status IN
             ('created','ready','claimed','in_progress','in_review','merging',
-             'qa','done','blocked','out_of_budget','triage','rejected','active',
+             'qa','done','stalled','triage','rejected','active',
              'needs_human','cancelled')),
           token_budget INTEGER NOT NULL CHECK(token_budget > 0),
           tokens_spent INTEGER NOT NULL DEFAULT 0 CHECK(tokens_spent >= 0),
-          -- How many times this task has run out of budget or turns. At the second strike
-          -- the Principal implements it instead of the engineer.
-          out_of_budget_count INTEGER NOT NULL DEFAULT 0 CHECK(out_of_budget_count >= 0),
+          -- How many times this task has stalled: a spent budget or turn cap, an agent that
+          -- gave up, or an attempt allowance used up. At the second the Principal implements
+          -- it instead of the engineer; past that it is cut down.
+          stall_count INTEGER NOT NULL DEFAULT 0 CHECK(stall_count >= 0),
           -- How many splits deep this task is: 0 if the Principal planned it, 1 if it
           -- replaced a task that was too big. break_and_relink refuses above its cap.
           split_depth INTEGER NOT NULL DEFAULT 0 CHECK(split_depth >= 0),

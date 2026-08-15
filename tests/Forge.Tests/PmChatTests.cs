@@ -246,8 +246,8 @@ public class PmChatTests : IDisposable
         var task = tasks.Insert(TaskRecord.Create(
             TaskType.Task, "Stuck", "Could not be landed", 60_000,
             assignedRole: AgentRole.Engineer) with { Status = TaskStatus.NeedsHuman });
-        tasks.IncrementOutOfBudgetCount(task.Id);
-        tasks.IncrementOutOfBudgetCount(task.Id);
+        tasks.IncrementStallCount(task.Id);
+        tasks.IncrementStallCount(task.Id);
 
         var llm = new ScriptedLlmClient(
             ScriptedLlmClient.Tool("retriage", ("task", task.Id.ToString()),
@@ -259,7 +259,7 @@ public class PmChatTests : IDisposable
         var after = tasks.Get(task.Id);
         Assert.Equal(TaskStatus.Triage, after.Status);
         // Reset, or it returns to the Principal already at its ceiling and is given up at once.
-        Assert.Equal(0, after.OutOfBudgetCount);
+        Assert.Equal(0, after.StallCount);
         Assert.Contains("existing repository", after.ProgressNote);
     }
 }

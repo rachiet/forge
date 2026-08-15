@@ -194,7 +194,7 @@ public class TaskRunnerTests : IDisposable
 
         var outcome = await Runner(llm).RunAsync(_tasks.Get(task.Id));
 
-        Assert.Equal(TaskStatus.Blocked, outcome.Status);
+        Assert.Equal(TaskStatus.Stalled, outcome.Status);
         Assert.Contains("no commits", outcome.Summary);
         Assert.Contains("produced no commits", _tasks.Get(task.Id).ProgressNote!);
 
@@ -235,7 +235,7 @@ public class TaskRunnerTests : IDisposable
 
         Assert.Equal(EndReason.Iterations, killed.End);
         Assert.True(_workspaces.Exists(task.Id), "the workspace must survive so work isn't lost");
-        _tasks.Transition(task.Id, TaskStatus.Blocked);
+        _tasks.Transition(task.Id, TaskStatus.Stalled);
 
         // --- Instance 2: a genuinely fresh client. It has never seen the conversation. ---
         var resuming = new ScriptedLlmClient(
@@ -282,8 +282,8 @@ public class TaskRunnerTests : IDisposable
         var task = ReadyTask(budget);
         _tasks.Transition(task.Id, TaskStatus.Claimed);
         _tasks.Transition(task.Id, TaskStatus.InProgress);
-        _tasks.Transition(task.Id, TaskStatus.OutOfBudget);
-        for (var i = 0; i < strikes; i++) _tasks.IncrementOutOfBudgetCount(task.Id);
+        _tasks.Transition(task.Id, TaskStatus.Stalled);
+        for (var i = 0; i < strikes; i++) _tasks.IncrementStallCount(task.Id);
         return _tasks.Get(task.Id);
     }
 
@@ -296,9 +296,9 @@ public class TaskRunnerTests : IDisposable
 
         var outcome = await Runner(llm).RunAsync(_tasks.Get(task.Id));
 
-        Assert.Equal(TaskStatus.OutOfBudget, outcome.Status);
+        Assert.Equal(TaskStatus.Stalled, outcome.Status);
         var record = _tasks.Get(task.Id);
-        Assert.Equal(1, record.OutOfBudgetCount);        // one strike counted
+        Assert.Equal(1, record.StallCount);        // one strike counted
         Assert.True(_workspaces.Exists(task.Id));        // workspace kept for the Principal
         Assert.Contains(new MessageRepository(_conn).Pending("principal"),
             m => m.Payload.Contains("out_of_budget"));   // handed up the ladder, not to the PM
@@ -322,8 +322,8 @@ public class TaskRunnerTests : IDisposable
 
         // The third crash exceeds the retry cap: hand it to the Principal.
         var final = await runner.RunAsync(_tasks.Get(task.Id));
-        Assert.Equal(TaskStatus.OutOfBudget, _tasks.Get(task.Id).Status);
-        Assert.Equal(TaskStatus.OutOfBudget, final.Status);
+        Assert.Equal(TaskStatus.Stalled, _tasks.Get(task.Id).Status);
+        Assert.Equal(TaskStatus.Stalled, final.Status);
     }
 
     [Fact]
@@ -349,7 +349,7 @@ public class TaskRunnerTests : IDisposable
         for (var i = 1; i <= 2; i++) await crashing.RunAsync(_tasks.Get(task.Id));
 
         Assert.Equal(TaskStatus.InProgress, _tasks.Get(task.Id).Status);
-        Assert.Equal(0, _tasks.Get(task.Id).OutOfBudgetCount);
+        Assert.Equal(0, _tasks.Get(task.Id).StallCount);
     }
 
     [Fact]

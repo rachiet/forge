@@ -26,7 +26,7 @@ public sealed class TaskRepository(IDbConnection conn)
         public string Status { get; init; } = "";
         public int TokenBudget { get; init; }
         public int TokensSpent { get; init; }
-        public int OutOfBudgetCount { get; init; }
+        public int StallCount { get; init; }
         public int SplitDepth { get; init; }
         public string? ProgressNote { get; init; }
         public string? BranchName { get; init; }
@@ -51,7 +51,7 @@ public sealed class TaskRepository(IDbConnection conn)
             Status = SnakeCaseEnum.Parse<TaskStatus>(Status),
             TokenBudget = TokenBudget,
             TokensSpent = TokensSpent,
-            OutOfBudgetCount = OutOfBudgetCount,
+            StallCount = StallCount,
             SplitDepth = SplitDepth,
             ProgressNote = ProgressNote,
             BranchName = BranchName,
@@ -70,7 +70,7 @@ public sealed class TaskRepository(IDbConnection conn)
                requirements_ref AS RequirementsRef,
                assigned_role AS AssignedRole, status AS Status,
                token_budget AS TokenBudget, tokens_spent AS TokensSpent,
-               out_of_budget_count AS OutOfBudgetCount, split_depth AS SplitDepth,
+               stall_count AS StallCount, split_depth AS SplitDepth,
                progress_note AS ProgressNote, branch_name AS BranchName,
                created_by AS CreatedBy, created_at AS CreatedAt, updated_at AS UpdatedAt
         FROM tasks
@@ -163,14 +163,14 @@ public sealed class TaskRepository(IDbConnection conn)
     }
 
     /// <summary>
-    /// The lowest-id task in a status the Principal owns — triage, blocked or out_of_budget —
+    /// The lowest-id task in a status the Principal owns — triage or stalled —
     /// or null. needs_human is excluded: only the client can clear it.
     /// </summary>
     public TaskRecord? NextPrincipalOwned()
     {
         var id = conn.QueryFirstOrDefault<long?>("""
             SELECT id FROM tasks
-            WHERE status IN ('out_of_budget','blocked','triage')
+            WHERE status IN ('stalled','triage')
             ORDER BY id LIMIT 1
             """);
         return id is { } i ? Get(i) : null;
@@ -230,15 +230,15 @@ public sealed class TaskRepository(IDbConnection conn)
     /// counted somewhere else — engineer attempts used up, Principal attempts used up — can
     /// hand the task to the rung that answers it.
     /// </summary>
-    public void SetOutOfBudgetCount(long taskId, int count) =>
+    public void SetStallCount(long taskId, int count) =>
         conn.Execute("""
-            UPDATE tasks SET out_of_budget_count = @count, updated_at = datetime('now')
+            UPDATE tasks SET stall_count = @count, updated_at = datetime('now')
             WHERE id = @taskId
             """, new { taskId, count });
 
-    public void ResetOutOfBudgetCount(long taskId) =>
+    public void ResetStallCount(long taskId) =>
         conn.Execute("""
-            UPDATE tasks SET out_of_budget_count = 0, updated_at = datetime('now') WHERE id = @taskId
+            UPDATE tasks SET stall_count = 0, updated_at = datetime('now') WHERE id = @taskId
             """, new { taskId });
 
     /// <summary>
@@ -341,14 +341,14 @@ public sealed class TaskRepository(IDbConnection conn)
             """, new { taskId, note });
 
     /// <summary>Records one budget or iteration exhaustion and returns the task's new strike count.</summary>
-    public int IncrementOutOfBudgetCount(long taskId)
+    public int IncrementStallCount(long taskId)
     {
         conn.Execute("""
-            UPDATE tasks SET out_of_budget_count = out_of_budget_count + 1, updated_at = datetime('now')
+            UPDATE tasks SET stall_count = stall_count + 1, updated_at = datetime('now')
             WHERE id = @taskId
             """, new { taskId });
         return conn.ExecuteScalar<int>(
-            "SELECT out_of_budget_count FROM tasks WHERE id = @taskId", new { taskId });
+            "SELECT stall_count FROM tasks WHERE id = @taskId", new { taskId });
     }
 
     /// <summary>Sets a task's token budget to an absolute value.</summary>

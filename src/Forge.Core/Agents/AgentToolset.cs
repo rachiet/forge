@@ -790,7 +790,7 @@ public sealed partial class AgentToolset(
         var guidance = call.Arg("guidance");
 
         var current = _tasks.Get(task.Id).Status;
-        if (current is not (TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage))
+        if (current is not (TaskStatus.Stalled or TaskStatus.Triage))
             return new ToolOutcome(
                 $"ERROR: redirect only applies to a task being triaged; task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current)}.");
 
@@ -897,7 +897,7 @@ public sealed partial class AgentToolset(
             return new ToolOutcome("ERROR: reject_bug needs a bug — pass a task id, or run it on a bug task.");
         if (bug.Type != TaskType.Bug)
             return new ToolOutcome($"ERROR: reject_bug only applies to bug tasks; task {bugId} is a {SnakeCaseEnum.ToSnakeCase(bug.Type)}.");
-        if (bug.Status is not (TaskStatus.Triage or TaskStatus.InReview or TaskStatus.Blocked))
+        if (bug.Status is not (TaskStatus.Triage or TaskStatus.InReview or TaskStatus.Stalled))
             return new ToolOutcome(
                 $"ERROR: reject_bug applies to a bug in triage, review, or blocked; task {bugId} is {SnakeCaseEnum.ToSnakeCase(bug.Status)}.");
 
@@ -932,7 +932,7 @@ public sealed partial class AgentToolset(
 
         var note = call.Arg("note");
         _tasks.SetProgressNote(id, $"FROM THE CLIENT (via the PM): {note}");
-        _tasks.ResetOutOfBudgetCount(id);
+        _tasks.ResetStallCount(id);
         if (target.Status != TaskStatus.Triage) _tasks.Transition(id, TaskStatus.Triage);
         ResolveEscalations(id);
         new DiscussionRepository(connection).Open(id, "pm", $"[client guidance] {note}");
@@ -982,7 +982,7 @@ public sealed partial class AgentToolset(
         if (task is null) return new ToolOutcome("ERROR: descope needs a task; this run has none.");
 
         var current = _tasks.Get(task.Id);
-        if (current.Status is not (TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage))
+        if (current.Status is not (TaskStatus.Stalled or TaskStatus.Triage))
             return new ToolOutcome($"ERROR: descope only applies to a task being triaged; "
                 + $"task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current.Status)}.");
 
@@ -1051,7 +1051,7 @@ public sealed partial class AgentToolset(
         if (task is null) return new ToolOutcome("ERROR: break_and_relink needs a task; this run has none.");
 
         var current = _tasks.Get(task.Id);
-        if (current.Status is not (TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage))
+        if (current.Status is not (TaskStatus.Stalled or TaskStatus.Triage))
             return new ToolOutcome($"ERROR: break_and_relink only applies to a task being triaged; "
                 + $"task {task.Id} is {SnakeCaseEnum.ToSnakeCase(current.Status)}.");
 

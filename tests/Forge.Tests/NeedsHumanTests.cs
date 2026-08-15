@@ -56,7 +56,7 @@ public class NeedsHumanTests : IDisposable
         // the queue and the board disagreed about whether anything was left to do.
         using var conn = Open();
         var tasks = new TaskRepository(conn);
-        var stuck = Insert(tasks, "stuck", TaskStatus.Blocked, TaskStatus.NeedsHuman);
+        var stuck = Insert(tasks, "stuck", TaskStatus.Stalled, TaskStatus.NeedsHuman);
 
         Assert.Null(tasks.NextPrincipalOwned());
         Assert.Equal([stuck.Id], tasks.AwaitingClient().Select(t => t.Id));
@@ -67,7 +67,7 @@ public class NeedsHumanTests : IDisposable
     {
         using var conn = Open();
         var tasks = new TaskRepository(conn);
-        var blocked = Insert(tasks, "blocked", TaskStatus.Blocked);
+        var blocked = Insert(tasks, "blocked", TaskStatus.Stalled);
 
         Assert.Equal(blocked.Id, tasks.NextPrincipalOwned()?.Id);
     }
@@ -76,7 +76,7 @@ public class NeedsHumanTests : IDisposable
     public void Needs_human_routes_to_the_pm_and_a_blocked_task_to_the_principal()
     {
         Assert.Equal(AgentRole.Pm, TaskTransitions.RoleFor(TaskStatus.NeedsHuman));
-        Assert.Equal(AgentRole.Principal, TaskTransitions.RoleFor(TaskStatus.Blocked));
+        Assert.Equal(AgentRole.Principal, TaskTransitions.RoleFor(TaskStatus.Stalled));
     }
 
     [Fact]
@@ -86,16 +86,16 @@ public class NeedsHumanTests : IDisposable
         // and is given up on before anyone acts on what the client just said.
         using var conn = Open();
         var tasks = new TaskRepository(conn);
-        var stuck = Insert(tasks, "stuck", TaskStatus.Blocked, TaskStatus.NeedsHuman);
-        tasks.IncrementOutOfBudgetCount(stuck.Id);
-        tasks.IncrementOutOfBudgetCount(stuck.Id);
-        tasks.IncrementOutOfBudgetCount(stuck.Id);
+        var stuck = Insert(tasks, "stuck", TaskStatus.Stalled, TaskStatus.NeedsHuman);
+        tasks.IncrementStallCount(stuck.Id);
+        tasks.IncrementStallCount(stuck.Id);
+        tasks.IncrementStallCount(stuck.Id);
 
-        tasks.ResetOutOfBudgetCount(stuck.Id);
+        tasks.ResetStallCount(stuck.Id);
         tasks.Transition(stuck.Id, TaskStatus.Triage);
 
         var after = tasks.Get(stuck.Id);
-        Assert.Equal(0, after.OutOfBudgetCount);
+        Assert.Equal(0, after.StallCount);
         Assert.Equal(TaskStatus.Triage, after.Status);
         Assert.Equal(stuck.Id, tasks.NextPrincipalOwned()?.Id);
     }
@@ -163,7 +163,7 @@ public class NeedsHumanTests : IDisposable
     {
         using var conn = Open();
         var tasks = new TaskRepository(conn);
-        var stuck = Insert(tasks, "polish the layout", TaskStatus.Blocked, TaskStatus.NeedsHuman);
+        var stuck = Insert(tasks, "polish the layout", TaskStatus.Stalled, TaskStatus.NeedsHuman);
         tasks.SetProgressNote(stuck.Id, "needs a decision");
 
         var snapshot = new BoardQuery(conn, "alpha").Snapshot();
@@ -196,7 +196,7 @@ public class NeedsHumanTests : IDisposable
                 "'needs_human','cancelled'", "'cancelled'", StringComparison.Ordinal));
             raw.Execute("""
                 INSERT INTO tasks (type, title, objective, status, token_budget, assigned_role)
-                VALUES ('task', 'legacy', 'objective', 'blocked', 10000, 'engineer')
+                VALUES ('task', 'legacy', 'objective', 'stalled', 10000, 'engineer')
                 """);
         }
 

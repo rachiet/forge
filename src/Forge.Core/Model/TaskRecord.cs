@@ -32,7 +32,7 @@ public sealed record TaskRecord
     public required int TokenBudget { get; init; }
     public int TokensSpent { get; init; }
     /// <summary>How many times this task has exhausted its budget or turns.</summary>
-    public int OutOfBudgetCount { get; init; }
+    public int StallCount { get; init; }
     /// <summary>
     /// How many splits deep this task is: 0 if the Principal planned it, 1 if it replaced a
     /// task too big to land. `break_and_relink` refuses to split past its cap.
@@ -106,38 +106,37 @@ public static class TaskTransitions
         new Dictionary<TaskStatus, TaskStatus[]>
         {
             [TaskStatus.Created] = [TaskStatus.Ready, TaskStatus.Cancelled],
-            // Ready → NeedsHuman is how a task out of engineer attempts leaves the board.
+            // Stalled is reachable from every live status, deliberately: it is the Principal's
+            // queue rather than a step in the pipeline, and a task that cannot get there is a
+            // task the loop will claim again and again with nothing changed.
             [TaskStatus.Ready] =
-                [TaskStatus.Claimed, TaskStatus.Blocked, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
+                [TaskStatus.Claimed, TaskStatus.Stalled, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.Claimed] =
-                [TaskStatus.InProgress, TaskStatus.Ready, TaskStatus.Blocked,
+                [TaskStatus.InProgress, TaskStatus.Ready, TaskStatus.Stalled,
                  TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.InProgress] =
-                [TaskStatus.InReview, TaskStatus.Blocked, TaskStatus.OutOfBudget,
-                 TaskStatus.NeedsHuman, TaskStatus.Cancelled],
+                [TaskStatus.InReview, TaskStatus.Stalled, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             // A reviewer of a bug-fix can reject the underlying bug from InReview.
             [TaskStatus.InReview] =
-                [TaskStatus.Merging, TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.Rejected, TaskStatus.Cancelled],
-            [TaskStatus.Merging] = [TaskStatus.Qa, TaskStatus.InProgress, TaskStatus.Blocked],
-            [TaskStatus.Qa] = [TaskStatus.Done, TaskStatus.InProgress, TaskStatus.Blocked],
-            // Blocked and OutOfBudget are the Principal's: it redirects them to the engineer,
-            // takes them over, or gives up. Triage and Rejected are reachable so the PM can act
-            // on a bug the client reviewed.
-            [TaskStatus.Blocked] =
+                [TaskStatus.Merging, TaskStatus.InProgress, TaskStatus.Stalled,
+                 TaskStatus.Rejected, TaskStatus.Cancelled],
+            [TaskStatus.Merging] = [TaskStatus.Qa, TaskStatus.InProgress, TaskStatus.Stalled],
+            [TaskStatus.Qa] = [TaskStatus.Done, TaskStatus.InProgress, TaskStatus.Stalled],
+            // The Principal's queue: it redirects the task to the engineer, takes it over, or
+            // gives up. Triage and Rejected are reachable so the PM can act on a bug the
+            // client reviewed.
+            [TaskStatus.Stalled] =
                 [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Triage,
                  TaskStatus.Rejected, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
-            [TaskStatus.OutOfBudget] =
-                [TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Blocked,
-                 TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             // Parked on the client: their answer sends it back for triage, or drops it.
             [TaskStatus.NeedsHuman] = [TaskStatus.Triage, TaskStatus.Cancelled],
             // A bug in triage is accepted or rejected; a Feature is decomposed and activated.
             [TaskStatus.Triage] =
                 [TaskStatus.Ready, TaskStatus.Rejected, TaskStatus.Active, TaskStatus.Claimed,
-                 TaskStatus.InProgress, TaskStatus.Blocked, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
+                 TaskStatus.InProgress, TaskStatus.Stalled, TaskStatus.NeedsHuman, TaskStatus.Cancelled],
             [TaskStatus.Rejected] = [],
             // A Feature stays Active while its children build; nothing claims it.
-            [TaskStatus.Active] = [TaskStatus.Done, TaskStatus.Blocked, TaskStatus.Cancelled],
+            [TaskStatus.Active] = [TaskStatus.Done, TaskStatus.Stalled, TaskStatus.Cancelled],
             [TaskStatus.Done] = [],
             [TaskStatus.Cancelled] = [],
         };
@@ -159,8 +158,7 @@ public static class TaskTransitions
         TaskStatus.InReview => AgentRole.Principal,
         TaskStatus.Qa => AgentRole.Qa,
         // Stuck work goes to the Principal, which authored the plan and can re-scope it.
-        TaskStatus.Blocked => AgentRole.Principal,
-        TaskStatus.OutOfBudget => AgentRole.Principal,
+        TaskStatus.Stalled => AgentRole.Principal,
         // A filed bug is the Principal's to accept or reject before any engineer touches it.
         TaskStatus.Triage => AgentRole.Principal,
         // The one status the loop cannot clear; the PM is the rung that talks to the client.

@@ -74,9 +74,9 @@ public class BudgetPauseTests : IDisposable
         var after = _tasks.Get(task.Id);
         // The old behaviour was the bug: strike → out_of_budget → the Principal's
         // queue, for a task that never got to run a single call.
-        Assert.Equal(0, after.OutOfBudgetCount);
-        Assert.NotEqual(TaskStatus.OutOfBudget, after.Status);
-        Assert.NotEqual(TaskStatus.Blocked, after.Status);
+        Assert.Equal(0, after.StallCount);
+        Assert.NotEqual(TaskStatus.Stalled, after.Status);
+        Assert.NotEqual(TaskStatus.Stalled, after.Status);
     }
 
     [Fact]
@@ -105,8 +105,8 @@ public class BudgetPauseTests : IDisposable
         var outcome = await Runner(new ScriptedLlmClient()).RunAsync(_tasks.Get(task.Id));
 
         Assert.False(outcome.ProjectBudgetExhausted);
-        Assert.Equal(1, _tasks.Get(task.Id).OutOfBudgetCount);
-        Assert.Equal(TaskStatus.OutOfBudget, _tasks.Get(task.Id).Status);
+        Assert.Equal(1, _tasks.Get(task.Id).StallCount);
+        Assert.Equal(TaskStatus.Stalled, _tasks.Get(task.Id).Status);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class BudgetPauseTests : IDisposable
         Assert.True(outcome!.ProjectBudgetExhausted);
         // Both tasks intact for the resume — neither struck nor blocked.
         Assert.All(_tasks.List().Where(t => t.Type == TaskType.Task),
-            t => Assert.Equal(0, t.OutOfBudgetCount));
+            t => Assert.Equal(0, t.StallCount));
     }
 
     [Fact]
@@ -136,9 +136,9 @@ public class BudgetPauseTests : IDisposable
         var stuck = _tasks.Insert(TaskRecord.Create(
             TaskType.Task, "Too big", "Do everything", 1_000,
             assignedRole: AgentRole.Engineer));
-        foreach (var s in new[] { TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.OutOfBudget })
+        foreach (var s in new[] { TaskStatus.Ready, TaskStatus.Claimed, TaskStatus.InProgress, TaskStatus.Stalled })
             _tasks.Transition(stuck.Id, s);
-        _tasks.IncrementOutOfBudgetCount(stuck.Id);
+        _tasks.IncrementStallCount(stuck.Id);
 
         var llm = new ScriptedLlmClient(
             ScriptedLlmClient.Tool("create_task", ("display_name", "Some work"), ("milestone", "Build"),

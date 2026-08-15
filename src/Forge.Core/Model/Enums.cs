@@ -12,7 +12,11 @@ public enum TaskType { Feature, Task, Bug, Chore }
 public enum TaskStatus
 {
     Created, Ready, Claimed, InProgress, InReview, Merging,
-    Qa, Done, Blocked, OutOfBudget,
+    Qa, Done,
+    // The Principal's queue. A task lands here whether the harness stopped it (budget or
+    // turn cap) or the agent gave up (`escalate`) — both mean the same thing to whoever
+    // picks it up next, and stall_count decides which rung of the ladder it gets.
+    Stalled,
     // Bug lifecycle: a QA-filed bug lands in Triage (the Principal decides), then
     // becomes Ready (accepted → an engineer fixes it) or Rejected (kept, with the
     // reason, as a durable "not a bug" verdict QA must not re-file).

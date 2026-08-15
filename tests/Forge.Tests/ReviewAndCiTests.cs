@@ -173,7 +173,7 @@ public class ReviewAndCiTests : IDisposable
         var outcome = await Runner(llm, (_, _) => throw new InvalidOperationException("git exploded"))
             .RunAsync(_tasks.Get(task.Id));
 
-        Assert.Equal(TaskStatus.Blocked, outcome.Status);
+        Assert.Equal(TaskStatus.Stalled, outcome.Status);
         Assert.Contains("Integration failed", _tasks.Get(task.Id).ProgressNote);
         // Technical failures climb to the Principal (who can fix them), not the PM.
         Assert.Contains(new MessageRepository(_conn).Pending("principal"),
@@ -201,13 +201,13 @@ public class ReviewAndCiTests : IDisposable
             var next = runner.NextTask(AgentRole.Engineer);
             if (next is null) break;
             outcome = await runner.RunAsync(next);
-            if (outcome.Status == TaskStatus.OutOfBudget) break;
+            if (outcome.Status == TaskStatus.Stalled) break;
         }
 
         // The Principal's queue, at the rung that implements the task directly — not the
         // client, who cannot decide why the build keeps failing.
-        Assert.Equal(TaskStatus.OutOfBudget, outcome.Status);
-        Assert.Equal(2, _tasks.Get(task.Id).OutOfBudgetCount);
+        Assert.Equal(TaskStatus.Stalled, outcome.Status);
+        Assert.Equal(2, _tasks.Get(task.Id).StallCount);
         Assert.Equal(5, new AgentInstanceRepository(_conn).ForTask(task.Id)
             .Count(i => i.Role == AgentRole.Engineer));
         Assert.Contains(new MessageRepository(_conn).Pending("principal"),
@@ -262,12 +262,12 @@ public class ReviewAndCiTests : IDisposable
         for (var i = 0; i < 6; i++)
         {
             outcome = await runner.RunAsync(_tasks.Get(task.Id), AgentRecipe.PrincipalImplementer);
-            if (outcome.Status == TaskStatus.OutOfBudget) break;
+            if (outcome.Status == TaskStatus.Stalled) break;
         }
 
         // Past the direct-implement rung, which is where the cut-it-down play lives.
-        Assert.Equal(TaskStatus.OutOfBudget, outcome.Status);
-        Assert.Equal(3, _tasks.Get(task.Id).OutOfBudgetCount);
+        Assert.Equal(TaskStatus.Stalled, outcome.Status);
+        Assert.Equal(3, _tasks.Get(task.Id).StallCount);
         Assert.Contains(new MessageRepository(_conn).Pending("principal"),
             m => m.Payload.Contains("3 Principal implementation attempts"));
     }

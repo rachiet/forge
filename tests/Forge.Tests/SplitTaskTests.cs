@@ -59,8 +59,8 @@ public class SplitTaskTests : IDisposable
         _tasks.Transition(task.Id, TaskStatus.Ready);
         _tasks.Transition(task.Id, TaskStatus.Claimed);
         _tasks.Transition(task.Id, TaskStatus.InProgress);
-        _tasks.Transition(task.Id, TaskStatus.OutOfBudget);
-        for (var i = 0; i < strikes; i++) _tasks.IncrementOutOfBudgetCount(task.Id);
+        _tasks.Transition(task.Id, TaskStatus.Stalled);
+        for (var i = 0; i < strikes; i++) _tasks.IncrementStallCount(task.Id);
         return _tasks.Get(task.Id);
     }
 

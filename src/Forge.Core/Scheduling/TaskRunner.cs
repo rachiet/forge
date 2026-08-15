@@ -156,17 +156,14 @@ public sealed class TaskRunner(
                 // A plain task reaches triage when the client sent it back with guidance.
                 _ => await TriageAsync(task, ct).ConfigureAwait(false),
             };
-        if (task.Status == TaskStatus.OutOfBudget)
-        {
-            // Past the last strike: one final triage, given the play. If it has already had
-            // that turn, deciding again is not going to help — the harness closes it instead.
-            if (task.OutOfBudgetCount > DirectImplementStrike)
-                return new DiscussionRepository(conn).PlayUsed(task.Id, CutItDownPlay)
-                    ? CloseShort(task, log)
-                    : await TriageAsync(task, ct, AgentRecipe.PrincipalFinalTriage).ConfigureAwait(false);
-            if (task.OutOfBudgetCount >= DirectImplementStrike)
-                return await ImplementDirectlyAsync(task, ct).ConfigureAwait(false);
-        }
+        // Every stalled task climbs the same ladder, and the count alone picks the rung —
+        // whether it stalled because the harness stopped it or because the agent gave up.
+        if (task.StallCount > DirectImplementStrike)
+            return new DiscussionRepository(conn).PlayUsed(task.Id, CutItDownPlay)
+                ? CloseShort(task, log)
+                : await TriageAsync(task, ct, AgentRecipe.PrincipalFinalTriage).ConfigureAwait(false);
+        if (task.StallCount >= DirectImplementStrike)
+            return await ImplementDirectlyAsync(task, ct).ConfigureAwait(false);
         return await TriageAsync(task, ct).ConfigureAwait(false);
     }
 
@@ -323,7 +320,10 @@ public sealed class TaskRunner(
             log.Message($"Task {task.Id}: attaching the {CutItDownPlay} play to final triage.");
         }
 
-        var packet = TriagePacket(task, recipe.Tools.Contains("redirect"))
+        // How the last instance ended is what tells the Principal whether the task needed more
+        // room or was given up on; one status no longer distinguishes them.
+        var lastEnd = _instances.ForTask(task.Id).LastOrDefault(i => i.EndReason is not null)?.EndReason;
+        var packet = TriagePacket(task, recipe.Tools.Contains("redirect"), lastEnd)
             + Section("What has already been said about this task", discussions.History(task.Id))
             + play;
         var result = await RunWithCrashRetryAsync(() =>
@@ -339,7 +339,7 @@ public sealed class TaskRunner(
         // else means the triage itself resolved nothing.
         if (result.End == EndReason.Escalated)
             return ParkOnClient(task.Id, result.ProgressNote ?? "Escalated to the client.", log);
-        if (status is TaskStatus.OutOfBudget or TaskStatus.Blocked or TaskStatus.Triage)
+        if (status is TaskStatus.Stalled or TaskStatus.Triage)
             return GiveUp(task, log);
 
         return new TaskRunOutcome(task.Id, result.End, status,
@@ -377,7 +377,7 @@ public sealed class TaskRunner(
     {
         var log = _log.For(task.Id);
         var recipe = AgentRecipe.PrincipalImplementer;
-        log.Message($"Principal implementing task {task.Id} directly (strike {task.OutOfBudgetCount}).");
+        log.Message($"Principal implementing task {task.Id} directly (strike {task.StallCount}).");
 
         // Raise the task's budget to what the Principal's recipe asks for, if it is lower.
         if (task.TokenBudget < recipe.DefaultBudget) _tasks.SetBudget(task.Id, recipe.DefaultBudget);
@@ -417,11 +417,18 @@ public sealed class TaskRunner(
     /// False on the final triage, whose recipe has no `redirect`. The menu must match the
     /// tools: offering a verdict the harness will refuse wastes a turn and reads as a bug.
     /// </param>
-    private static string TriagePacket(TaskRecord task, bool canRedirect = true)
+    private static string TriagePacket(TaskRecord task, bool canRedirect = true, EndReason? lastEnd = null)
     {
-        var situation = task.Status == TaskStatus.OutOfBudget
-            ? $"ran out of its token/turn budget (strike {task.OutOfBudgetCount} of {DirectImplementStrike})"
-            : "is blocked — an engineer escalated, or the harness could not integrate the work";
+        // Why it stalled reads off the last instance's ending, since one status now covers
+        // being stopped and giving up, and the Principal's move differs between them.
+        var situation = lastEnd switch
+        {
+            EndReason.Budget or EndReason.Iterations =>
+                $"ran out of its token/turn budget (stall {task.StallCount} of {DirectImplementStrike})",
+            EndReason.Escalated => "was escalated — the agent judged it could not proceed",
+            EndReason.Crash => "crashed before it could finish",
+            _ => "is stalled — an agent gave up, or the harness could not integrate the work",
+        };
         var redirectOption = canRedirect
             ? """
               - Wrong approach, or genuinely needed more room → `redirect(guidance, [budget])` with
@@ -1162,7 +1169,7 @@ public sealed class TaskRunner(
     {
         // Ready is the normal claim; OutOfBudget or Blocked is the Principal taking it over.
         var status = _tasks.Get(task.Id).Status;
-        if (status is TaskStatus.Ready or TaskStatus.OutOfBudget or TaskStatus.Blocked)
+        if (status is TaskStatus.Ready or TaskStatus.Stalled)
             Transition(task.Id, TaskStatus.Claimed, log);
         if (_tasks.Get(task.Id).Status == TaskStatus.Claimed)
             Transition(task.Id, TaskStatus.InProgress, log);
@@ -1219,10 +1226,10 @@ public sealed class TaskRunner(
         {
             var note = "Agent reported done but produced no commits — nothing to merge.";
             _tasks.SetProgressNote(task.Id, $"{note} Previous note: {result.ProgressNote}");
-            Transition(task.Id, TaskStatus.Blocked, log);
+            Transition(task.Id, TaskStatus.Stalled, log);
             log.Event(EventType.ErrorInternal, note);
             Notify(task.Id, MessageType.Escalation, "principal", note);
-            return new TaskRunOutcome(task.Id, result.End, TaskStatus.Blocked, note);
+            return new TaskRunOutcome(task.Id, result.End, TaskStatus.Stalled, note);
         }
 
         _workspaces.PushBranch(task.Id, branch);
@@ -1358,13 +1365,11 @@ public sealed class TaskRunner(
     {
         var note = $"Integration failed after the engineer finished: {ex.Message} " +
                    "The branch and workspace are intact; unblock the task to retry the gates.";
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
-            Transition(task.Id, TaskStatus.Blocked, log);
+        StallTask(task.Id, log);
         _tasks.SetProgressNote(task.Id, note);
         log.Event(EventType.ErrorInternal, note);
         Notify(task.Id, MessageType.Escalation, "principal", note);
-        return new TaskRunOutcome(task.Id, end, TaskStatus.Blocked, note);
+        return new TaskRunOutcome(task.Id, end, TaskStatus.Stalled, note);
     }
 
     /// <summary>
@@ -1423,15 +1428,27 @@ public sealed class TaskRunner(
     private TaskRunOutcome HandToLadder(TaskRecord task, ForgeLogger log, int strike, string note)
     {
         _tasks.SetProgressNote(task.Id, note);
-        _tasks.SetOutOfBudgetCount(task.Id, Math.Max(_tasks.Get(task.Id).OutOfBudgetCount, strike));
+        _tasks.SetStallCount(task.Id, Math.Max(_tasks.Get(task.Id).StallCount, strike));
 
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.OutOfBudget && TaskTransitions.IsLegal(current, TaskStatus.OutOfBudget))
-            Transition(task.Id, TaskStatus.OutOfBudget, log);
+        StallTask(task.Id, log);
 
         log.Event(EventType.ErrorInternal, note);
         Notify(task.Id, MessageType.Escalation, "principal", note);
         return new TaskRunOutcome(task.Id, EndReason.Escalated, _tasks.Get(task.Id).Status, note);
+    }
+
+    /// <summary>
+    /// Moves a task into the Principal's queue. Stalled is reachable from every live status,
+    /// so a failure here is a real defect rather than a condition to skip: a task that stays
+    /// where it is gets claimed again, decided the same way, and the loop spins for free.
+    /// </summary>
+    private void StallTask(long taskId, ForgeLogger log)
+    {
+        var current = _tasks.Get(taskId).Status;
+        if (current == TaskStatus.Stalled) return;
+
+        TaskTransitions.Require(current, TaskStatus.Stalled);
+        Transition(taskId, TaskStatus.Stalled, log);
     }
 
     private static string Shorten(string text, int max) =>
@@ -1512,25 +1529,21 @@ public sealed class TaskRunner(
     /// </summary>
     private TaskRunOutcome ParkOutOfBudget(TaskRecord task, AgentRunResult result, ForgeLogger log)
     {
-        var strike = _tasks.IncrementOutOfBudgetCount(task.Id);
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.OutOfBudget && TaskTransitions.IsLegal(current, TaskStatus.OutOfBudget))
-            Transition(task.Id, TaskStatus.OutOfBudget, log);
+        var strike = _tasks.IncrementStallCount(task.Id);
+        StallTask(task.Id, log);
 
         var summary = $"Instance {result.InstanceId} ran out of resources " +
                       $"({SnakeCaseEnum.ToSnakeCase(result.End)}) after {result.Iterations} turns — " +
                       $"strike {strike}. Handed to the Principal (out_of_budget).";
         log.Event(EventType.ErrorInternal, summary);
         Notify(task.Id, MessageType.Escalation, "principal", $"{summary} {result.Detail}".Trim());
-        return new TaskRunOutcome(task.Id, result.End, TaskStatus.OutOfBudget, summary);
+        return new TaskRunOutcome(task.Id, result.End, TaskStatus.Stalled, summary);
     }
 
     /// <summary>Blocks a task the agent escalated, or one whose crash retries ran out, for triage.</summary>
     private TaskRunOutcome ParkBlocked(TaskRecord task, AgentRunResult result, ForgeLogger log)
     {
-        var current = _tasks.Get(task.Id).Status;
-        if (current != TaskStatus.Blocked && TaskTransitions.IsLegal(current, TaskStatus.Blocked))
-            Transition(task.Id, TaskStatus.Blocked, log);
+        StallTask(task.Id, log);
 
         var summary = $"Instance {result.InstanceId} ended {SnakeCaseEnum.ToSnakeCase(result.End)} " +
                       $"after {result.Iterations} turns. Handed to the Principal (blocked).";

@@ -105,7 +105,7 @@ public class MeteredLlmClientTests : IDisposable
         // The supervisor is a single-purpose meter: it does NOT transition the task or
         // escalate for a task budget — TaskRunner.Park owns that (OutOfBudget → Principal),
         // so the two can't disagree. The task is untouched here.
-        Assert.NotEqual(TaskStatus.Blocked, _tasks.Get(taskId).Status);
+        Assert.NotEqual(TaskStatus.Stalled, _tasks.Get(taskId).Status);
         Assert.Empty(new MessageRepository(_conn).Pending("pm"));
         Assert.Empty(new MessageRepository(_conn).Pending("principal"));
     }

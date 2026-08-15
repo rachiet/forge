@@ -14,8 +14,8 @@ public class TaskTransitionsTests
     [InlineData(TaskStatus.InReview, TaskStatus.InProgress)]
     [InlineData(TaskStatus.Merging, TaskStatus.Qa)]
     [InlineData(TaskStatus.Qa, TaskStatus.Done)]
-    [InlineData(TaskStatus.InProgress, TaskStatus.Blocked)]
-    [InlineData(TaskStatus.Blocked, TaskStatus.Ready)]
+    [InlineData(TaskStatus.InProgress, TaskStatus.Stalled)]
+    [InlineData(TaskStatus.Stalled, TaskStatus.Ready)]
     public void Pipeline_transitions_are_legal(TaskStatus from, TaskStatus to) =>
         Assert.True(TaskTransitions.IsLegal(from, to));
 
@@ -43,8 +43,8 @@ public class TaskTransitionsTests
     [InlineData(TaskStatus.InReview, AgentRole.Principal)]
     [InlineData(TaskStatus.Qa, AgentRole.Qa)]
     // Blocked and OutOfBudget are the Principal's to triage — they authored the DAG.
-    [InlineData(TaskStatus.Blocked, AgentRole.Principal)]
-    [InlineData(TaskStatus.OutOfBudget, AgentRole.Principal)]
+    [InlineData(TaskStatus.Stalled, AgentRole.Principal)]
+    [InlineData(TaskStatus.Stalled, AgentRole.Principal)]
     public void Handoff_routing_is_derived_from_status(TaskStatus status, AgentRole role) =>
         Assert.Equal(role, TaskTransitions.RoleFor(status));
 }
