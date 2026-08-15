@@ -476,6 +476,11 @@ public sealed partial class AgentToolset(
         // The contract is refused at the point of writing, so the author can fix it in this run.
         if (ContractRejection(path, content) is { } rejection) return new ToolOutcome(rejection);
 
+        // Same rule for a page built on kit classes that do not exist: caught in the turn that
+        // wrote them, rather than by CI after a commit and a fresh instance.
+        if (Ui.UiGate.Rejection(_jail.Root, _jail.Relative(path).Replace('\\', '/'), content)
+            is { } unstyled) return new ToolOutcome(unstyled);
+
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var existed = File.Exists(path);
         File.WriteAllText(path, content);

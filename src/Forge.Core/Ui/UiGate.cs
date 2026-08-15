@@ -18,6 +18,9 @@ public static partial class UiGate
     /// <summary>Directories holding build output, dependencies or git state rather than source.</summary>
     private static readonly string[] Ignored = [".git", "bin", "obj", "node_modules"];
 
+    /// <summary>The kit's namespace. A class under it is the kit's to define, never the app's.</summary>
+    private const string KitPrefix = "fg-";
+
     /// <summary>How many offending lines of one kind are listed before the rest are summarised.</summary>
     private const int MaxExamples = 8;
 
@@ -58,6 +61,70 @@ public static partial class UiGate
             ?? RemoteStylesheets(workspaceDir, pages)
             ?? HardCodedValues(workspaceDir, pages, stylesheets)
             ?? UnknownClasses(workspaceDir, kitRoot, pages, stylesheets);
+    }
+
+    /// <summary>
+    /// Why a page may not be written yet, or null to let the write through. Judges one file's
+    /// content before it reaches disk, so the author fixes it in the turn that made the mistake
+    /// rather than in a fresh instance after CI.
+    ///
+    /// Only `fg-` names are judged here: that prefix is the kit's, so a name it does not define
+    /// can never become valid, while a class of the application's own is legitimate as soon as
+    /// app.css defines it — which may be a later write. Everything else stays with
+    /// <see cref="Check"/>, which sees the finished workspace.
+    /// </summary>
+    /// <param name="workspaceDir">The task's workspace, where the kit is installed.</param>
+    /// <param name="relativePath">Repo-relative path being written, e.g. wwwroot/index.html.</param>
+    /// <param name="content">What the write would put there.</param>
+    public static string? Rejection(string workspaceDir, string relativePath, string content)
+    {
+        var extension = Path.GetExtension(relativePath).ToLowerInvariant();
+        if (extension is not (".html" or ".htm")) return null;
+        if (UiKit.KitRoot(workspaceDir) is not { } kitRoot || !Directory.Exists(kitRoot)) return null;
+
+        var known = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in Directory.EnumerateFiles(kitRoot, "*.css"))
+            known.UnionWith(DefinedClasses(File.ReadAllText(file)));
+
+        var undefined = new List<string>();
+        foreach (Match match in ClassAttributePattern().Matches(content))
+            foreach (var name in match.Groups["classes"].Value
+                         .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!name.StartsWith(KitPrefix, StringComparison.Ordinal)) continue;
+                if (!ClassNamePattern().IsMatch(name) || known.Contains(name)) continue;
+                if (!undefined.Contains(name, StringComparer.Ordinal)) undefined.Add(name);
+            }
+
+        if (undefined.Count == 0) return null;
+
+        return $"REFUSED: {relativePath} was not written — it uses kit classes that do not exist.\n\n"
+             + string.Join("\n\n", undefined.Select(name => Alternatives(name, known)))
+             + $"\n\nThe kit is a fixed set: a `{KitPrefix}` name it does not define styles nothing. "
+             + $"Use one of the classes above, or — only for layout the kit has no answer for — a "
+             + $"class of your own defined in {UiKit.AppStylesheet} with `var(--fg-…)` tokens. "
+             + $"{UiKit.CatalogueFile} lists the components.";
+    }
+
+    /// <summary>
+    /// One undefined class and what the author can use instead: every defined name sharing its
+    /// block, so a guessed element or modifier is answered with the real ones. Computed from the
+    /// same parsed set as the check, so it cannot fall out of step with the CSS.
+    /// </summary>
+    private static string Alternatives(string name, IReadOnlySet<string> known)
+    {
+        // The part before `__` or `--`: `fg-card__title` and `fg-card--wide` both sit under `fg-card`.
+        var block = name.Split(["__", "--"], StringSplitOptions.None)[0];
+
+        var siblings = known
+            .Where(k => k == block || k.StartsWith($"{block}__", StringComparison.Ordinal)
+                                   || k.StartsWith($"{block}--", StringComparison.Ordinal))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        return siblings.Count == 0
+            ? $"- `{name}` is not defined, and neither is `{block}` — there is no such component."
+            : $"- `{name}` is not defined. `{block}` has: {string.Join(", ", siblings.Select(s => $"`{s}`"))}.";
     }
 
     /// <summary>

@@ -152,6 +152,43 @@ public sealed class UiKitTests : IDisposable
     }
 
     [Fact]
+    public void A_kit_class_that_does_not_exist_is_refused_at_the_write_and_the_refusal_lists_the_real_ones()
+    {
+        ScaffoldWebProject();
+        UiKit.Ensure(_repo, new ThemeChoice("slate"), Prompts);
+
+        var refusal = UiGate.Rejection(_repo, "app/wwwroot/index.html",
+            """<div class="fg-card"><h2 class="fg-card__title">Hours</h2></div>""");
+
+        Assert.NotNull(refusal);
+        Assert.Contains("fg-card__title", refusal, StringComparison.Ordinal);
+        // The point of the refusal: the classes it should have used, not just the one it invented.
+        Assert.Contains("fg-card__header", refusal, StringComparison.Ordinal);
+        Assert.Contains("fg-card__body", refusal, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_page_written_with_real_kit_classes_and_one_of_the_applications_own_is_written()
+    {
+        ScaffoldWebProject();
+        UiKit.Ensure(_repo, new ThemeChoice("slate"), Prompts);
+
+        // `app-hero` is the application's own and may be defined by a later write to app.css,
+        // so the write-time gate leaves it to CI; only the kit's own namespace is judged here.
+        Assert.Null(UiGate.Rejection(_repo, "app/wwwroot/index.html",
+            """<div class="fg-card app-hero"><div class="fg-card__body">Hours</div></div>"""));
+    }
+
+    [Fact]
+    public void A_write_that_is_not_a_page_is_never_judged_by_the_write_time_gate()
+    {
+        ScaffoldWebProject();
+        UiKit.Ensure(_repo, new ThemeChoice("slate"), Prompts);
+
+        Assert.Null(UiGate.Rejection(_repo, "src/App/Program.cs", """var css = "fg-card__title";"""));
+    }
+
+    [Fact]
     public void A_second_stylesheet_of_the_applications_own_is_refused()
     {
         InstallKitAndPage("""<div class="fg-main">hi</div>""");
