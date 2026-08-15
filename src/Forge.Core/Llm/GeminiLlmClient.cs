@@ -92,14 +92,18 @@ public sealed class GeminiLlmClient : ILlmClient
 
             foreach (var call in message.ToolCalls)
             {
-                parts.Add(new JsonObject
+                var part = new JsonObject
                 {
                     ["functionCall"] = new JsonObject
                     {
                         ["name"] = call.Name,
                         ["args"] = JsonNode.Parse(call.ArgumentsJson),
                     },
-                });
+                };
+                // The signature the model issued with this call, returned unchanged. Gemini
+                // refuses a conversation that replays a call without it.
+                if (call.Signature is { Length: > 0 } signature) part["thoughtSignature"] = signature;
+                parts.Add(part);
             }
 
             // A result is wrapped in an object because `response` is a structured value, not
@@ -203,7 +207,12 @@ public sealed class GeminiLlmClient : ILlmClient
                             ? n.GetString() ?? "" : "";
                         var args = call.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
                             ? a.GetRawText() : "{}";
-                        calls.Add(new LlmToolCall(name, name, args));
+                        // Sits on the part beside the call, not inside it. Kept so the next
+                        // request can replay the call with the signature it was issued.
+                        var signature = part.TryGetProperty("thoughtSignature", out var s)
+                                     && s.ValueKind == JsonValueKind.String
+                            ? s.GetString() : null;
+                        calls.Add(new LlmToolCall(name, name, args) { Signature = signature });
                     }
                 }
             }

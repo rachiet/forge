@@ -13,7 +13,16 @@ public sealed record LlmToolDefinition(string Name, string Description, string P
 /// A call the model made. Id is the provider's own correlation id and travels back with the
 /// result; Arguments is the argument object as JSON, whatever form the provider reported it in.
 /// </summary>
-public sealed record LlmToolCall(string Id, string Name, string ArgumentsJson);
+public sealed record LlmToolCall(string Id, string Name, string ArgumentsJson)
+{
+    /// <summary>
+    /// An opaque token the provider issued with this call and requires back when the call is
+    /// replayed in a later turn — Gemini's `thoughtSignature`, which it rejects the conversation
+    /// without. Meaningless to the harness and never read by it: it is carried so the adapter
+    /// that produced it can hand it back unchanged. Null for providers that issue none.
+    /// </summary>
+    public string? Signature { get; init; }
+}
 
 /// <summary>What one tool produced, paired to the call by the id the provider issued.</summary>
 public sealed record LlmToolResult(string CallId, string Name, string Output);
