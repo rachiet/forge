@@ -1,4 +1,5 @@
 using Forge.Core.Ci;
+using Forge.Core.Design;
 using Forge.Core.Ui;
 
 namespace Forge.Tests;
@@ -111,5 +112,23 @@ public class PageHealthTests
 
         Assert.True(PageHealth.Distance(accentSoft, successSoft) < 0.02);
         Assert.True(PageHealth.Distance(accentSoft, PageHealth.Rgb("rgb(255, 243, 224)")!.Value) >= 0.02);
+    }
+
+    [Fact]
+    public void A_declared_handle_the_page_does_not_carry_is_reported_unless_it_repeats()
+    {
+        // `recent-entry` is one row per item and CI renders against an empty database, so its
+        // absence is the correct state; `figure-hours-tracked` is always there or it is a defect.
+        var contract = new InterfaceContract([
+            new InterfacePage("/", "04-dashboard.md", [
+                new InterfaceElement("figure-hours-tracked", "the hours card", OnDemand: false, Repeats: false),
+                new InterfaceElement("recent-entry", "a recent entry row", OnDemand: false, Repeats: true),
+            ]),
+        ]);
+
+        var problems = PageCheck.MissingHandles(contract, [Page()]).ToList();
+
+        var problem = Assert.Single(problems);
+        Assert.Contains("figure-hours-tracked", problem, StringComparison.Ordinal);
     }
 }

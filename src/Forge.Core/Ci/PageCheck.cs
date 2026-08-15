@@ -109,7 +109,7 @@ public static class PageCheck
     /// by, so a missing `data-testid` fails the task that owed it rather than surfacing later as
     /// a bug against a page nobody can test.
     /// </summary>
-    private static IEnumerable<string> MissingHandles(
+    internal static IEnumerable<string> MissingHandles(
         Design.InterfaceContract? declared, IReadOnlyList<PageSnapshot> rendered)
     {
         if (declared is null) yield break;
@@ -123,7 +123,10 @@ public static class PageCheck
                 .Select(e => e.TestId)
                 .ToHashSet(StringComparer.Ordinal);
 
-            foreach (var element in page.Elements.Where(e => !present.Contains(e.TestId)))
+            // A repeating handle is one per item, and CI renders the page against an empty
+            // database — no rows is the correct state there, so its absence proves nothing.
+            // The acceptance suite creates its own data and is where those are verified.
+            foreach (var element in page.Elements.Where(e => !e.Repeats && !present.Contains(e.TestId)))
                 yield return $"{page.Path}: the contract declares `{element.TestId}` ({element.Is}) "
                            + $"but no element on the page carries `data-testid=\"{element.TestId}\"`. "
                            + "Add it, or change the contract if the element is gone.";
