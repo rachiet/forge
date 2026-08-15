@@ -699,6 +699,12 @@ default is left out on purpose.
   reading the body. Leave out the incident that motivated it, the option that was
   rejected, and what it used to do; a decision worth keeping goes in this file,
   not in the source.
+  A comment describes the code as it stands, as if written from scratch today.
+  When a rule is removed, the comment loses the sentence that described it — it
+  never gains one explaining the removal ("X is deliberately NOT checked here
+  because it used to fail…"). Where the reader still needs to know a
+  responsibility lies elsewhere, say only where it lives now: "the paths a page
+  links to are judged by PageCheck, on the rendered page."
 - **Per-field and per-entry comments are individual.** When commenting a
   dictionary, a record's fields, or a config block, each entry gets its own line
   saying what the key is and what the value means — never one shared blurb above

@@ -10,7 +10,7 @@ namespace Forge.Core.Ci;
 /// so one that does not parse ships and fails only when someone loads the page.
 ///
 /// Four rules, each with a true or false answer and no opinion attached — JavaScript parses,
-/// JSON parses, an HTML page's local references exist, and its inline scripts parse. Markup
+/// JSON parses, and an HTML page's inline scripts parse. Markup
 /// itself is deliberately not judged: HTML defines error recovery, so every document "parses"
 /// and any verdict beyond these would be a lint the harness could be argued out of.
 ///
@@ -92,18 +92,15 @@ public static partial class StaticFileCheck
     }
 
     /// <summary>
-    /// What is wrong with an HTML page: a local script, stylesheet or image it references that is
-    /// not on disk, or an inline script that does not parse. Both are silent in a browser — the
-    /// page renders and simply does nothing — which is why they are worth a mechanical check.
+    /// What is wrong with an HTML page: an inline script that does not parse. Silent in a
+    /// browser — the page renders and simply does nothing — which is why it is worth a
+    /// mechanical check. The paths the page links to are not judged; whether one loads is a
+    /// failed request on a rendered page, reported by `PageCheck`.
     /// </summary>
     private static string? HtmlProblem(string workspaceDir, string file)
     {
         var html = File.ReadAllText(file);
         var problems = new StringBuilder();
-
-        foreach (var reference in LocalReferences(html))
-            if (Resolve(workspaceDir, file, reference) is not { } target || !File.Exists(target))
-                problems.Append($"  references `{reference}`, which is not in the repo\n");
 
         foreach (var script in InlineScripts(html))
         {
@@ -121,50 +118,6 @@ public static partial class StaticFileCheck
         }
 
         return problems.Length == 0 ? null : problems.ToString().TrimEnd();
-    }
-
-    /// <summary>
-    /// The src and href values a page expects to load from this repo. Absolute URLs, protocol
-    /// -relative ones, data URIs and in-page anchors are somebody else's to resolve.
-    /// </summary>
-    private static IEnumerable<string> LocalReferences(string html) =>
-        ReferencePattern().Matches(html)
-            .Select(m => m.Groups["path"].Value.Trim())
-            .Where(path => path.Length > 0)
-            .Where(path => !path.StartsWith('#') && !path.StartsWith("//", StringComparison.Ordinal))
-            .Where(path => !path.Contains("://", StringComparison.Ordinal))
-            .Where(path => !path.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                        && !path.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
-                        && !path.StartsWith("tel:", StringComparison.OrdinalIgnoreCase))
-            .Select(path => path.Split('?', '#')[0])
-            .Where(path => path.Length > 0)
-            .Distinct(StringComparer.Ordinal);
-
-    /// <summary>
-    /// Where a reference points on disk. A rooted path is served from the static root the page
-    /// itself sits under, since that is what the web server maps it to; anything else is
-    /// relative to the page. Null when it escapes the workspace.
-    /// </summary>
-    private static string? Resolve(string workspaceDir, string page, string reference)
-    {
-        var baseDir = reference.StartsWith('/')
-            ? StaticRootOf(workspaceDir, page)
-            : Path.GetDirectoryName(page)!;
-        var full = Path.GetFullPath(Path.Combine(baseDir, reference.TrimStart('/')));
-        return full.StartsWith(Path.GetFullPath(workspaceDir), StringComparison.Ordinal) ? full : null;
-    }
-
-    /// <summary>
-    /// The directory a rooted URL is served from: the nearest `wwwroot` above the page, or the
-    /// page's own directory when it does not sit under one.
-    /// </summary>
-    private static string StaticRootOf(string workspaceDir, string page)
-    {
-        for (var dir = Path.GetDirectoryName(page); dir is not null && dir.StartsWith(workspaceDir, StringComparison.Ordinal);
-             dir = Path.GetDirectoryName(dir))
-            if (string.Equals(Path.GetFileName(dir), "wwwroot", StringComparison.OrdinalIgnoreCase))
-                return dir;
-        return Path.GetDirectoryName(page)!;
     }
 
     /// <summary>The bodies of script blocks written into the page, ignoring those that load a file.</summary>
@@ -220,10 +173,6 @@ public static partial class StaticFileCheck
             return new ParserRun(Available: true, process.ExitCode, output.ToString().Trim());
         }
     }
-
-    /// <summary>Matches a src or href attribute, capturing the path it points at.</summary>
-    [GeneratedRegex("""(?:src|href)\s*=\s*["'](?<path>[^"']*)["']""", RegexOptions.IgnoreCase)]
-    private static partial Regex ReferencePattern();
 
     /// <summary>Matches a script element, capturing its attributes and its body separately.</summary>
     [GeneratedRegex("""<script(?<attrs>[^>]*)>(?<body>.*?)</script\s*>""",

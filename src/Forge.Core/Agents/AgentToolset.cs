@@ -102,10 +102,10 @@ public sealed partial class AgentToolset(
             ["check_static"] = new(
                 "parse every .js, .json and .html in the repo — the files the browser reads and "
               + "the compiler never sees. Reports a JavaScript or JSON file that does not parse, "
-              + "an HTML page referencing a local script, stylesheet or image that is not in the "
-              + "repo, and an inline <script> that does not parse. It takes no arguments and "
-              + "changes nothing; CI runs the same check before review, so anything it reports "
-              + "here would be sent back to you as a revision."),
+              + "and an inline <script> that does not parse. It takes no arguments and changes "
+              + "nothing; CI runs the same check before review, so anything it reports here "
+              + "would be sent back to you as a revision. Whether a path a page links to actually "
+              + "loads is not judged here: the browser answers that when CI renders the page."),
 
             ["propose_requirements"] = new(
                 "present the finished requirements to the client for approval. They see Approve & "

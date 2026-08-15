@@ -61,21 +61,14 @@ public sealed class StaticFileCheckTests : IDisposable
     }
 
     [Fact]
-    public void A_page_referencing_a_file_that_is_not_in_the_repo_is_caught()
+    public void A_path_a_page_links_to_is_not_judged_here_whether_it_is_a_route_a_later_page_or_missing()
     {
-        // Silent in a browser: the page renders and the script simply never loads.
-        Write("wwwroot/index.html", """<html><head><script src="/js/home.js"></script></head></html>""");
-
-        var problems = StaticFileCheck.Check(_root);
-
-        Assert.Contains("/js/home.js", problems!, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void A_rooted_reference_resolves_against_the_static_root_not_the_repo_root()
-    {
-        Write("wwwroot/js/home.js", "const x = 1;\n");
-        Write("wwwroot/index.html", """<html><head><script src="/js/home.js"></script></head></html>""");
+        // A file check cannot tell a mistake from a server route or a page a later task writes,
+        // and it failed tasks whose markup was right. The browser answers it on a rendered page.
+        Write("wwwroot/index.html", """
+            <html><head><script src="/js/home.js"></script></head>
+            <body><a href="/api/entries/export">CSV</a><a href="/clients.html">Clients</a></body></html>
+            """);
 
         Assert.Null(StaticFileCheck.Check(_root));
     }
