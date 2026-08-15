@@ -157,7 +157,11 @@ public sealed class PmChat(
             "I worked through my turn limit without getting back to you. Ask again, or narrow the question.",
         EndReason.Escalated =>
             "I've escalated this — it needs a decision I can't make on my own.",
-        _ => $"I couldn't complete that turn. {result.Detail}".Trim(),
+        // A provider rejection has no model behind it to explain itself, so the harness says
+        // what happened and folds the provider's own words underneath.
+        _ => Llm.ProviderFailure.Describe(result.Detail) is { } explained
+            ? $"{explained}\n\n```\n{result.Detail}\n```"
+            : $"I couldn't complete that turn. {result.Detail}".Trim(),
     };
 
     /// <summary>

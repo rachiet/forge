@@ -181,6 +181,13 @@
                  border:1px solid color-mix(in srgb, var(--accent) 24%, transparent); }
   .msg.you { align-self:flex-end; }
   .msg.you .who { text-align:right; color:var(--chat-you-ink); }
+  .detail { margin-top:8px; }
+  .detail summary { cursor:pointer; font-family:var(--mono); font-size:.68rem; letter-spacing:.1em;
+                    text-transform:uppercase; color:var(--faint); }
+  .detail summary:hover { color:var(--ink); }
+  .detail pre { margin:8px 0 0; padding:8px 10px; background:var(--sunken); border:1px solid var(--line);
+                border-radius:6px; font-family:var(--mono); font-size:.75rem; color:var(--faint);
+                white-space:pre-wrap; word-break:break-word; max-height:16rem; overflow:auto; }
   .msg.you .bubble { background:color-mix(in srgb, var(--chat-you) 28%, var(--surface));
                      border-color:color-mix(in srgb, var(--chat-you) 55%, transparent); }
   .thinking { font-family:var(--mono); font-size:.72rem; color:var(--faint); padding:0 16px 10px; }
@@ -195,6 +202,23 @@
   .approve.needs .ask { margin:0 0 4px; color:var(--pending); }
   .approve.needs .sub { margin:0; font-size:.8rem; color:var(--faint); }
   .card.ready { box-shadow:inset 3px 0 0 var(--active); }
+  /* The chat when work has stopped and only the client can move it: amber, with a slow border
+     pulse so it is noticed on a page nobody is watching. Deliberately not the fast blink an
+     in-flight task uses — that means a worker is on it this second. The chat carries it because
+     the chat is where the answer goes. */
+  .chat.waiting { background:color-mix(in srgb, var(--pending) 7%, var(--surface));
+                  border-color:color-mix(in srgb, var(--pending) 45%, var(--line));
+                  animation:waiting-pulse 2.4s ease-in-out infinite; }
+  .chat.waiting .card-head { background:color-mix(in srgb, var(--pending) 10%, transparent); }
+  .chat.waiting .card-head h2 { color:var(--pending); }
+  @keyframes waiting-pulse {
+    0%,100% { border-color:color-mix(in srgb, var(--pending) 30%, var(--line));
+              box-shadow:0 0 0 0 color-mix(in srgb, var(--pending) 30%, transparent); }
+    50%     { border-color:color-mix(in srgb, var(--pending) 85%, var(--line));
+              box-shadow:0 0 0 5px color-mix(in srgb, var(--pending) 14%, transparent); }
+  }
+  @media (prefers-reduced-motion:reduce) { .chat.waiting { animation:none;
+    border-color:color-mix(in srgb, var(--pending) 65%, var(--line)); } }
   .readybody { padding:4px 16px 14px; }
   .readybody .l { margin:10px 0 4px; font-family:var(--mono); font-size:.62rem;
                   letter-spacing:.16em; text-transform:uppercase; color:var(--faint); }
@@ -671,17 +695,6 @@ function renderRail(d) {
       </div></section>`;
   }
 
-  // Named here as well as in the chat card, so the client can see WHICH work stopped
-  // and why the spend has flattened out.
-  if ((d.awaitingClient || []).length) {
-    html += `<section class="card"><div class="card-head"><h2>Waiting on you</h2></div>
-      ${d.awaitingClient.map(t => `<div class="row st-pending">
-        <span class="dot"></span>
-        <span class="name" title="${esc(t.note || '')}">${esc(t.title)}</span>
-        <span class="cost none">answer in chat</span>
-      </div>`).join('')}</section>`;
-  }
-
   // The whole plan: every phase in order with its work under it. The one task a worker
   // has in hand blinks, and so does the phase holding it.
   if (d.plan.length) {
@@ -739,9 +752,20 @@ function renderChat(chat) {
   thread.innerHTML = chat.map(m => `
     <div class="msg ${m.from === 'client' ? 'you' : ''}">
       <span class="who">${m.from === 'client' ? 'You' : esc(agentName)}</span>
-      <div class="bubble">${esc(m.text)}</div>
+      <div class="bubble">${bubble(m.text)}</div>
     </div>`).join('');
   if (atBottom) thread.scrollTop = thread.scrollHeight;
+}
+
+/// A message body: the prose, then any fenced block folded away. What a provider or a test run
+/// says is worth keeping and rarely worth reading, so it opens only when asked for.
+function bubble(text) {
+  const fence = text.indexOf('```');
+  if (fence < 0) return esc(text);
+
+  const prose = text.slice(0, fence).trim();
+  const detail = text.slice(fence).replace(/^```[^\n]*\n?/, '').replace(/```\s*$/, '').trim();
+  return `${esc(prose)}<details class="detail"><summary>Show details</summary><pre>${esc(detail)}</pre></details>`;
 }
 
 let lastPickerHtml = '';
@@ -860,6 +884,8 @@ async function poll() {
     // A flag, not an explanation: it names what is stuck and points at the chat,
     // where the agent has put what it actually needs in the client's own terms.
     const waiting = d.awaitingClient || [];
+    // The chat is what the client answers in, so the chat is what asks.
+    document.querySelector('.chat').classList.toggle('waiting', waiting.length > 0);
     $('needsBar').classList.toggle('hidden', waiting.length === 0);
     if (waiting.length) {
       $('needsTitle').textContent = waiting.length === 1
