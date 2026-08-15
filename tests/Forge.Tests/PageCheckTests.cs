@@ -131,4 +131,31 @@ public class PageHealthTests
         var problem = Assert.Single(problems);
         Assert.Contains("figure-hours-tracked", problem, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void A_handle_missing_from_a_page_another_task_owns_is_not_this_tasks_failure()
+    {
+        // The live case: an invoices task was failed for the clients page's add button, which
+        // the task that builds that page has not written yet.
+        var contract = new InterfaceContract([
+            new InterfacePage("/invoices.html", "03-invoices.md", [
+                new InterfaceElement("invoice-row-menu", "an invoice row menu", OnDemand: false, Repeats: false),
+            ]),
+            new InterfacePage("/clients.html", "01-clients.md", [
+                new InterfaceElement("add-client-button", "the add-client button", OnDemand: false, Repeats: false),
+            ]),
+        ]);
+        IReadOnlyList<PageSnapshot> rendered =
+        [
+            new("/invoices.html", "Invoices", PageProbe.ViewportWidth, PageProbe.ViewportWidth, [], [], []),
+            new("/clients.html", "Clients", PageProbe.ViewportWidth, PageProbe.ViewportWidth, [], [], []),
+        ];
+
+        var mine = PageCheck.MissingHandles(contract, rendered, "03-invoices.md").ToList();
+        var problem = Assert.Single(mine);
+        Assert.Contains("invoice-row-menu", problem, StringComparison.Ordinal);
+
+        // With no requirement — the acceptance run — every page is judged.
+        Assert.Equal(2, PageCheck.MissingHandles(contract, rendered).Count());
+    }
 }

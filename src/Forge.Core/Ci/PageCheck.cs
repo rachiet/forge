@@ -65,8 +65,12 @@ public static class PageCheck
             var missing = pages.Where(p => p.NotFound).ToList();
             var rendered = pages.Where(p => !p.NotFound).ToList();
 
+            // Health is judged on every page: a console error or unreadable text is a defect
+            // wherever it shows, and a change to shared markup or script breaks pages its task
+            // does not own. Declared handles are judged only on this task's pages, since a
+            // handle missing from someone else's page is their unwritten work.
             var problems = PageHealth.Problems(rendered)
-                .Concat(MissingHandles(declared, rendered))
+                .Concat(MissingHandles(declared, rendered, requirement))
                 .Concat(Unbuilt(declared, missing, requirement))
                 .ToList();
             return problems.Count == 0
@@ -108,14 +112,22 @@ public static class PageCheck
     /// the same shape as the coverage gates: the contract is what QA will address the interface
     /// by, so a missing `data-testid` fails the task that owed it rather than surfacing later as
     /// a bug against a page nobody can test.
+    ///
+    /// Only pages serving this task's requirement are judged. A page another task owns may be a
+    /// stub with none of its handles yet, and failing the task in flight for that is failing it
+    /// for work it was never given. With no requirement to go on, every page is judged — which
+    /// is what the acceptance run at the end of the board wants.
     /// </summary>
     internal static IEnumerable<string> MissingHandles(
-        Design.InterfaceContract? declared, IReadOnlyList<PageSnapshot> rendered)
+        Design.InterfaceContract? declared, IReadOnlyList<PageSnapshot> rendered,
+        string? requirement = null)
     {
         if (declared is null) yield break;
 
         foreach (var page in declared.Pages)
         {
+            if (requirement is { Length: > 0 }
+                && !page.Requirement.Equals(requirement, StringComparison.OrdinalIgnoreCase)) continue;
             if (rendered.FirstOrDefault(r => r.Path == page.Path) is not { } shown) continue;
 
             var present = shown.Elements
