@@ -9,8 +9,16 @@ public sealed record LedgerTotals(
     long TokensIn, long TokensOut, long CacheReadTokens, long CacheWriteTokens, decimal CostUsd)
 {
     /// <summary>Everything actually sent or received — the real traffic, not the uncached remainder.</summary>
-    /// <summary>Every bucket added together, which is what task budgets are measured against.</summary>
     public long TotalTokens => TokensIn + TokensOut + CacheReadTokens + CacheWriteTokens;
+
+    /// <summary>
+    /// What a task budget is measured against: the tokens the model actually processed fresh.
+    /// Cache reads are excluded because they are re-sending a prompt the provider already holds
+    /// — they cost a fraction of the rate and say nothing about how much work an instance did,
+    /// so counting them made the same budget mean an order of magnitude less on a provider that
+    /// caches than on one that does not.
+    /// </summary>
+    public long BudgetedTokens => TokensIn + TokensOut;
 }
 
 /// <summary>Spend attributed to one role — "what did the PM cost me".</summary>

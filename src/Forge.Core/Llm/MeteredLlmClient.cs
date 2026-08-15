@@ -12,7 +12,8 @@ namespace Forge.Core.Llm;
 /// and injects a system_nudge at 70% of the task budget.
 ///
 /// The project budget is USD, priced from all four token buckets. The task budget is tokens,
-/// measured per agent instance.
+/// measured per agent instance over the fresh ones only — a cache read is a prompt the provider
+/// already holds, so it is traffic rather than work and does not count against the cap.
 /// </summary>
 public sealed class MeteredLlmClient(
     ILlmClient inner,
@@ -72,9 +73,10 @@ public sealed class MeteredLlmClient(
 
         if (attribution.TaskId is not { } taskId) return;
 
-        // Totalled per agent instance, over all four token buckets.
+        // Totalled per agent instance, over the tokens it processed fresh: cache reads are a
+        // re-sent prompt, not work done, and counting them tripped the cap on cheap traffic.
         var task = _tasks.Get(taskId);
-        var processed = _ledger.InstanceTotals(attribution.AgentInstanceId).TotalTokens;
+        var processed = _ledger.InstanceTotals(attribution.AgentInstanceId).BudgetedTokens;
         if (processed < task.TokenBudget) return;
 
         // Throwing is the whole enforcement; TaskRunner.Park decides what happens to the task.
@@ -123,14 +125,15 @@ public sealed class MeteredLlmClient(
         _tasks.AddTokensSpent(taskId, (int)processed);
 
         // The nudge fires on the instance's 70% mark, the same total the cap refuses on.
-        var before = _ledger.InstanceTotals(attribution.AgentInstanceId).TotalTokens - processed;
+        var budgeted = usage.TokensIn + usage.TokensOut;
+        var before = _ledger.InstanceTotals(attribution.AgentInstanceId).BudgetedTokens - budgeted;
         var threshold = task.TokenBudget * NudgeThreshold;
-        if (before < threshold && before + processed >= threshold)
+        if (before < threshold && before + budgeted >= threshold)
         {
             _messages.Insert(Message.Create(
                 MessageType.SystemNudge, "system",
                 SnakeCaseEnum.ToSnakeCase(attribution.Role),
-                $"Task {taskId} has used {before + processed} of {task.TokenBudget} budgeted tokens (≥70%). " +
+                $"Task {taskId} has used {before + budgeted} of {task.TokenBudget} budgeted tokens (≥70%). " +
                 "Wrap up now, or write a progress note and escalate.",
                 taskId));
         }
