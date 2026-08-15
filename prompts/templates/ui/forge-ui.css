@@ -74,6 +74,13 @@
 *::before,
 *::after { box-sizing: border-box; }
 
+/* The browser applies `hidden` from its own stylesheet, which every component rule
+   below outranks — so an element carrying the attribute renders in full the moment
+   it also carries a kit class. Restored here at author level, and `!important`
+   because a component's default box type is not a reason to contradict "this is not
+   shown": an element that should be visible has the attribute removed instead. */
+[hidden] { display: none !important; }
+
 html {
   font-family: var(--fg-font-sans);
   font-size: 16px;
@@ -622,7 +629,6 @@ code, pre, kbd { font-family: var(--fg-font-mono); font-size: 0.925em; }
   animation: fg-fade-in var(--fg-motion-slow) var(--fg-ease);
 }
 
-.fg-modal[hidden] { display: none; }
 
 .fg-modal__dialog {
   width: min(32rem, 100%);
@@ -728,7 +734,10 @@ code, pre, kbd { font-family: var(--fg-font-mono); font-size: 0.925em; }
 .fg-tabs__tab--active { color: var(--fg-accent); }
 .fg-tabs__tab--active::after { transform: scaleX(1); }
 
-.fg-tabs__panel[hidden] { display: none; }
+/* The panel a tab shows. Carries no look of its own; it exists so the JS has a
+   class to name, and the global `[hidden]` rule does the showing and hiding. */
+.fg-tabs__panel { display: block; }
+
 
 /* ---------------------------------------------------------------- menu */
 
@@ -750,7 +759,6 @@ code, pre, kbd { font-family: var(--fg-font-mono); font-size: 0.925em; }
   animation: fg-rise var(--fg-motion-fast) var(--fg-ease);
 }
 
-.fg-menu__list[hidden] { display: none; }
 
 .fg-menu__item {
   display: flex;
