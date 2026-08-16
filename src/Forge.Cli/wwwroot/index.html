@@ -503,6 +503,10 @@ const ROLE = { qa:'QA', principal:'Principal', engineer:'Engineer', researcher:'
 const roleName = r => (r === 'pm' ? (agentName || 'PM') : ROLE[r] || r);
 
 let lastChatId = 0, sending = false;
+// Set when the client sends and cleared when the agent answers. While it is true the page does
+// not ask for input again: the client has given it, and whether the task is still parked is not
+// known until the turn ends.
+let awaitingReply = false;
 // The newest snapshot, so the review dialog can render without waiting for a poll.
 let lastBoard = null;
 let project = decodeURIComponent(location.hash.slice(1)) || null;
@@ -884,10 +888,15 @@ async function poll() {
     // A flag, not an explanation: it names what is stuck and points at the chat,
     // where the agent has put what it actually needs in the client's own terms.
     const waiting = d.awaitingClient || [];
+    // The agent has spoken since the client did, so the question is live again.
+    const chat = d.chat || [];
+    if (awaitingReply && chat.length && chat[chat.length - 1].from !== 'client') awaitingReply = false;
+
     // The chat is what the client answers in, so the chat is what asks.
-    document.querySelector('.chat').classList.toggle('waiting', waiting.length > 0);
-    $('needsBar').classList.toggle('hidden', waiting.length === 0);
-    if (waiting.length) {
+    const asking = waiting.length > 0 && !awaitingReply;
+    document.querySelector('.chat').classList.toggle('waiting', asking);
+    $('needsBar').classList.toggle('hidden', !asking);
+    if (asking) {
       $('needsTitle').textContent = waiting.length === 1
         ? `${agentName} needs your input to carry on.`
         : `${agentName} needs your input on ${waiting.length} things to carry on.`;
@@ -929,7 +938,15 @@ $('composer').addEventListener('submit', async e => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project, message: text }),
     });
-    if (r.ok) { input.value = ''; $('thinking').classList.remove('hidden'); }
+    if (r.ok) {
+      input.value = '';
+      $('thinking').classList.remove('hidden');
+      // The answer has been given, so the chat stops asking for one. It asks again only when
+      // the agent has replied and the work is still parked.
+      awaitingReply = true;
+      document.querySelector('.chat').classList.remove('waiting');
+      $('needsBar').classList.add('hidden');
+    }
     else {
       const body = await r.json().catch(() => ({}));
       $('chatErr').textContent = body.error || 'Could not send that message.';
