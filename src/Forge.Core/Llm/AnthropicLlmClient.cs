@@ -23,7 +23,6 @@ public sealed class AnthropicLlmClient : ILlmClient
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
         {
-            [ModelTier.Fast] = "claude-haiku-4-5",
             [ModelTier.Coding] = "claude-sonnet-5",
             [ModelTier.Reasoning] = "claude-opus-4-8",
         };

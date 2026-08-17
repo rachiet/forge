@@ -7,8 +7,8 @@ namespace Forge.Tests;
 
 /// <summary>
 /// Calls each provider for real and checks that a tool definition comes back as a parsed call.
-/// Returns early unless its key is in the environment, and it spends money, so it is not part of the
-/// ordinary suite — run it with a filter when the adapters change.
+/// It spends money and needs the network, so it is opt-in: every probe returns early unless
+/// FORGE_LIVE_PROBE is set as well as the provider's own key. Set it when the adapters change.
 /// </summary>
 public class LiveProviderProbe(ITestOutputHelper output)
 {
@@ -26,10 +26,15 @@ public class LiveProviderProbe(ITestOutputHelper output)
         Attribution = new LlmAttribution("probe", AgentRole.Engineer, null),
     };
 
-    private static bool KeyPresent(string variable)
+    /// <summary>The switch that turns the live probes on; without it the suite stays offline.</summary>
+    private const string OptInVariable = "FORGE_LIVE_PROBE";
+
+    /// <summary>True when the probes are switched on and this provider's key is available.</summary>
+    private static bool Enabled(string keyVariable)
     {
         EnvFile.Load();
-        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable));
+        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(OptInVariable))
+            && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(keyVariable));
     }
 
     private async Task CallsTheTool(ILlmClient client, string model)
@@ -52,24 +57,24 @@ public class LiveProviderProbe(ITestOutputHelper output)
     [Fact]
     public async Task Anthropic_returns_a_parsed_tool_call()
     {
-        if (!KeyPresent(AnthropicLlmClient.ApiKeyVariable)) { output.WriteLine("no key; skipped"); return; }
+        if (!Enabled(AnthropicLlmClient.ApiKeyVariable)) { output.WriteLine("not enabled; skipped"); return; }
         var client = new AnthropicLlmClient();
-        await CallsTheTool(client, client.ModelFor(ModelTier.Fast));
+        await CallsTheTool(client, client.ModelFor(ModelTier.Coding));
     }
 
     [Fact]
     public async Task OpenAi_returns_a_parsed_tool_call()
     {
-        if (!KeyPresent(OpenAiLlmClient.ApiKeyVariable)) { output.WriteLine("no key; skipped"); return; }
+        if (!Enabled(OpenAiLlmClient.ApiKeyVariable)) { output.WriteLine("not enabled; skipped"); return; }
         var client = new OpenAiLlmClient();
-        await CallsTheTool(client, client.ModelFor(ModelTier.Fast));
+        await CallsTheTool(client, client.ModelFor(ModelTier.Coding));
     }
 
     [Fact]
     public async Task Gemini_returns_a_parsed_tool_call()
     {
-        if (!KeyPresent(GeminiLlmClient.ApiKeyVariable)) { output.WriteLine("no key; skipped"); return; }
+        if (!Enabled(GeminiLlmClient.ApiKeyVariable)) { output.WriteLine("not enabled; skipped"); return; }
         var client = new GeminiLlmClient();
-        await CallsTheTool(client, client.ModelFor(ModelTier.Fast));
+        await CallsTheTool(client, client.ModelFor(ModelTier.Coding));
     }
 }

@@ -28,7 +28,6 @@ public sealed class GeminiLlmClient : ILlmClient
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
         {
-            [ModelTier.Fast] = "gemini/gemini-3.1-flash-lite",
             [ModelTier.Coding] = "gemini/gemini-2.5-flash",
             // A flash model, not pro: pro capacity is unreliable enough to stall a build.
             [ModelTier.Reasoning] = "gemini/gemini-3.6-flash",

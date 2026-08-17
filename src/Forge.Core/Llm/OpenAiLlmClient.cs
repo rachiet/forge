@@ -25,7 +25,6 @@ public sealed class OpenAiLlmClient : ILlmClient
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
         {
-            [ModelTier.Fast] = "gpt-5-nano",
             [ModelTier.Coding] = "gpt-5",
             [ModelTier.Reasoning] = "gpt-5.4",
         };

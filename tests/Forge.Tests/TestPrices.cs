@@ -18,15 +18,13 @@ internal static class TestPrices
         Path.Combine(Path.GetTempPath(), "forge-tests", $"prices-{Guid.NewGuid():N}.json"),
         new FakePriceFeed(FakePriceFeed.Table(
             ("claude-sonnet-5", 2e-6, 1e-5, 2e-7, 2.5e-6),
-            ("claude-opus-4-8", 5e-6, 25e-6, 5e-7, 6.25e-6),
-            ("claude-haiku-4-5", 1e-6, 5e-6, 1e-7, 1.25e-6)))));
+            ("claude-opus-4-8", 5e-6, 25e-6, 5e-7, 6.25e-6)))));
 
     public static PriceCatalog Catalog => Instance.Value;
 
     /// <summary>The tier map a test double answers with, matching the Anthropic defaults.</summary>
     public static string For(ModelTier tier) => tier switch
     {
-        ModelTier.Fast => "claude-haiku-4-5",
         ModelTier.Reasoning => "claude-opus-4-8",
         _ => Model,
     };

@@ -32,14 +32,13 @@ public class LlmConfigTests : IDisposable
     {
         WriteConfig("""
             { "provider": "anthropic",
-              "models": { "reasoning": "claude-opus-4-8", "coding": "my-pinned-model" } }
+              "models": { "coding": "my-pinned-model" } }
             """);
 
         var config = LlmConfig.Load(_root);
 
         Assert.Equal("my-pinned-model", config.Override(ModelTier.Coding));
-        Assert.Equal("claude-opus-4-8", config.Override(ModelTier.Reasoning));
-        Assert.Null(config.Override(ModelTier.Fast));   // unnamed tiers keep the provider default
+        Assert.Null(config.Override(ModelTier.Reasoning));   // unnamed tiers keep the provider default
     }
 
     [Fact]
@@ -76,7 +75,6 @@ public class LlmConfigTests : IDisposable
         var plain = LlmClientFactory.Create(new LlmConfig());
         Assert.Equal("claude-opus-4-8", plain.ModelFor(ModelTier.Reasoning));
         Assert.Equal("claude-sonnet-5", plain.ModelFor(ModelTier.Coding));
-        Assert.Equal("claude-haiku-4-5", plain.ModelFor(ModelTier.Fast));
 
         var pinned = LlmClientFactory.Create(new LlmConfig
         {

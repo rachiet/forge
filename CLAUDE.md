@@ -59,7 +59,7 @@ Break one of these and the system stops being trustworthy, not just incorrect.
 - **Budgets are enforced by refusing the next LLM call**, never by asking a model
   to stop. Every call goes through the `MeteredLlmClient` decorator.
 - **No model id and no price is ever hardcoded.** A recipe names a `ModelTier`
-  (`Fast | Coding | Reasoning`); the configured `ILlmClient` resolves it; rates
+  (`Coding | Reasoning`); the configured `ILlmClient` resolves it; rates
   come from `PriceCatalog`. An unpriced model refuses to run — costing $0 is a cap
   that never trips.
 - **Merge, CI and test state are read from git and process exit codes**, never

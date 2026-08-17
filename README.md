@@ -64,22 +64,22 @@ Green steps are the harness: ordinary code, no model, no tokens. What
 "passed" means is read from git and process exit codes, never from what an
 agent reports.
 
-**PM** — the role you meet as Iris, and the only one you talk to. Understands
+**PM**: the role you meet as Iris, and the only one you talk to. Understands
 the idea, asks clarifying questions, writes the requirements, and puts them to
 you for approval. Approving the requirements is what hands the
 project to engineering. Later change requests go through the same chat.
 
-**Principal** — owns technical execution: designs the structure and
+**Principal**: owns technical execution, designing the structure and
 contracts, breaks work into a task graph, reviews every engineer's diff, and
 rescues any task that gets stuck.
 
-**Engineer** — implements one task at a time in an isolated, jailed
+**Engineer**: implements one task at a time in an isolated, jailed
 workspace and submits it for review.
 
-**QA** — once the board is drained, writes a black-box acceptance suite from
+**QA**: once the board is drained, writes a black-box acceptance suite from
 the contract and the requirements: HTTP tests for every operation, browser
 tests for everything the interface is supposed to show. It never starts the
-app itself — the harness does that, runs the suite against it, and files a
+app itself; the harness does that, runs the suite against it, and files a
 bug from a failing run with the real output attached. Bugs flow back through
 the same build loop; the project isn't done until a round files nothing new.
 
@@ -91,27 +91,27 @@ Most AI coding tools generate code. Forge is built to run an autonomous,
 multi-agent build that stays honest and bounded. Detail on each of these
 lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-- **Ground truth over agent claims** — merge, CI, and test state come from
+- **Ground truth over agent claims**: merge, CI, and test state come from
   git and process output, never from what an agent says.
-- **Mechanical CI** — `dotnet build`/`dotnet test` run as harness code, not
+- **Mechanical CI**: `dotnet build`/`dotnet test` run as harness code, not
   an LLM call. The Principal never reviews a diff that fails to build.
-- **One task state machine** — status drives who acts next; there's no
+- **One task state machine**: status drives who acts next; there's no
   separate "next actor" field that can drift out of sync.
-- **Automatic recovery** — a stuck task escalates to the Principal, who
+- **Automatic recovery**: a stuck task escalates to the Principal, who
   redirects, splits, or takes it over directly.
-- **Two budgets, two jobs** — a dollar project cap pauses the build for a
+- **Two budgets, two jobs**: a dollar project cap pauses the build for a
   money decision; a token task cap strikes a runaway agent. They're never
   conflated.
-- **One LLM interface, three providers** — Claude, OpenAI, and Gemini are
+- **One LLM interface, three providers**: Claude, OpenAI, and Gemini are
   normalized behind one adapter. Recipes name a model tier, never a
   model id.
-- **Appearance isn't generated** — Forge ships a component kit and a set of
+- **Appearance isn't generated**: Forge ships a component kit and a set of
   themes. You pick one from the board and it's installed immediately: free,
   instant, and reversible. No agent writes CSS.
-- **Interfaces are verified by rendering them** — pages are opened in a real
+- **Interfaces are verified by rendering them**: pages are opened in a real
   browser and measured, because markup can't tell you whether an element is
   visible, where it sits, or what colour it came out.
-- **It asks you when it's genuinely stuck** — work that can't be resolved
+- **It asks you when it's genuinely stuck**: work that can't be resolved
   technically is put to you in the chat in plain language; your answer sends
   it back to the team and the build carries on by itself.
 
@@ -133,7 +133,7 @@ that needs one downloads Chromium (~100MB) into `$FORGE_HOME/browsers`, once
 per machine. A machine where it can't be installed skips those checks rather
 than failing them.
 
-**API key** — create `~/forge_env`:
+**API key**: create `~/forge_env`:
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-api-your-key-here   # default provider
@@ -149,7 +149,7 @@ This is Forge's own credential file, separate from the encrypted secrets
 vault used by generated projects (below). Agents never see it. Override the
 path with `FORGE_ENV`.
 
-**Data location** — all runtime data (databases, git repos, workspaces)
+**Data location**: all runtime data (databases, git repos, workspaces)
 lives under one root, default `~/forge-data`, override with `FORGE_HOME`.
 Client project data never lives inside the Forge source tree.
 
@@ -171,24 +171,24 @@ forge board                # http://localhost:5177, every project
 forge board --port 8080
 ```
 
-**1 — Create the project.** A name, a hard cap in dollars, and a provider. The
+**1. Create the project.** A name, a hard cap in dollars, and a provider. The
 cap is real: the build pauses when it's reached and asks you, rather than
 spending on.
 
 <img src="docs/images/forge-01-new-project.png" alt="Start a new project" width="50%">
 
-**2 — Describe what you want.** Iris opens the conversation. Plain
+**2. Describe what you want.** Iris opens the conversation. Plain
 language is enough; she asks about anything ambiguous.
 
 <img src="docs/images/forge-02-chat.png" alt="Chatting with Iris" width="50%">
 
-**3 — Approve the specification.** Iris turns your conversation into a full
+**3. Approve the specification.** Iris turns your conversation into a full
 requirements and specification document, then waits for you to review it.
 Once you approve, you sit back and watch: the agents start building.
 
 ![Approving the specification](docs/images/forge-03-spec.png)
 
-**4 — Watch the agents work.** Approving starts the build, and from here it
+**4. Watch the agents work.** Approving starts the build, and from here it
 runs itself. Milestones, features and spend per agent update as work lands,
 every figure read from the token ledger rather than estimated. Check in
 whenever you like, and pause or resume from the same page. When it's done,
@@ -196,7 +196,7 @@ the board tells you where the project is and how to run it.
 
 ![The project board](docs/images/forge-04-board.png)
 
-**5 — Run what it built.**
+**5. Run what it built.**
 
 ![The finished app](docs/images/forge-05-app.png)
 
@@ -229,19 +229,19 @@ Only one build runs machine-wide at a time, so the dashboard and a terminal
 
 ## What to build
 
-Forge builds **.NET projects** — console tools and ASP.NET web apps, because
+Forge builds **.NET projects**: console tools and ASP.NET web apps, because
 everything a project does must be verifiable from the CLI or over HTTP.
 
 In the intake chat: describe the outcome, not the tech; say what you care
-about (behaviour, edge cases); answer Iris's questions up front — that's
-where correctness is won. You're the reviewer of the requirements; once you
+about (behaviour, edge cases); answer Iris's questions up front, because that
+is where correctness is won. You're the reviewer of the requirements; once you
 approve them, she hands off to engineering.
 
 **How it looks is a setting, not a requirement.** Ask about appearance and
 Iris opens a theme picker: every theme drawn in its own colours, with light
 or dark, an accent, spacing and corner rounding beside it. Pick one and it's
 applied straight away, before or after the build, as often as you like. So
-spend the conversation on what the product must *do* — say "the three
+spend the conversation on what the product must *do*: say "the three
 columns sit side by side and each is a different colour", not "make it
 elegant". A requirement nobody can check from the outside can't be built to
 or tested against.
@@ -250,7 +250,7 @@ or tested against.
 
 ## Limitations
 
-- .NET only — console and ASP.NET projects.
+- .NET only: console and ASP.NET projects.
 - One build runs machine-wide at a time.
 - Change requests extend a project Forge already built; there's no import of
   an existing external codebase.
@@ -292,9 +292,9 @@ tests/
  └── Forge.Tests
 ```
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the agent loop, task state
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) describes how the agent loop, task state
   machine, provider adapters, and budget guardrails work in code.
-- [`CLAUDE.md`](CLAUDE.md) — the rules a change to Forge must respect.
+- [`CLAUDE.md`](CLAUDE.md) states the rules a change to Forge must respect.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) states the contributor licence terms.
 
 ---
