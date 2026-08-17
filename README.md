@@ -115,6 +115,12 @@ lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
   technically is put to you in the chat in plain language; your answer sends
   it back to the team and the build carries on by itself.
 
+  <img src="docs/images/forge-06-needs-input.png" alt="Iris stopping the build to ask for input" width="30%">
+
+  Nothing is lost when it stops: the task is left exactly as it stands, the
+  provider's own words are folded away behind the details, and replying in the
+  chat picks the build up where it left off.
+
 ---
 
 ## Installation
@@ -289,3 +295,26 @@ tests/
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the agent loop, task state
   machine, provider adapters, and budget guardrails work in code.
 - [`CLAUDE.md`](CLAUDE.md) — the rules a change to Forge must respect.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) states the contributor licence terms.
+
+---
+
+## License
+
+Forge is licensed under the **GNU Affero General Public License v3.0**. The full
+text is in [`LICENSE`](LICENSE). Read it, run it, fork it, learn from it, change
+it: free. If you run a modified Forge as a network service, the AGPL requires you
+to offer your users its source.
+
+**Commercial licensing.** If you want to build on Forge commercially without
+those obligations, a separate licence is available. Email
+rachiet.sharma@gmail.com.
+
+Contributions are accepted under the terms in
+[`CONTRIBUTING.md`](CONTRIBUTING.md), which keep the project relicensable by a
+single owner.
+
+"Forge" and "Iris" are names of this project and are not part of the licence
+grant. Please use your own name for anything you distribute or host.
+
+© 2026 Rachiet Sharma
