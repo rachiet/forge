@@ -5,16 +5,17 @@ Forge turns a plain-English idea into a working software project.
 You describe what you want. A team of stateless LLM agents takes it from idea →
 requirements → architecture → implementation → testing → a runnable git repo.
 
-You only talk to one role: the **PM**.
+You only talk to one person on the team: **Iris**, Forge's project manager.
 
-The PM understands your idea, asks questions, and captures requirements. Once
-you approve them, Forge's engineering team takes over:
+Iris understands your idea, asks questions, and captures the requirements. Once
+you approve them, the rest of the team takes over:
 
 - **Principal** designs the architecture and creates the task plan.
 - **Engineer** agents write the code, each in an isolated workspace.
-- **CI** builds and tests every change automatically, zero tokens spent.
+- **CI** builds, tests and opens the app in a browser, zero tokens spent.
 - **Principal** reviews every diff and recovers tasks that get stuck.
-- **QA** validates the finished app against the original requirements.
+- **QA** writes the acceptance suite and the harness runs it against the
+  finished app.
 
 The result is a real project you can clone, run, and keep developing.
 
@@ -34,10 +35,12 @@ flowchart TD
     E1["Engineer"]:::orch
     E2["Engineer"]:::orch
     E3["Engineer"]:::orch
-    CI["CI<br/>build + test"]:::harness
+    CI["CI<br/>build, test, render the page"]:::harness
     PRIN2["Principal<br/>review"]:::orch
-    QA["QA<br/>acceptance"]:::orch
-    DONE[("Accepted project")]:::store
+    MERGE["Merge to trunk"]:::harness
+    QA["QA<br/>writes the acceptance suite"]:::orch
+    RUN["Harness runs the suite<br/>against the running app"]:::harness
+    DONE[("Checked out, with<br/>the command to run it")]:::store
 
     YOU -->|chat| PM
     PM -->|requirements approved| PRIN1
@@ -47,16 +50,24 @@ flowchart TD
     E1 --> CI
     E2 --> CI
     E3 --> CI
-    CI --> PRIN2
-    PRIN2 -->|approved| QA
-    QA -->|bugs| PRIN1
-    QA -->|passes| DONE
+    CI -->|green| PRIN2
+    CI -->|red| E1
+    PRIN2 -->|approved| MERGE
+    PRIN2 -->|changes requested| E1
+    MERGE -->|board drained| QA
+    QA --> RUN
+    RUN -->|bugs| PRIN1
+    RUN -->|passes| DONE
 ```
 
-**PM** — the only role you talk to. Understands the idea, asks clarifying
-questions, writes the requirements, and puts them to you for approval with
-`propose_requirements` — approving is what hands the project to engineering.
-Later change requests go through the same chat.
+Green steps are the harness: ordinary code, no model, no tokens. What
+"passed" means is read from git and process exit codes, never from what an
+agent reports.
+
+**PM** — the role you meet as Iris, and the only one you talk to. Understands
+the idea, asks clarifying questions, writes the requirements, and puts them to
+you for approval. Approving the requirements is what hands the
+project to engineering. Later change requests go through the same chat.
 
 **Principal** — owns technical execution: designs the structure and
 contracts, breaks work into a task graph, reviews every engineer's diff, and
@@ -65,10 +76,12 @@ rescues any task that gets stuck.
 **Engineer** — implements one task at a time in an isolated, jailed
 workspace and submits it for review.
 
-**QA** — once the board is drained, black-box tests the running app like a
-real user and files a bug for anything that misses a requirement. Bugs flow
-back through the same build loop; the project isn't done until a QA round
-files nothing new.
+**QA** — once the board is drained, writes a black-box acceptance suite from
+the contract and the requirements: HTTP tests for every operation, browser
+tests for everything the interface is supposed to show. It never starts the
+app itself — the harness does that, runs the suite against it, and files a
+bug from a failing run with the real output attached. Bugs flow back through
+the same build loop; the project isn't done until a round files nothing new.
 
 ---
 
@@ -91,7 +104,16 @@ lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
   conflated.
 - **One LLM interface, three providers** — Claude, OpenAI, and Gemini are
   normalized behind one adapter. Recipes name a model tier, never a
-  hardcoded model id.
+  model id.
+- **Appearance isn't generated** — Forge ships a component kit and a set of
+  themes. You pick one from the board and it's installed immediately: free,
+  instant, and reversible. No agent writes CSS.
+- **Interfaces are verified by rendering them** — pages are opened in a real
+  browser and measured, because markup can't tell you whether an element is
+  visible, where it sits, or what colour it came out.
+- **It asks you when it's genuinely stuck** — work that can't be resolved
+  technically is put to you in the chat in plain language; your answer sends
+  it back to the team and the build carries on by itself.
 
 ---
 
@@ -99,6 +121,11 @@ lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Requirements:** .NET 8 SDK or newer (`dotnet --version`), and an API key
 for Claude (default), OpenAI, or Gemini.
+
+Projects with a user interface are checked in a real browser. The first run
+that needs one downloads Chromium (~100MB) into `$FORGE_HOME/browsers`, once
+per machine. A machine where it can't be installed skips those checks rather
+than failing them.
 
 **API key** — create `~/forge_env`:
 
@@ -144,7 +171,7 @@ spending on.
 
 <img src="docs/images/forge-01-new-project.png" alt="Start a new project" width="50%">
 
-**2 — Describe what you want.** Iris, the PM, opens the conversation. Plain
+**2 — Describe what you want.** Iris opens the conversation. Plain
 language is enough; she asks about anything ambiguous.
 
 <img src="docs/images/forge-02-chat.png" alt="Chatting with Iris" width="50%">
@@ -200,9 +227,18 @@ Forge builds **.NET projects** — console tools and ASP.NET web apps, because
 everything a project does must be verifiable from the CLI or over HTTP.
 
 In the intake chat: describe the outcome, not the tech; say what you care
-about (look, feel, edge cases); answer the PM's questions up front — that's
+about (behaviour, edge cases); answer Iris's questions up front — that's
 where correctness is won. You're the reviewer of the requirements; once you
-approve them, the PM hands off to engineering.
+approve them, she hands off to engineering.
+
+**How it looks is a setting, not a requirement.** Ask about appearance and
+Iris opens a theme picker: every theme drawn in its own colours, with light
+or dark, an accent, spacing and corner rounding beside it. Pick one and it's
+applied straight away, before or after the build, as often as you like. So
+spend the conversation on what the product must *do* — say "the three
+columns sit side by side and each is a different colour", not "make it
+elegant". A requirement nobody can check from the outside can't be built to
+or tested against.
 
 ---
 
@@ -220,7 +256,7 @@ approve them, the PM hands off to engineering.
 | Command | What it does |
 |---|---|
 | `forge project init <name>` | Create a project's data directory, database, and git repo. |
-| `forge chat <name> [-m MSG]` | Talk to the PM: intake, requirements, status. |
+| `forge chat <name> [-m MSG] [--history]` | Talk to the PM: intake, requirements, status. |
 | `forge run <name> [--loop] [--project-budget N] [--task ID]` | Claim and run tasks; `--loop` drains the board autonomously, then runs QA. |
 | `forge task list <name>` | Show the task board. |
 | `forge task add <name> <title> [options]` | Add a task by hand. |
@@ -228,7 +264,8 @@ approve them, the PM hands off to engineering.
 | `forge log <name> [--events] [--task N] [--domain D]` | Replay the trail and token spend. |
 | `forge prices show [--project NAME]` | Show provider pricing. |
 | `forge prices update` | Force a price refresh. |
-| `forge secrets set\|list` | Manage a project's encrypted secrets vault. |
+| `forge secrets set <name> [-d TEXT]` | Store a secret (prompted, hidden) in the encrypted vault. |
+| `forge secrets list` | List stored secret names, never their values. |
 
 ---
 
@@ -237,14 +274,18 @@ approve them, the PM hands off to engineering.
 ```
 src/
  ├── Forge.Core        # orchestrator + harness: scheduler, agent loop, tools, DB
- └── Forge.Cli         # the forge command-line interface
+ └── Forge.Cli         # the forge command-line interface and the board's web page
 prompts/
  ├── roles             # versioned per-role prompts
- └── tasks             # versioned per-task-type prompts
+ ├── tasks             # versioned per-task-type prompts
+ ├── plays             # what to attach when the harness detects a stuck situation
+ └── templates
+     ├── CONVENTIONS.md  # the base every generated project starts from
+     └── ui              # the UI kit: components, themes, and the class catalogue
 tests/
  └── Forge.Tests
 ```
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the agent loop, task state
   machine, provider adapters, and budget guardrails work in code.
-- [`CLAUDE.md`](CLAUDE.md) — the engineering decisions behind that design.
+- [`CLAUDE.md`](CLAUDE.md) — the rules a change to Forge must respect.

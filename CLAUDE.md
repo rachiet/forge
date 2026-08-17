@@ -1,742 +1,245 @@
-# Forge — Orchestrator Implementation
+# Forge — contributor guide
 
-You are implementing Forge: a C#/.NET service that builds software from client
+Forge is a C#/.NET service that builds software from a client's plain-English
 requirements by orchestrating stateless LLM agents (PM, Principal, Engineer, QA).
-**Read `ARCHITECTURE.md` in full before writing any code.** It is the
-authoritative description of how the system works; this file records the
-decisions behind it and is the place to add new ones.
 
-Origin: Forge began from a v1 design specification that has since been folded
-into `ARCHITECTURE.md` and removed. Some source comments still cite it by
-section number (`spec §7`, `spec §11`); read those as historical markers.
+This file holds the rules a change must respect. It is not a tour of the system —
+`README.md` is for users, `ARCHITECTURE.md` describes how the parts fit together.
+Read this before editing; everything in it is load-bearing somewhere.
 
-## Terminology
-- **Orchestrator** = the whole service (scheduler, pipeline state machine, roles).
-- **Harness** = the inner, deterministic layer wrapped around each LLM call:
-  context assembly → LLM call → tool-call parsing → jailed tool execution →
-  observation loop → budget/iteration enforcement → ledger + progress notes.
-  One process, two layers; the orchestrator contains the harness.
-- Everything in the harness is trusted mechanical code; everything from the
-  model is untrusted output under supervision.
+## What Forge is
 
-## Decisions (treat as [DECIDED])
+- **Orchestrator** — the whole service: scheduler, task state machine, roles.
+- **Harness** — the deterministic layer wrapped around each LLM call: context
+  assembly → call → tool-call parsing → jailed execution → observation loop →
+  budget and turn enforcement → ledger and progress note.
+- One process, two layers; the orchestrator contains the harness.
+- The framing rule everything else follows: **harness code is trusted and
+  mechanical; everything a model emits is untrusted output under supervision.**
 
-### Prompt layering (do NOT store prompts in the tasks table)
-Agent instructions are assembled at spin-up from three layers:
-- **Layer A — role identity:** `prompts/roles/<role>.md` (versioned in git).
-- **Layer B — task-type instructions:** `prompts/tasks/<type>.md`
-  (e.g. design.md, feature.md, review.md, impact_analysis.md).
-- **Layer C — task packet (DB only):** `objective`, `acceptance_criteria`,
-  `context_paths`, `requirements_ref`, `progress_note` from the task row.
-Extra one-off guidance travels as a task-anchored `messages` row, never as a
-per-task prompt blob. Rationale: prevents prompt drift; fixing a template file
-improves all future tasks (same self-improving property as CONVENTIONS.md).
+## Build and run
 
-### Routing ("who acts next")
-Derived, not stored. `assigned_role` says who executes; every other handoff is
-a static harness map from status → role (in_review → principal, qa → qa,
-blocked → pm). Never add a "next actor" column — two sources of truth drift.
+```sh
+dotnet build                  # .NET 8; src/Forge.Core, src/Forge.Cli, tests/Forge.Tests
+dotnet test                   # xUnit, ~395 tests, no network or API key needed
+```
 
-### DB column vs JSON rule
-Anything the harness must query or enforce (status, budgets, roles, milestone)
-is a real column with CHECK constraints. Anything only the LLM reads may be
-TEXT/JSON (`context_paths` is JSON by design).
+Commands (`Forge.Cli`, Spectre.Console.Cli):
 
-### Typed layer over SQLite (C#)
-- One `sealed record` per table (e.g. `TaskRecord`); enums for `TaskType`,
-  `TaskStatus`, `AgentRole` mirroring the CHECK constraints (keep both layers).
-- Dapper + small type handlers (enum ⇄ snake_case TEXT, JSON list ⇄ TEXT).
-- `RequirementsRef` is a parsed value type wrapping the requirement file name
-  ("docs/requirements/02-todos-read.md@v3" → "02-todos-read.md"); refs carry no
-  version, and a directory prefix or a stale `@vN` suffix is normalised away at
-  every boundary. Parse-don't-validate, throw on malformed.
-- `Message` is an abstract record with one sealed subtype per message type
-  (Question, Answer, Review, Decision, Escalation, Status, ChangeRequest,
-  SystemNudge); exhaustive switch for routing.
-- Construction via factory methods enforcing invariants (budget > 0,
-  non-empty packet), not naked inserts.
-- Status changes go through a `TaskTransitions` legal-transition map that
-  throws on illegal transitions — never raw `UPDATE tasks SET status=?`.
-- Tasks/messages do NOT generate .md files. Repo .md files (MODULE.md, ADRs,
-  requirements) are written by agents via write_file. The only markdown the
-  harness renders is the task packet into the prompt (never to disk).
+| Command | Purpose |
+|---|---|
+| `forge board [--port N]` | The client's web dashboard, all projects, default 5177 |
+| `forge project init <project>` | Create the data directory, database and bare repo |
+| `forge chat <project> [-m TEXT] [--history]` | Talk to the PM |
+| `forge run <project> [--loop] [--task ID] [--project-budget USD]` | Run the build worker |
+| `forge task list\|add <project>` | Inspect or hand-add board work |
+| `forge log <project> [-e] [-t ID] [-d DOMAIN]` | Replay the event trail and spend |
+| `forge prices show\|update` | The model price table |
+| `forge secrets set\|list` | The encrypted vault for client project secrets |
 
-## Directory layout [DECIDED]
-Two roots. Client project data NEVER lives inside the Forge source repo.
-- Forge source repo (this repo): src/, prompts/, docs.
-- Runtime data root: single config value `ForgeDataRoot` (env `FORGE_HOME`,
-  default `~/forge-data`) — the only path the code hard-knows; derive all else:
-  - `forge.db` (global DB), `vault/` (encrypted secrets)
-  - `projects/<name>/project.db` — per-project SQLite (queue/board/ledger)
-  - `projects/<name>/repo.git` — bare repo, source of truth; harness merges here;
-    generated code + full docs tree (PROJECT.md, requirements, MODULE.md) live in it
-  - `projects/<name>/workspaces/task-<id>/` — per-task working clone; this exact
-    path is the tool executor's jail; created on claim, deleted after merge
+Paths, all derived from one root:
 
-### Credentials file [DECIDED] — the one deliberate exception
-`~/forge_env` (override: env `FORGE_ENV`) holds **Forge's own** credentials,
-loaded into the process environment at CLI startup. Forge authenticates its calls
-to the Anthropic Messages API with a Claude API key in `ANTHROPIC_API_KEY`
-(`sk-ant-api…`, sent as the `x-api-key` header). One credential path means one
-thing to configure and one failure mode to recognise. This is a second hard-known
-path, knowingly: the data root holds client repos and databases and is meant to be
-movable and shareable, so keys must not ride along in that payload.
-- Two kinds of secret, never mixed: harness keys → `forge_env`; client project
-  secrets → the encrypted `vault/`, seen by agents only as `{{secret:NAME}}`.
-- The tool executor builds child-process environments from an **allowlist**
-  (PATH, TMPDIR, LANG, DOTNET_*/NUGET_*), never by inheritance, and points HOME
-  at the jail. An agent's `dotnet run` is arbitrary code execution, so inheriting
-  Forge's environment would leak every key. A key added to `forge_env` tomorrow
-  is therefore invisible to agents by default, with nothing to remember.
+- `FORGE_HOME` (default `~/forge-data`) is the **only** path the code hard-knows.
+  Under it: `forge.db`, `vault/`, `prices/`, `browsers/`, and
+  `projects/<name>/` holding `project.db`, `repo.git` (bare, the source of
+  truth), `workspaces/` (harness scratch, deleted after merge), `build/` (the
+  client's checkout), `agent-home/`, `forge.log`.
+- Client project data never lives inside this repo.
+- `~/forge_env` (override `FORGE_ENV`) is the one deliberate second path: Forge's
+  **own** provider keys, loaded into the process environment at startup. Keys must
+  not ride along in a data root that is meant to be movable.
+- `<data root>/llm.json` names the provider and may pin a model per tier.
+  Precedence: `FORGE_LLM_PROVIDER` → the project's `project_meta` → `llm.json` →
+  the adapter's default.
 
-### QA [DECIDED] (M5a — project-level acceptance gate)
-- **QA is project-level, not per-task.** A scaffold or a half-built feature has no
-  observable behaviour to black-box; acceptance is a feature/requirement concern. The
-  per-task `Qa` status survives as an auto-passing hop in `MergeApproved`
-  (`merging → qa → done`) but decides nothing; real QA runs only when
-  the **whole board is complete** — `RunNextByPriorityAsync` calls `MaybeRunQaAsync`
-  once no task/triage work remains. Same trigger for the first build and for a later
-  change request.
-- **QA tests the observable side-channel, never the source** (`AgentRecipe.Qa`,
-  `prompts/roles/qa.md`): it exercises the HTTP/CLI contract the Principal designed
-  and files a bug per unmet requirement. It ignores the engineer's white-box unit
-  tests and does not judge aesthetics — visual "feel" stays the client's call. (A
-  persistent, committed acceptance-test suite is a deferred refinement; M5a verifies
-  in an ephemeral trunk clone.)
-- **Where there is a contract, QA writes the suite and never starts the app**
-  (`AgentRecipe.QaSuiteAuthor`, `prompts/roles/qa-suite.md`, prefix `qa-suite`). It has no
-  `run`/`serve`/`http`/`file_bug` and an empty binary allowlist; the harness starts the
-  application, runs the suite against it, and files a bug from a red run with the output
-  attached. Exploration bought nothing the suite does not: a live session is one-shot, while
-  a test is re-run against every later change. A project with **no** contract keeps the old
-  exploratory `AgentRecipe.Qa` — nothing to cover mechanically, so driving it by hand is the
-  only way to see anything. `RunQaAsync` picks between them on `ApiContract.Load`.
-- **Bugs are first-class tasks with a triage lifecycle.** `file_bug(title, repro,
-  expected, actual, [requirements_ref])` creates a `bug` task born **`triage`**
-  (Principal-owned). The Principal `accept_bug` (→ `ready`, an engineer fixes it
-  through the normal CI+review+merge) or `reject_bug(reason)` (→ **`rejected`**, a
-  durable "not a bug" verdict — kept, never deleted). Two new statuses:
-  `Triage`, `Rejected`.
-- **No QA↔fix loop, guaranteed by counts.** QA is seeded with the **bug ledger**
-  (rejected + open) so it does not re-file — but the hard guarantee is the
-  termination rule, not the model's diligence: a `qa_fix_watermark` in `project_meta`
-  tracks how many bug-fixes QA has verified, and QA re-runs only when
-  `CountBugs(Done)` exceeds it. A cycle that accepts nothing new (all bugs rejected,
-  or none filed) never moves the watermark, so QA is not called again → **project
-  complete**. A non-converging project escalates to the client after `QaRoundCap` (5).
+## Non-negotiables
 
-### Change requests [DECIDED] (M6 — a change to an already-built project;
-  superseded design-signoff mechanics updated after the Feature rework, below)
-- **Same spine, just the delta.** A CR reuses everything: the client talks to the PM
-  (`forge chat`), who updates the affected requirement(s) and puts them to the client
-  with `propose_requirements` exactly as it would for the initial build — approving
-  is the only thing the client (or operator) does; `forge run --loop`
-  from there autonomously runs the impact analysis, CI + review + merge, and QA.
-- **Design becomes impact analysis, not greenfield** (`DesignPhase.ChangeRequestBrief`).
-  A design run is a CR iff the project already has a `done` task. In that mode the
-  Principal reads the existing structure/contracts/MODULE.md, writes an impact note to
-  `docs/design/impact/`, and creates **only the delta** tasks (never recreating done
-  work) — or `escalate`s if the change is ill-advised (the pushback path). There is
-  no pre-build cost estimate for a CR, and a task's token budget is not one either:
-  it is a per-task cap meant to bound a runaway agent, deliberately approximate
-  (undercounts real usage since cache reads dominate and aren't counted toward it),
-  and set by the Principal based on how much room the work needs — not a prediction
-  of what it will cost. A lower budget does not make the work cheaper or faster, it
-  only makes the task more likely to hit `OutOfBudget` and strike. The only real,
-  dollar-denominated cost signal is the project's live USD spend (`forge log`, the
-  board), read after the fact from the token ledger.
-- **QA re-arms via the generalized watermark.** The QA gate's "new work to verify"
-  signal is the count of **all done tasks** (`CountDone`), not done bugs — so a
-  CR's completed tasks re-trigger QA exactly as a bug-fix does, and the full acceptance
-  suite re-runs to catch regressions the change caused. `TaskRunner.DecomposeFeatureAsync`
-  clears the `qa_escalated` flag the moment it decomposes a new Feature, so a CR is
-  always a fresh QA cycle. Specs live in the **client** repo (requirements/contracts
-  updated before the change; MODULE.md by the engineer during it).
+Break one of these and the system stops being trustworthy, not just incorrect.
 
-### A change is a delta, everywhere [DECIDED]
-- **The requirement file is a living spec; the history is a separate log.** `NN-*.md`
-  always describes the product as it is now — the PM edits it in place and DELETES what
-  the change supersedes, because every consumer (Principal, engineer, QA) reads it as
-  current truth, and a stale line becomes a bug filed against correct work. There is no
-  version stamp: the chain lives in `docs/requirements/changes/NNN-<slug>.md`
-  (`Board/ChangeLog.cs`), one append-only entry per change request holding the client's
-  own words, what changed, and **what was removed**.
-- **The entry is written at proposal time and stamped on approval.** `propose_requirements`
-  requires `change_request` and `changes` once a Feature exists (refusing otherwise), writes
-  the entry carrying `Status: proposed`, and the approve endpoint rewrites that line to
-  `Status: approved <date>` on trunk before the Feature opens. Redrafting a pending proposal
-  reuses its number and replaces its file, so one ask is never two entries.
-- **`spec_baseline_sha` is what the client last received** (`Board/SpecBaseline.cs`), recorded
-  by `DeliverAsync` at handover. Everything after it is the pending change.
-- **Nobody re-reads the whole spec.** The review dialog renders `SpecReader.Changes` — the
-  added and removed requirement lines since the baseline — and only falls back to the full
-  document on a first build, where all of it is new. The Principal's CR brief is seeded with
-  the same delta plus a pointer to the entry, and told that every unlisted line is settled.
-  Re-reading a rewritten spec is how a change request turns into a redesign of finished work.
+- **Budgets are enforced by refusing the next LLM call**, never by asking a model
+  to stop. Every call goes through the `MeteredLlmClient` decorator.
+- **No model id and no price is ever hardcoded.** A recipe names a `ModelTier`
+  (`Fast | Coding | Reasoning`); the configured `ILlmClient` resolves it; rates
+  come from `PriceCatalog`. An unpriced model refuses to run — costing $0 is a cap
+  that never trips.
+- **Merge, CI and test state are read from git and process exit codes**, never
+  from an agent's account of them.
+- **Evidence, not prose.** `file_bug` attaches the harness's own capture of the
+  last `run`/`serve`/`http` and refuses when nothing was executed; `how_to_run`
+  accepts only a command the instance really ran.
+- **Secrets**: agents see `{{secret:NAME}}` only. Substitution happens in the tool
+  executor at exec time, values are redacted from captured output, and they never
+  reach the database, a prompt or a log. Child processes get an **allowlisted**
+  environment (PATH, TMPDIR, LANG, `DOTNET_*`, `NUGET_*`) with `HOME` pointed at
+  the agent home — never an inherited one. An agent's `dotnet run` is arbitrary
+  code execution.
+- **Status changes go through `TaskTransitions`**, which throws on an illegal
+  transition. Never `UPDATE tasks SET status`.
+- **Schema changes go through `Db/Migrations.cs`.** `CREATE TABLE IF NOT EXISTS`
+  leaves an existing table alone and SQLite cannot ALTER a CHECK, so changing a
+  constraint means rebuilding the table.
+- **Generated projects have exactly one runnable project**, serving its pages from
+  its own `wwwroot/` and its API on the same port. Every feature must be verifiable
+  from the CLI or over HTTP; where behaviour would otherwise be invisible, the
+  Principal owes it an observable side-channel.
 
-### QA/triage hardening [DECIDED] (settled after the first live QA run)
-- **A bug carries machine-captured evidence, not model prose.** `file_bug(title,
-  expected, [requirements_ref])` no longer takes a free-form `actual`/`repro`; the
-  toolset records QA's most recent `run` and attaches that command + its real output
-  verbatim. `file_bug` **refuses if QA hasn't run anything** — no execution, no bug.
-  This killed a live false-positive where QA reported an error the server never emits.
-- **Triage/QA phases get crash-retry** (`RunWithCrashRetryAsync`): a provider blip in
-  `TriageBugAsync`/`TriageAsync`/`RunQaAsync` retries in place (crash cap) instead of
-  escalating to a human on the first failure — the resilience task runs already had via
-  Park. A QA round that still crashes does NOT advance the watermark (would falsely mark
-  the project verified); it sets `qa_escalated` and surfaces to the human.
-- **A reviewer can reject a bug** (`reject_bug` added to `PrincipalReview`, reachable
-  from `in_review`): if a bug-fix review shows the reported defect isn't real, it closes
-  the bug instead of looping `request_changes` forever — the failure mode that burned a
-  whole strike ladder on a non-bug.
-- **Human review flows through the PM chat.** Pending escalations to `pm` are injected
-  into the PM's turn (`PmChat.OpenEscalations`); the PM resolves each with `reject_bug`
-  (close it) or `retriage_bug(note)` (send it back to the Principal with the client's
-  guidance) — no more tasks stranded behind a message nobody reads, no DB surgery to
-  resume. The autonomous loop never blocks on a human: an escalated task is skipped.
+## Invariants
 
-### Verifying an interface [DECIDED] (the browser, and who judges what)
-- **A page is verified by rendering it, never by reading its markup.** `Ui/PageProbe` loads the
-  running app in headless Chromium (Playwright, the one new dependency — nothing else can
-  compute layout or a resolved colour) and reports each element's `data-testid`, box,
-  visibility and computed colours. Markup cannot answer any of those: an element carrying
-  `hidden` renders in full when a class sets `display`, and two "different" tints can resolve
-  to the same colour. Both were live defects; both are now mechanical.
-- **The model authors the assertions; the harness runs them.** QA's suite gains a harness-owned
-  `Browser.cs` helper (`ByTestId`, `BoxAsync`, `StyleAsync`, `AreSideBySideAsync`,
-  `AreDifferentColours`), and the suite author's packet carries the page as the harness measured
-  it — so it writes assertions grounded in what the browser did. A model judging a DOM on every
-  round would be non-deterministic, token-priced and unrepeatable; a test it wrote once re-runs
-  against every later change.
-- **Two tiers, split by what the check needs to know.** Generic health rules
-  (`Ci/PageHealth`, pure functions) know nothing about the project — the app starts, no console
-  errors, no failed requests, nothing hidden-but-visible, no sideways overflow, no unreadable
-  contrast — and run in CI as the `page` step. Requirement-specific assertions live in the
-  acceptance suite, where the contract and requirements are in context.
-- **The browser opens only for work that could change the page.** `PageCheck.TouchesInterface`
-  reads the branch diff: html/css/js/razor/cshtml or anything under `wwwroot/`. A storage task
-  pays nothing. No runnable app, or no browser installable, is a skip — never a failure.
-- **Chromium is installed once per machine** at `<data root>/browsers`, and
-  `PLAYWRIGHT_BROWSERS_PATH` travels into the acceptance run so page tests never download their
-  own inside a workspace that is deleted after merge.
-- **A failed acceptance round attaches a screenshot** of the page, written outside the repo, as
-  machine-captured evidence beside the test output — the `file_bug` rule applied to pixels.
-- **The handles are a contract, in the same document as the operations.** `x-interface` at the
-  top of `openapi.yaml` declares each page (`path`, `requirement`, `elements`) and each element
-  (`testid`, `is`, optional `visible: always|on-demand` and `repeats`). `InterfaceContract.Parse`
-  runs inside `ApiContract.Validate`, so a block written any other way is refused when the
-  Principal writes the file — one shape, enforced at the boundary, no second document a later
-  change request could reinvent. Refusals name the offending key and list the valid ones.
-  The page check then compares declared ids against the rendered DOM: a handle the engineer
-  omitted fails that task, so QA arrives at a page it can address by construction. A requirement
-  served by a declared page counts as covered, so an interface no longer needs
-  `x-non-http-requirements`.
-- **What is NOT checked: whether it looks good.** Taste stays the client's, and the theme picker
-  is where it is exercised. The PM writes interface requirements as observable statements ("the
-  three columns are side by side", "each column's background is visibly different") and never as
-  "elegant" or "subtle" — an unverifiable requirement reaches the client as disappointment. The
-  Principal designs `data-testid` handles for anything a requirement names, the same way it
-  designs an observable side-channel for internal behaviour.
+- **Derive, never store twice.** Who acts next is a static map from status
+  (`TaskTransitions.RoleFor`); a milestone's state comes from its tasks; a task's
+  cost comes from the ledger. There is no "next actor" column and no milestone
+  status column — two sources of truth drift.
+- **`assigned_role` says what kind of work a task is, not who acts next.** A task
+  parked on the client is still an engineering task.
+- **A queue filters on status, never on the existence of a message row.** Messages
+  notify; statuses route. If a task should leave a queue, give it a status that
+  says so.
+- **DB column vs JSON**: anything the harness queries or enforces (status, budgets,
+  roles, milestone) is a real column with a CHECK; payloads only a model reads may
+  be TEXT/JSON (`context_paths`, `contract_ops`). The enums in `Model/Enums.cs`
+  mirror those CHECKs and are kept in step by hand.
+- **The same rule in memory**: a type when the harness enforces it, a string when
+  only a model reads it. Parse-don't-validate at the boundary — `RequirementsRef`,
+  `ApiContract`, `InterfaceContract`, `ThemeChoice` — with factory methods that
+  enforce invariants and exhaustive switches over closed enums.
+- **Prompts are files, never rows.** Three layers: role identity
+  (`prompts/roles/<role>.md`), task type (`prompts/tasks/<type>.md`), and the task
+  packet rendered from the tasks row. One-off guidance travels as a task-anchored
+  message. Fixing a template file improves every future run.
+- **One place per concern.** `AgentToolset.Catalogue` is the only description of
+  the tool surface — recipes are validated against it, the prompt section and the
+  provider's tool schemas are both rendered from it. `EventType` is the only list
+  of log categories. Adding a second place to update is the defect.
+- **Every handler does its work first and transitions last**, so a crash either
+  re-runs an idempotent step or leaves the task claimable. Re-running a merge that
+  already landed is a no-op by construction.
+- **If it can be decided deterministically, the harness decides it.** Before adding
+  an LLM call, ask what the answer depends on: if it can be read from the repo, the
+  database, git, a browser or process output, write the code. A model call is for
+  judgement only.
+- **Refusals are written for the model that will read them**: what was wrong *and*
+  the correct form or the available values. A refusal an agent cannot act on wastes
+  a whole instance.
 
-### How generated interfaces look [DECIDED] (the UI kit)
-Clients describe behaviour, not aesthetics ("a box to type in, a list to see them"),
-and a model writing CSS per task under token pressure produces a different-looking
-app for every task. So appearance stops being generated work at all.
-- **Forge ships the components; nobody writes CSS.** `prompts/templates/ui/` holds
-  `forge-ui.css` (primitives, page shell, layout utilities, motion), `forge-ui.js`
-  (modal/toast/tabs/menu/carousel, driven by data attributes), `UI-KIT.md` (the class
-  catalogue) and one file per theme and mode. It lives beside the prompts for the same
-  reason they do: fixing one versioned file improves every future project. Taste is
-  paid for once, at authoring time.
-- **The harness installs it, per the "if it can be decided deterministically" rule.**
-  `UiKit.Ensure` runs on every task workspace (after `Prepare`, and again in `Submit`
-  before the commit, which is what makes the task that scaffolds the web project ship
-  the kit in its own commit) and writes `<runnable project>/wwwroot/forge-ui/` plus
-  `UI-KIT.md` at the repo root. The runnable project is found with
-  `AgentToolset.RunnableProjects`, the same discovery CI and delivery use. **No single
-  runnable project ⇒ no kit at all**, so a CLI tool or a library pays nothing.
-- **Files are overwritten, never policed.** An agent that edits or deletes a kit file
-  finds it restored before it can commit, so "don't touch the kit" needs no gate.
-- **The catalogue reaches the engineer through the repo, not a new prompt layer.**
-  `UI-KIT.md` is in `AgentRecipe.Engineer.AlwaysInContext` (and the reviewer's), and
-  `AppendCommon` skips absent files — so a project with no interface carries none of it
-  and no `Ui` task type was needed.
-- **Choosing is a selection, not authoring.** `choose_theme(theme, mode, accent,
-  density, radius)` is the Principal's, at design time; every argument is a value from
-  a closed set (`ThemeChoice`), stored as five `project_meta` rows and rendered into
-  `theme.css` as theme + mode + a knob block. A theme the model invented would be LLM
-  aesthetics again. Theme ids are read from the files on disk and each theme describes
-  itself in its opening comment (`UiKit.ThemeCatalogue`), so adding a theme is adding
-  one CSS file — no second list.
-- **The PM stays out of it.** The client says "dark, red tint" in chat, the PM records
-  it as a requirement, the Principal turns it into a theme id. A theme is code.
-- **Two doors for a later change.** A change request re-runs the design phase, which
-  can call `choose_theme` again; or the client uses the board's Appearance picker
-  (`POST /api/theme` → `Board/AppearanceChange.ApplyAndRecord`), which writes
-  `project_meta`, installs the kit and records the choice in the change log — clone,
-  install, commit, push, no agent. The second door exists because a finished project has
-  no task runs left to render through. It defers to a running worker, which owns trunk.
-- **The client picks from tiles painted by the themes themselves.** `UiKit.ThemeTiles`
-  serves each theme's own CSS and `ModeStylesheets` the light/dark mapping; the page
-  rescopes `:root` onto each tile, so a tile is drawn by the exact declarations the
-  project would be built with and cannot drift from it. One tile per row, a mode toggle
-  and the four knobs above them. Adding a theme file adds a tile.
-- **The PM offers, never chooses.** `offer_theme_choice` takes no arguments and only
-  raises the picker (`Board/ThemeOffer`, a `project_meta` flag the page polls); the PM has
-  no `choose_theme`. Its prompt forbids describing themes in prose or writing requirements
-  about colours — appearance is a free, instant, reversible click, and a requirement line
-  about it turns that into paid engineering.
-- **The id lands in `project_meta` and nowhere else.** A theme is a setting, not something that
-  was asked for and built: `AppearanceChange.Apply` installs the kit and commits the stylesheet,
-  and writes no change-log entry, no requirement line and no task. The client flips themes as
-  often as they like, and the change log stays the record of what was actually requested. The
-  requirement text stays behavioural either way.
-- **`UiGate` is the enforcement, not the prompt.** Prompts are manners; this repo's
-  stance is mechanical (the PM cannot read `src/` because `PathScope` refuses it).
-  Run from `CiRunner.Run` beside `StaticFileCheck`, and skipped entirely where the kit
-  is not installed. Four rules: no `style=` attribute, no literal colour or font
-  outside the kit, no stylesheet of the application's own beyond one `app.css`, and no
-  class that neither the kit nor `app.css` defines. `app.css` is the escape hatch — a
-  missing component must not deadlock a task — and `UiGate.CustomStyleReport` puts what
-  it contains into the reviewer's packet, so the gate detects and the reviewer judges.
-- **Sizes are classes, never numbers.** `fg-w-sm|md|lg|xl|full`, `fg-gap-1..6`,
-  `fg-pad-2..5`. Arbitrary measurements are what make a generated page look crooked.
-- **`fg-` prefix, BEM classes, `--fg-` tokens named by role** (`surface`, `ink`,
-  `border`, `accent`), in three tiers: theme primitives → mode mapping → derived ramps.
-  Colours are oklch, so one hue knob rotates the whole accent ramp perceptually. The
-  palette deliberately avoids fg/bg naming, since the prefix already means Forge.
+## The pipeline
 
-### Handing the finished project over [DECIDED]
-- **A completed project is checked out, not just merged.** `repo.git` is bare and task
-  workspaces are deleted after merge, so `TaskRunner.DeliverAsync` clones trunk to
-  `projects/<name>/build/` — a directory the client can open and run. It sits outside
-  `workspaces/` because that is harness scratch space and this is the deliverable.
-- **The run command is derived from the repo** (`Board/DeliveryPlan.cs`): the runnable
-  `.csproj` is the one with a Web/BlazorWebAssembly SDK, or `OutputType` Exe without a
-  `Microsoft.NET.Test.Sdk` reference. No project that runs is a real answer — the harness
-  says nothing rather than inventing a command.
-- **QA's command wins when it has one.** `how_to_run(command, [url])` records what QA used
-  to start the app, and is refused unless QA actually ran that command — the `file_bug`
-  rule applied to instructions the client will follow. It supplies what project files
-  cannot, such as a port.
-- **The PM writes the covering note, not the instructions.** `PmChat.AnnounceReadyAsync`
-  is handed the directory and command and told to use them exactly.
-- **The board card is the durable copy.** The chat message scrolls away; `BoardSnapshot.
-  Delivery` keeps the folder, command and URL on the page.
-- **Handover happens once per completion,** guarded by `project_delivered` in
-  `project_meta` and cleared by `DecomposeFeatureAsync`, so a change request is handed
-  over again when it lands.
+What a change must not break, in the order the worker does it
+(`TaskRunner.RunNextByPriorityAsync`):
 
-### Work parked on the client [DECIDED]
-- **`needs_human` is where a task waits for the client.** It is entered from `GiveUp`
-  (the Principal is out of options) and from the Principal's own `escalate` during
-  triage. `RoleFor(NeedsHuman)` is the PM.
-- **Routing reads status only.** A queue must never filter on the existence of a
-  message row: messages notify, statuses route. If a task should leave a queue, give
-  it a status that says so.
-- **`assigned_role` never changes.** It says what kind of work a task is (engineer),
-  not who acts next. A task parked on the client is still an engineering task.
-- **The loop never blocks on a human.** `needs_human` appears in no queue, so the loop
-  drains the rest of the board and stops. The blocking that matters is already
-  structural: `task_deps` keeps dependents unclaimable, and `BoardQuiescent` keeps QA
-  from running, so the project is never called complete.
-- **The PM asks the client unprompted.** `AskClientAboutStuckWorkAsync` runs one PM
-  turn that writes a client-facing question into the chat, keyed on the set of waiting
-  task ids in `project_meta` so each distinct set is asked about once.
-- **The client's answer goes back through the PM.** `resolve_task(task, note)` records
-  the guidance, resets `out_of_budget_count` and sends the task to `triage` — the reset
-  is required, or the Principal arrives at its strike ceiling and gives up at once.
-  `cancel_task(task, reason)` cancels the task and every transitive dependent, since a
-  dependency edge is satisfied only by a `done` task; `DiscardCancelledWork` then
-  deletes their workspaces and branches.
-- **Triage dispatches on type**: Feature → decompose, Bug → triage bug, anything else
-  → `TriageAsync`.
-- **A project-cap pause rolls the claim back.** `PauseForProjectBudget` restores the
-  status the task held before it was claimed. Leaving it `in_progress` would erase who
-  owned it, and the next run would hand a Principal's workspace to an engineer.
-- **Schema changes go through `Db/Migrations.cs`,** applied from
-  `Database.OpenProject`. `CREATE TABLE IF NOT EXISTS` leaves an existing table alone
-  and SQLite cannot ALTER a CHECK, so changing a constraint means rebuilding the table.
+1. `merging` — harness merge, no agent.
+2. `in_review` — a **fresh** Principal instance; the reviewer is never the author.
+3. Principal-owned work (`triage`, `stalled`) — decompose a Feature, triage a bug,
+   or climb the recovery ladder.
+4. One PM turn asking the client about anything parked on them.
+5. The next claimable engineer task.
+6. Close finished Features, then QA once the board is quiescent.
 
-### Review + CI [DECIDED] (settled while building M4)
-- **CI is harness-run, zero tokens** (`Ci/CiRunner.cs`): the harness runs
-  `dotnet build` then `dotnet test` in the task workspace itself — trusted code
-  like Git.cs, not the agent's jailed executor. No project (no .sln/.csproj) is a
-  skip, not a failure (docs-only or not-yet-scaffolded). Injectable into
-  `TaskRunner` (`Func<string,CiResult>`) so orchestration tests don't need a
-  toolchain; production uses `CiRunner.Run`.
-- **The gate order is CI, then review**: the Principal never reviews code
-  that fails CI. `Submit` runs commit → commits-ahead check → push → CI, then
-  hands off at `in_review` and returns.
-- **Review and merge are queue steps, not inline calls.** `RunNextByPriorityAsync`
-  serves `merging` (harness merge, no agent) and `in_review` (`ReviewAsync`) before any
-  new work, so a part-finished task is never left behind fresh work. Running them inline
-  meant a worker killed mid-pipeline left the task in a status no queue selected — resume
-  skipped it and it stranded permanently. The rule this establishes: **every handler does
-  its work first and transitions last**, so a crash either re-runs an idempotent step or
-  leaves the task claimable. Re-running is safe by construction — merging a branch already
-  in trunk is a no-op.
-- **Review is a fresh Principal instance** (`Review/ReviewPhase.cs`,
-  `AgentRecipe.PrincipalReview`) — reviewer ≠ author. Seeded with the branch diff
-  (`WorkspaceManager.DiffAgainstTrunk`), ends with `approve` or `request_changes`
-  (verdict rides `AgentRunResult`). No run() (CI already built); may write
-  CONVENTIONS.md.
-- **Revision loop back to whoever wrote the code.** CI failure or a rejected review sets
-  the progress note to the feedback and leaves the task claimable (`in_progress`), so the
-  next `forge run` resumes with the feedback in its packet — same resume mechanism as a
-  kill. `TaskRunner.ResumeRecipe` picks the recipe from the newest `agent_instances` row:
-  a Principal implementation resumes the Principal, everything else the assigned role.
-  Handing a failed Principal implementation back to an engineer was a real defect — the
-  engineer is usually already past its cap, so the task bounced straight out again.
-- **Every loop ends on a counter, and no counter resets.** `RevisionCap` (5) counts
-  engineer instances that ended `Done` for the life of the task — CI failures and review
-  rejections alike, since both look the same from here. It used to count only since the
-  last Principal instance, which a `request_changes` reset, so the engineer↔reviewer cycle
-  was unbounded. `PrincipalAttemptCap` (3) does the same for Principal implementations,
-  counted by instance-id prefix. Neither is cleared by anything an agent does.
-- **A spent cap hands the task to a rung of the ladder, never to the client.**
-  `HandToLadder` sets `out_of_budget_count` to the rung it wants (never lowering it) and
-  moves the task to `out_of_budget`: the engineer cap lands on `DirectImplementStrike`, so
-  the Principal implements it directly, and the Principal cap lands one above, the final
-  triage with `cut-it-down`. Why a task cannot pass CI is a technical question, and the
-  client has no way to answer it.
-- **A Principal implementation is not reviewed** — green CI goes straight to `merging`
-  (`Submit`). Reviewer ≠ author still holds everywhere else; this rung exists to escape the
-  review loop, so re-entering it would defeat the escalation. It is told so: the
-  `final-judge` play is appended to its packet, telling it nothing will review the work and
-  to check each acceptance criterion against something concrete before calling `done`. QA
-  is the backstop.
-- **The reviewer is told which round it is** (`ReviewPhase.Brief`), counted from
-  `DiscussionRepository.ReviewCount`, and from the fourth review every round carries the
-  `close-it-out` play: the criteria, the contract and CONVENTIONS.md are the whole standard,
-  approve unless a stated criterion is unmet. Reviews were rejecting for two fresh
-  nitpicks a round, none of them repeats, none of them in the acceptance criteria.
-- **Self-improving write-back**: `request_changes(reason, convention?)`
-  — the reason goes to the engineer; an optional `convention` is appended to
-  CONVENTIONS.md on trunk (`WorkspaceManager.AppendToTrunkFile`), so a recurring
-  mistake is ruled out once for every future engineer.
-- **Discussions table now used** (`Db/DiscussionRepository.cs`) — review verdicts
-  and CI-fail feedback are recorded as discussion rows, the task's rejection history.
+Rules inside that:
 
-### Design phase [DECIDED] (settled while building M3)
-- **The Principal is the same loop, seeded with a design brief** — not a chat, not
-  a board task. `Design/DesignPhase.cs` runs it on a long-lived trunk clone (like
-  the PM's doc work), commits structure/CONVENTIONS/contracts to trunk, then runs
-  the coverage gate. Highest-reasoning recipe (`AgentRecipe.Principal`, opus),
-  unrestricted workspace scope (a technical role, unlike the PM), no run().
-- **The task DAG is real rows, not prose.** `create_task` inserts board tasks
-  (born `created`), `add_dependency` writes `task_deps` edges. Both are toolset
-  tools gated to the Principal's recipe.
-- **PM coverage gate is mechanical** (`Design/CoverageGate.cs`): every
-  `docs/requirements/NN-*.md` must be named by some task's `requirements_ref`, or
-  it's reported as uncovered. Ground truth, not an LLM claim.
-- **Superseded: there is no separate client sign-off on the design.** M3 shipped
-  a `forge design run` / `forge design approve` CLI pair, with tasks born
-  `created` (unclaimable) until a human ran `approve`. Once the PM had a one-shot
-  handoff to engineering (client progress board era), that gate became redundant:
-  the Feature is born directly in `triage`, and `TaskRunner.DecomposeFeatureAsync`
-  runs this same `DesignPhase` and releases the tasks it creates (`created` →
-  `ready`) itself, with no human step in between — its own comment calls this out
-  as "autonomous: no client sign-off step." The CLI commands and
-  `DesignPhase.Approve` were dead code by that point and have been removed; the
-  client's one approval is the requirements the PM puts to them with
-  `propose_requirements`, which is what opens the Feature.
+- **CI runs before review**, so the Principal never reads a diff that does not
+  build. CI is harness code with zero tokens (`Ci/CiRunner`): static-file parse →
+  UI gate → layout → `dotnet build` → `dotnet test` → the rendered-page check.
+  Nothing to build is a **skip**, not a failure.
+- **Review and merge are queue steps, not inline calls.** A worker killed
+  mid-pipeline must leave the task in a status some queue selects.
+- **Every recovery loop ends on a counter, and no counter is reset by anything an
+  agent does**: `RevisionCap` 5 engineer attempts → the Principal implements the
+  task directly; `PrincipalAttemptCap` 3 → the final triage, which has no
+  `redirect`; `CrashRetryCap` 2; `SplitDepthCap` 2; `QaRoundCap` 5. Inside one
+  instance: 3 empty turns, 5 fully-refused turns, 3 output-truncated turns.
+- **A spent cap hands the task to a rung of the ladder, never to the client.** Why
+  a task cannot pass CI is a technical question the client cannot answer.
+- **A Principal implementation is not reviewed** — green CI goes straight to
+  merging. It exists to escape the review loop, so re-entering it would defeat it.
+- **`stalled` is the Principal's queue** and is reachable from every live status —
+  a task that cannot get there is one the loop claims again with nothing changed.
+  **`needs_human` is the client's** and appears in no queue, so the loop drains the
+  rest of the board and stops. Blocking that matters is structural: `task_deps`
+  keeps dependents unclaimable and a non-quiescent board keeps QA from running.
+- **QA is project-level.** It runs only when no task work remains, is seeded with
+  the bug ledger, and re-arms on `CountDone()` exceeding `qa_verified_count` — a
+  round that accepts nothing new never moves the watermark, which is what makes the
+  project terminate. Where the project has an OpenAPI contract, QA **writes the
+  acceptance suite and never starts the app**; the harness builds it, starts the
+  application, runs it and files a bug from a red run with the output attached. A
+  round whose contract and coverage are unchanged re-runs the suite with no model
+  at all.
+- **Handover happens once per completion** (`project_delivered`), re-armed when a
+  new Feature is decomposed, and records `spec_baseline_sha` — everything after it
+  is the pending change. A change request is planned and reviewed as a **delta**;
+  nobody re-reads the whole specification.
 
-### Agent runtime [DECIDED] (settled while building M1/M2)
-- **Recipes declare their tools and file scope.** `AgentRecipe.Tools` is the
-  allowlist the toolset enforces and the prompt renders — one list, so a role
-  cannot be told about a tool it does not have. `AgentRecipe.Scope` (a
-  `PathScope`) is how "the PM never sees code" becomes mechanical: the PM is
-  scoped to PROJECT.md, STATUS.md and docs/, and `read_file src/…` is refused by
-  the harness, not by the model's manners (Principle 6 lists file-access scopes).
-- **Chat is the same loop as task work**, seeded with the conversation instead of
-  a task packet, and ended by a `reply` tool rather than `done`. Metering, budget
-  refusal, the jail and the iteration cap therefore apply to the PM unchanged.
-- **Chat history lives in the `messages` table**, replayed into an alternating
-  conversation on every turn. The PM is as stateless as an engineer: `forge chat`
-  can be closed, reopened, or resumed from another terminal.
-- **The PM commits docs straight to trunk** from a long-lived `workspaces/pm/`
-  clone. Requirements are the PM's own artifacts and the client is their
-  reviewer via sign-off, so they do not go through the task branch/review path.
-- **Provider errors park work, never crash the process.** The provider is a
-  network boundary; a 429 or auth failure ends the instance as `crash` with the
-  workspace and progress note intact, so the resume path handles it.
-- **A turn cut off at the output ceiling is a retry, not a parse error.** `AgentLoop`
-  checks `LlmResponse.StopReason` (`max_output_tokens` / `max_tokens` / `MAX_TOKENS` /
-  `length` / `incomplete`) before touching the tool calls: a truncated turn's calls are
-  partial, so none runs, none is carried into the conversation — which would leave results
-  owing on the next request — and the model is told to send it again in smaller pieces.
-  `MaxTruncatedTurns` (3) ends the instance if it will not. Arguments that still fail to
-  parse are refused as a tool error; the throw used to take the whole worker down.
+## Budgets
 
-### Models, providers and cost [DECIDED] (settled while adding multi-provider support)
+Two units, two jobs, two different failure modes. Do not conflate them.
 
-- **No code names a model — recipes name a *tier*.** `ModelTier` is `Fast | Coding |
-  Reasoning` (the vocabulary the original design used), and `AgentRecipe.Tier` replaced the
-  old `Model` string. The configured `ILlmClient` resolves tier → model id via
-  `ModelFor(tier)`, so orchestration policy ("an engineer needs the coding tier") stays
-  separate from provider knowledge ("what that tier is called at Anthropic today").
-  Adding a role remains a record + a prompt file; adding a provider is one adapter class
-  with a three-entry tier map plus one case in `LlmClientFactory`. `AgentLoop` resolves
-  the model **once per instance**, never per turn — a conversation must not change model
-  underneath itself. Three adapters exist: `AnthropicLlmClient`, `OpenAiLlmClient`,
-  `GeminiLlmClient` (hand-rolled over HttpClient — Forge uses no SDK surface, since tool
-  calls are parsed out of plain text). Each adapter's default tier ids are **price-table
-  keys**, so every default is priceable out of the box.
-- **The adapter normalises usage; the rest of Forge sees one meaning.** `LlmUsage.TokensIn`
-  is always the *uncached prompt remainder*, which each provider reaches differently:
-  Anthropic's `input_tokens` already excludes cached tokens, while OpenAI's `prompt_tokens`
-  and Gemini's `promptTokenCount` include them and must have the cached count subtracted.
-  Two further traps, both settled from the published schemas: OpenAI reports
-  `cache_write_tokens` but prices no cache-write rate (it bills them as ordinary input),
-  so they stay inside `TokensIn` and `CacheWriteTokens` is left at zero — mapping them
-  across would ask the pricer for a nonexistent rate and throw. Gemini reports
-  `thoughtsTokenCount` separately from `candidatesTokenCount` but bills it as output, so
-  output is their **sum**. Gemini ids also carry the price table's `gemini/` prefix and the
-  adapter strips it for the URL, so one canonical id travels through recipe, ledger and pricer.
-- **The provider is configuration, not code.** `<data root>/llm.json` names the provider
-  and may pin any tier's model id; `FORGE_LLM_PROVIDER` overrides it (same
-  environment-beats-file rule as `EnvFile`). No file at all is valid — the default
-  provider's built-in map applies. Malformed JSON throws rather than silently defaulting,
-  because the only other symptom would be a surprising bill.
-- **Prices are fetched, never hardcoded** (`Llm/Pricing/`). `PriceCatalog` reads
-  LiteLLM's table (`model_prices_and_context_window.json`), chosen because its keys are
-  provider-native model ids — the exact strings recipes resolve to — so no name mapping
-  can silently mis-price. Cached in memory for the process and on disk at
-  `<data root>/prices/` with a **1-day TTL** and a conditional GET; machine-wide, not per
-  project, since prices are not project-scoped. A failed refresh falls back to the stale
-  snapshot; a **model miss forces one refresh before it is allowed to fail**, because the
-  everyday cost of a TTL is a model newer than the table.
-- **An unpriced model refuses to run.** No zero-cost fallback, no guessed cache
-  multiplier — with a dollar budget, costing $0 is a cap that never trips. Same rule for
-  a cache bucket with no rate: free while the bucket is empty, `ModelNotPricedException`
-  the moment it isn't.
-- **The ledger stores all four token buckets plus cost.** `tokens_in` (the *uncached*
-  prompt remainder), `tokens_out`, `cache_read_tokens`, `cache_write_tokens`, plus
-  `cost_nanos` (USD × 1e-9, an integer so `SUM()` stays exact) and `priced_with` (the
-  snapshot that priced it). Keeping the buckets is what makes a row's cost recomputable
-  when a rate is corrected — the property that makes depending on an external feed safe.
-- **The task token budget is per instance and counts every bucket.** Enforcement reads
-  `LedgerRepository.InstanceTotals(agent_instance_id)` — `tokens_in + tokens_out +
-  cache_read + cache_write` — against `tasks.token_budget`. Per instance because the
-  budget bounds one runaway agent, and a task legitimately passes through an engineer, a
-  reviewer and a revision; charging them to one pot starved whichever ran last. Every
-  bucket because counting only the uncached remainder made the same number mean ~25x more
-  work on a provider that caches than on one that does not. `tasks.tokens_spent` is now a
-  reporting total only and gates nothing. Budgets are therefore sized in the hundreds of
-  thousands; `ResetTokensSpent` and the triage/redirect headroom hacks are gone, since a
-  new instance always starts at zero.
-- **Two budget units, two jobs — and two different failure modes.** The **project**
-  budget is USD (stored per project; `--project-budget` overrides per invocation),
-  enforced by summing `cost_nanos` and re-read **per call** when unset on the CLI, so
-  raising it from the board takes effect mid-build. A **task** budget stays tokens and
-  deliberately still counts only `tokens_in + tokens_out`: an approximate guard on one
-  runaway agent, undercounting real traffic ~25x because cache reads dominate —
-  knowingly tolerated; money safety is the dollar cap's job.
-- **A spent project cap PAUSES; a spent task budget STRIKES.** They arrive as the same
-  `EndReason.Budget`, distinguished by `BudgetExhaustedException.ProjectCap` →
-  `AgentRunResult/TaskRunOutcome.ProjectBudgetExhausted`. Task-budget exhaustion is that
-  task's failure: OutOfBudget, a strike, the Principal's queue. Project-cap exhaustion is
-  a client money decision: the task is left exactly as it stands (claimable, no strike,
-  no transition), the loop stops pulling work, ONE escalation reaches the PM (deduped
-  against pending), and QA/triage phases short-circuit without moving the QA watermark —
-  a budget-refused QA round must never mark the project verified. The old behaviour
-  marched every remaining task through the strike ladder to blocked; do not reintroduce
-  it. Covered by `BudgetPauseTests`.
-- **Per-role spend needs no new attribution.** `token_ledger` has carried
-  `agent_instance_id`, `role` and `task_id` since M0, so "what did the PM cost" is
-  `GROUP BY role` (`LedgerRepository.SpendByRole`, shown by `forge log`). Role granularity
-  only: design/review/triage/implementation all report as `principal`, which is accepted.
+- **Project budget — USD.** Stored per project in `project_meta`, re-read per call
+  so raising it from the board takes effect mid-build. Exhausted: the build
+  **pauses**, the task is left exactly as it stands with no strike, one escalation
+  reaches the PM, and a QA round that was refused must not move the watermark.
+- **Task budget — tokens.** Per *agent instance*, counting `tokens_in + tokens_out`
+  only: a cache read is a prompt the provider already holds, so counting it made
+  the same budget mean an order of magnitude less on a caching provider. Exhausted:
+  that task strikes and climbs the ladder.
+- The ledger stores all four token buckets plus `cost_nanos` (USD × 1e-9, integer
+  so `SUM()` stays exact) and `priced_with`, which is what makes a row's cost
+  recomputable when a rate is corrected.
+- Prices are fetched from LiteLLM's table, keyed by provider-native model id, cached
+  machine-wide with a 1-day TTL; a model miss forces one refresh before it may fail.
 
-### Client progress board [DECIDED] (`forge board <project>`)
+## Boundaries enforced mechanically, not by manners
 
-- **The client's whole window on the project**: milestones, features, spend per agent, and
-  the PM chat — which stays their only input. Served by `forge board` on localhost via a
-  minimal API hosted inside the CLI (a `FrameworkReference`, not a second executable);
-  the page polls `/api/board` every 3s.
-- **A read model, never a second source of truth** (`Board/BoardQuery.cs`). Every figure is
-  queried from tasks/milestones/token_ledger/messages at request time, so the page cannot
-  drift from the ledger. Nothing is cached or denormalised.
-- **The page is one panel: the plan.** Milestones in order with their tasks under each, and
-  the one task a worker holds blinking (`BoardSnapshot.Plan`). It replaced four separate
-  panels — "Currently building", "Progress" (by requirement), "Features" and "Work outside
-  features" — which showed the same work four ways. Requirement-grouping and `CurrentTask`
-  are gone with them.
-- **Milestone state is derived from its tasks — there is NO stored status column.** done =
-  all tasks done; active = any in flight; else pending. The same rule that dropped
-  `milestones.status` the first time round. `project_meta` accessors live on
-  `Db/ProjectMetaRepository`, not TaskRepository.
-- **A task carries the two things the client reads: `display_name` and `milestone_id`.**
-  Both are **required** arguments of `create_task`, because a prompt asking for them is not
-  a guarantee. `title` stays an identifier for engineers (`implement-books-http-api`);
-  `display_name` is the sentence the client sees ("Adding, listing and deleting books").
-  A task with no display name falls back to its title rather than showing nothing.
-- **A milestone is created by naming it, not by an id.** `MilestoneRepository.EnsureByName`
-  find-or-creates, case- and whitespace-insensitively, and `position` comes from the order
-  names first appear — so the Principal groups work by repeating a name, chronological order
-  falls out, and there is no id to carry between calls. Adding a phase is one string.
-- **Two milestones are the harness's, not the model's.** `Getting started` is created first
-  (`EnsureFirst`) by `DecomposeFeatureAsync` and absorbs everything that was never a task:
-  PM chat, the design run, a Feature's own decomposition cost, and any task predating the
-  plan. It **never shows as active** — it has no task to be in flight, and a "Getting
-  started" row blinking after delivery would be nonsense. `Testing & fixes` is created by
-  `MaybeRunQaAsync` at the moment verification comes due, holds every bug (`file_bug` and
-  the acceptance-run bug assign it themselves), and absorbs QA's own rounds **by role**,
-  since a QA round has no task to attach to. Every other task inherits its phase from the
-  Principal, or from its parent when triage creates it.
-- **Cost is charged from every task; only live ones are shown.** A cancelled or rejected
-  task leaves the plan but its spend stays in its milestone's total, so the phases still sum
-  to the ledger. `BoardQueryTests` asserts that reconciliation — it is the property the
-  client depends on, and the reason the old "Work outside features" panel existed.
-- **Chat is a real PM turn.** `POST /api/chat` runs `PmChat.SendAsync` in the background
-  (a turn takes far longer than a browser will wait) behind a semaphore, and the reply
-  arrives via the same polling that drives the rest.
-- **`forge board` takes no project** — it serves them all, with the project as a query
-  parameter, so the dropdown switches without restarting the host. `POST /api/projects`
-  creates one (name, budget, provider) via `ProjectBootstrap.Init`; the client never
-  needs a terminal.
-- **Per-project settings live in `project_meta`** (`ProjectSettings`: `llm_provider`,
-  `budget_usd`), not in the global registry and not in `llm.json`. Two reasons, both bugs
-  that existed before: `llm.json` is machine-wide, so two projects could not choose
-  different providers — the second silently ran on the first one's models; and
-  `--project-budget` was a per-invocation flag, so the next run that omitted it had **no
-  cap at all**. Provider precedence is `FORGE_LLM_PROVIDER` → project → llm.json → default.
-  The budget is raisable from the page, because hitting the cap otherwise dead-ends a
-  client whose only interface is the board.
-- **The spec appears when the PM hands work over**, not while it is being drafted:
-  `SpecReady` is "a proposal is pending or a Feature exists", since the client approving
-  a proposal is the handoff to the Principal. Read from **trunk via `git show`**
-  (`Board/SpecReader.cs`), never from the
-  PM's working clone, which can sit mid-edit. Rendered inline and collapsed.
-- **One build at a time, machine-wide** (`Scheduling/WorkerLease.cs`) — a decision, not a
-  limitation. A JSON lease at `<data root>/worker.json` carrying a heartbeat; both the
-  board's Start button and a terminal `forge run` take it, so they cannot collide on one
-  database. Staleness is judged by the heartbeat rather than file mtime, so a crashed
-  worker frees the lease by falling silent. This finally closes the "forge run has no
-  concurrency guard" hazard. Two properties are load-bearing: the lease **beats itself**
-  on an internal timer (a single task run routinely outlasts the 90s timeout — beating
-  only between tasks let the lease read stale mid-task, re-opening the exact collision it
-  prevents), and acquisition is **atomic** (`FileMode.CreateNew`, not check-then-write,
-  which let two simultaneous acquirers both win). Stopping mid-task is safe by design:
-  the cancelled instance parks and the task resumes via the normal kill-and-resume path.
-- **"Building" and "working" are different facts and stay separate.** `state` is how far
-  the plan has got (from the data); `building` is whether a worker is alive this second
-  (from the lease). A project can sit at `building` with nothing running, and the client
-  must be able to see that — the pill reads "planning · idle" or "working".
+- `PathScope` per recipe: the PM is scoped to `PROJECT.md`, `STATUS.md` and
+  `docs/`, so `read_file src/…` is refused by the harness. `PathJail` resolves
+  every path inside the workspace; `ToolAllowlist` and `RefusedCommands` bound what
+  `run`/`serve` may start; there is no shell.
+- The OpenAPI contract is validated at `write_file`, so a document the harness
+  cannot use is refused in the turn that wrote it.
+- `UiGate` refuses a page using `fg-` classes the kit does not define, in the same
+  turn, and again in CI. Appearance is not generated work: Forge ships the UI kit
+  and installs it into every workspace, themes are a closed set chosen with
+  `choose_theme` or by the client from the board, and kit files are overwritten
+  rather than policed.
+- A page is verified by **rendering** it in headless Chromium (`Ui/PageProbe`),
+  never by reading markup — markup cannot say whether an element is visible, where
+  it sits, or what colour it resolved to. Generic health rules live in
+  `Ci/PageHealth`; requirement-specific assertions live in QA's suite. No browser,
+  or no interface change in the diff, is a skip.
+- One build at a time machine-wide, via a heartbeat lease at
+  `<data root>/worker.json`. Acquisition is atomic (`FileMode.CreateNew`) and the
+  lease beats itself on a timer, because one task run routinely outlasts the
+  timeout.
 
-### Logging / observability [DECIDED] (settled while building the event log)
-- **Six columns, fixed:** `timestamp | project | task | domain | action | message`.
-  `project` is on every line (the story); `task` is the unit within it and is
-  null for project-level events (intake chat, milestone planning). A task line
-  still names its project, so filtering by project is a superset of every task —
-  "all logs for the project" and "logs for one task" are the same rows, one
-  filter apart. There is NO single "scope" column: project and task are two
-  levels of identity, not two values of one field.
-- **`domain` + `action` are rendered from one closed `EventType` enum**
-  (`Logging/EventType.cs`), split at write time and reassembled on read with
-  `EventTypes.FromColumns`. The enum is the single source of truth, so the two
-  columns can never disagree, and filtering is an equality check (`domain='tool'`
-  to skip or find a domain; `action='write_file'` across the whole project).
-  - Typed mechanical events split as `domain`/`action`: `tool`/`write_file`,
-    `git`/`merge`, `lifecycle`/`instance_start`, `llm`/`call`, `error`/`provider`.
-  - The `message` domain has an empty `action` — free-form, human-readable,
-    covering agent↔client communication AND ordinary service/debug logging from
-    harness code ("creating util file X"). The line you actually read.
-- **The logger API is two methods** (`Logging/ForgeLogger.cs`): `Event(EventType,
-  msg)` for typed events (the enum is the only category argument, so a git merge
-  can't be mis-tagged as lifecycle — the old per-domain methods were a footgun and
-  are gone), and `Message(msg)` for the free-form channel. Tool events derive their
-  type from the tool name (`EventTypes.ForTool`) and are never hand-written.
-- Read back with `forge log <project> --events [--task N] [--domain D]`.
-- **Swappable sink behind `ILogSink`** (`Write(LogEntry)`). Default is
-  `FileLogSink` → `projects/<name>/forge.log` (per-project, so isolation is
-  structural). `ConsoleLogSink`, `CompositeLogSink` (fan-out, "push anywhere"),
-  and `NullLogSink` exist; a remote sink is a drop-in. Changing destination is
-  one line at the CLI, no call-site changes.
-- **`ForgeLogger` is the facade** every emit point calls; `.For(taskId)` binds
-  the correlation once so call sites emit a one-line message. Optional everywhere
-  (defaults to `ForgeLogger.Null`), so logging is never required to run and did
-  not disturb existing constructors/tests.
-- **Emit points:** toolset (one line per tool call, `tool.refused` on refusal),
-  loop (instance start/end, llm.call, llm.nudge, llm.refused, error.provider),
-  runner (task transitions, git branch/push/merge), PM chat (message.sent,
-  git.commit). Read back with `forge log <project> --events [--task N]`.
+## House style
 
-## Build order (all shipped — M-numbers survive as labels in this file)
-Forge was built one pillar at a time, and the milestone labels are still how
-the sections above are dated: M0 harness (schemas, `MeteredLlmClient`, jailed
-tool executor, `forge log`) → M1 single agent with kill-and-resume → M2 PM
-chat → M3 design → M4 review + CI → M5 QA → M6 change requests. Later work
-(the board, multi-provider support, logging) landed outside that numbering.
-
-## Non-negotiables to preserve in code
-- Budgets enforced by refusing the next LLM call, never by asking the model.
-- All LLM calls flow through one `MeteredLlmClient` decorator (ledger + caps).
-- Never hardcode a model id or a model price: recipes name a `ModelTier`, the configured
-  `ILlmClient` resolves it, and rates come from `PriceCatalog`. An unpriced model refuses
-  to run. See "Models, providers and cost" above.
-- Merge/CI/test state read from git and process output, never from agent claims.
-- Secrets: agents see `{{secret:NAME}}`; substitution in the tool executor at
-  exec time; values never in DB, context, or logs.
-- Every feature of generated projects must be CLI-verifiable; Principal must
-  design an observable side-channel for otherwise-internal behavior
-  (e.g. an X-Cache header for a cache).
-- .NET 8+ console host; Microsoft.Data.Sqlite + Dapper (no EF);
-  System.CommandLine or Spectre.Console for the CLI.
-- Generated projects are co-hosted: exactly one runnable project, serving its UI as static
-  files from its own `wwwroot/` alongside its API on one port. Never a separate front-end
-  project or a second server. `CiRunner` refuses a repo with two runnable projects, and
-  refuses a solution that lists `tests/acceptance` (QA's suite needs a started app, so in
-  the solution it fails `dotnet test` for every task).
-
-## House style (how the code in THIS repo is written)
 Rules that change what gets written. Anything a competent C# author does by
 default is left out on purpose.
 
-- **Comments state what the code does, not the history of why it was decided.**
-  Every class and every function carries a short comment saying what it is and
-  what it does — a couple of lines, enough for a human to review the file without
-  reading the body. Leave out the incident that motivated it, the option that was
-  rejected, and what it used to do; a decision worth keeping goes in this file,
-  not in the source.
-  A comment describes the code as it stands, as if written from scratch today.
-  When a rule is removed, the comment loses the sentence that described it — it
-  never gains one explaining the removal ("X is deliberately NOT checked here
-  because it used to fail…"). Where the reader still needs to know a
-  responsibility lies elsewhere, say only where it lives now: "the paths a page
-  links to are judged by PageCheck, on the rendered page."
-- **Per-field and per-entry comments are individual.** When commenting a
-  dictionary, a record's fields, or a config block, each entry gets its own line
-  saying what the key is and what the value means — never one shared blurb above
-  the block.
-- **A file is written to be reviewed by a human.** Public surface first, helpers
-  after; one concern per file; no function so long that its comment cannot
-  describe it in a sentence.
-- **If it can be decided deterministically, the harness decides it.** Before
-  adding an LLM call or a tool, ask what the answer depends on. If it can be read
-  from the repo, the database, git, or process output, write the code —
-  `Discover` finds the startup project, `CiRunner` reads the exit code, the
-  coverage gates compare sets. A model call is for judgement only.
+- **Comments say what the code does, not the history of why.** Every class and
+  function carries a short comment: what it is and what it does, enough to review
+  the file without reading the body. Leave out the incident that motivated it and
+  the option that was rejected — a decision worth keeping goes in this file. When a
+  rule is removed the comment loses the sentence describing it; it never gains one
+  explaining the removal.
+- **Per-field and per-entry comments are individual.** Each dictionary entry,
+  record field or config key gets its own line saying what the key is and what the
+  value means — never one shared blurb above the block.
+- **A file is written to be reviewed by a human**: public surface first, helpers
+  after, one concern per file, no function whose comment cannot describe it in a
+  sentence.
 - **Tests are named as the behaviour they protect**, in full sentences:
-  `A_completed_task_lands_in_the_bare_repo_and_the_workspace_is_cleaned_up`. The
-  name is the description; add a comment only where the setup is not obvious.
-  Assert observable outcomes (rows, files on trunk, exit codes), not internal calls.
-- **Refusals are written for the model that will read them.** Every error a tool
-  returns says what was wrong AND the correct form or the available values —
-  `create_task` lists the operationIds that exist, a failed `serve` names the
-  startup project. A refusal the agent cannot act on wastes a whole instance.
-- **A type when the harness enforces it, a string when only the model reads it.**
-  Parse-don't-validate at the boundary (`RequirementsRef`, `ApiContract`), factory
-  methods that enforce invariants, exhaustive switches over closed enums. The same
-  rule as the DB column vs JSON decision, applied in memory.
-- **Derive, never store twice.** If a fact can be computed from rows that already
-  exist (a milestone's state, who acts next, a task's cost), compute it rather
-  than storing a second copy.
-- **One place per concern.** The tool catalogue is the only description of the
-  tool surface; `EventType` is the only list of log categories; prompts are files,
-  never rows. Adding a second place to update is the defect, not the duplication.
-- **Every handler does its work first and transitions last**, so a crash either
-  re-runs an idempotent step or leaves the task claimable.
-- **New dependencies are argued for, not added.** Sqlite + Dapper + Spectre, plus
-  `Microsoft.OpenApi.Readers` for contract parsing. Providers are hand-rolled over
-  HttpClient; there is no SDK surface to keep in step.
+  `A_completed_task_lands_in_the_bare_repo_and_the_workspace_is_cleaned_up`. Assert
+  observable outcomes — rows, files on trunk, exit codes — not internal calls. CI is
+  injectable into `TaskRunner` so orchestration tests need no toolchain.
+- **New dependencies are argued for, not added.** Current set: Microsoft.Data.Sqlite
+  + Dapper (no EF), Spectre.Console, Microsoft.OpenApi.Readers, Microsoft.Playwright,
+  and an ASP.NET `FrameworkReference` for the board. Provider adapters are
+  hand-rolled over `HttpClient` — there is no SDK surface to keep in step.
+
+## Where the history lives
+
+This file states the rules as they are now. The record of how they got there —
+superseded designs, the M0–M6 build order, incidents that motivated a gate — belongs
+in `ARCHITECTURE.md` and the design notes under `docs/`, not here. Some source
+comments still cite a v1 specification by section (`spec §7`); read those as
+historical markers of a document that has since been folded into `ARCHITECTURE.md`.
