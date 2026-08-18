@@ -79,7 +79,8 @@ public sealed class TaskRunner(
     // orchestration test needs neither a toolchain nor a browser. The task travels with the
     // workspace because the browser check judges only the pages this task's requirement owns.
     private readonly Func<string, TaskRecord, CiResult> _ci =
-        ci ?? ((workspace, task) => CiRunner.Run(workspace, paths.BrowsersDir, task.RequirementsRef?.File));
+        ci ?? ((workspace, task) => CiRunner.Run(
+            workspace, paths.BrowsersDir, task.RequirementsRef?.File, paths.AgentHome(project)));
 
     /// <summary>
     /// Runs the given task, or the next claimable one. Abandoned work — a task left
@@ -619,7 +620,7 @@ public sealed class TaskRunner(
         // The project, its framework and its package versions are the harness's to decide, not
         // QA's to remember. A round once invented a Microsoft.NET.Test.Sdk version that does not
         // exist, and the next two wrote a differently-named project beside the broken one.
-        if (AcceptanceSuite.EnsureScaffold(workspace) is { } scaffoldError)
+        if (AcceptanceSuite.EnsureScaffold(workspace, _workspaces.AgentHome) is { } scaffoldError)
         {
             _log.Message($"QA round incomplete — {scaffoldError}");
             return new TaskRunOutcome(0, EndReason.Crash, TaskStatus.Qa, scaffoldError);
@@ -738,7 +739,7 @@ public sealed class TaskRunner(
 
         // Compile first. A suite that does not build is not worth keeping, so nothing is
         // committed and the next round's clone starts from the scaffold again.
-        if (AcceptanceSuite.Build(workspace) is { Passed: false } broken)
+        if (AcceptanceSuite.Build(workspace, _workspaces.AgentHome) is { Passed: false } broken)
             return $"QA round incomplete — the acceptance suite does not compile:\n{broken.Output}";
 
         // It builds, so keep it whatever the run says: a red suite is still the regression
@@ -754,7 +755,7 @@ public sealed class TaskRunner(
         if (contract.OperationIds.Where(id => !declared.Contains(id)).ToList() is { Count: > 0 } uncovered)
             return "QA round incomplete — no acceptance test covers " + string.Join(", ", uncovered);
 
-        var acceptance = AcceptanceSuite.Run(workspace, alreadyBuilt: true);
+        var acceptance = AcceptanceSuite.Run(workspace, alreadyBuilt: true, _workspaces.AgentHome);
         if (!acceptance.Ran)
             return $"QA round incomplete — the acceptance suite did not run: {acceptance.Output}";
 
@@ -777,7 +778,7 @@ public sealed class TaskRunner(
     {
         if (AgentToolset.Discover(workspace) is not { } target) return null;
 
-        using var app = AppHost.Start(workspace, target.ProjectPath);
+        using var app = AppHost.Start(workspace, target.ProjectPath, _workspaces.AgentHome);
         if (app?.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl) return null;
 
         try
@@ -912,7 +913,7 @@ public sealed class TaskRunner(
             ? fromContract
             : ["/"];
 
-        using var app = AppHost.Start(workspace, target.ProjectPath);
+        using var app = AppHost.Start(workspace, target.ProjectPath, _workspaces.AgentHome);
         if (app?.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl) return "";
 
         IReadOnlyList<Ui.PageSnapshot>? pages;

@@ -180,3 +180,100 @@ public class ToolExecutorEnvironmentTests : IDisposable
         Assert.Contains("NUGET_PACKAGES=/tmp/nuget", result.Stdout);
     }
 }
+
+/// <summary>
+/// The other half of the same guarantee: the harness re-runs the code an agent wrote — the
+/// build, the tests, the application, git — and those starts must scrub exactly as the agent's
+/// own commands do.
+/// </summary>
+public class HarnessChildProcessTests : IDisposable
+{
+    private const string Canary = "FORGE_TEST_HARNESS_CANARY";
+
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), $"forge-childproc-{Guid.NewGuid():N}");
+
+    private readonly string _home = Path.Combine(Path.GetTempPath(), $"forge-childhome-{Guid.NewGuid():N}");
+
+    public HarnessChildProcessTests()
+    {
+        Directory.CreateDirectory(_dir);
+        Environment.SetEnvironmentVariable(Canary, "sk-ant-should-never-leak");
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-api01-also-should-never-leak");
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(Canary, null);
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        Directory.Delete(_dir, recursive: true);
+        if (Directory.Exists(_home)) Directory.Delete(_home, recursive: true);
+    }
+
+    [Fact]
+    public void Forges_own_credentials_do_not_reach_a_process_the_harness_started()
+    {
+        var psi = ChildProcess.Create("dotnet", _dir, _home);
+
+        Assert.False(psi.Environment.ContainsKey(Canary));
+        Assert.False(psi.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.False(psi.Environment.ContainsKey("OPENAI_API_KEY"));
+        Assert.False(psi.Environment.ContainsKey("GEMINI_API_KEY"));
+    }
+
+    [Fact]
+    public void The_toolchain_still_gets_what_it_needs_and_a_home_that_is_not_the_users()
+    {
+        var psi = ChildProcess.Create("dotnet", _dir, _home);
+
+        Assert.True(psi.Environment.ContainsKey("PATH"));
+        Assert.Equal(_home, psi.Environment["HOME"]);
+        Assert.True(Directory.Exists(_home));
+        Assert.NotEqual(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), psi.Environment["HOME"]);
+    }
+
+    [Fact]
+    public void A_caller_with_no_project_in_scope_still_gets_a_scrubbed_environment()
+    {
+        var psi = ChildProcess.Create("git", _dir);
+
+        Assert.False(psi.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.Equal(ChildProcess.HarnessHome, psi.Environment["HOME"]);
+    }
+
+    [Fact]
+    public void What_one_child_needs_is_added_on_top_of_the_allowlist()
+    {
+        var psi = ChildProcess.Create("dotnet", _dir, _home,
+            new Dictionary<string, string> { ["FORGE_ACCEPTANCE_BASE_URL"] = "http://127.0.0.1:5000" });
+
+        Assert.Equal("http://127.0.0.1:5000", psi.Environment["FORGE_ACCEPTANCE_BASE_URL"]);
+    }
+
+    /// <summary>
+    /// The guarantee is only as good as the number of places that can bypass it, so the type
+    /// is the only one in Forge.Core allowed to construct a ProcessStartInfo.
+    /// </summary>
+    [Fact]
+    public void No_other_code_builds_a_process_start_info_of_its_own()
+    {
+        var core = Path.Combine(SourceRoot(), "src", "Forge.Core");
+        var offenders = Directory.EnumerateFiles(core, "*.cs", SearchOption.AllDirectories)
+            .Where(f => Path.GetFileName(f) != "ChildProcess.cs")
+            .Where(f => File.ReadAllText(f).Contains("new ProcessStartInfo", StringComparison.Ordinal))
+            .Select(f => Path.GetRelativePath(core, f))
+            .ToList();
+
+        Assert.True(offenders.Count == 0,
+            "These start a process without the scrubbed environment: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>Walks up from the test binary to the directory holding Forge.sln.</summary>
+    private static string SourceRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Forge.sln")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Forge.sln not found above the test binary.");
+    }
+}

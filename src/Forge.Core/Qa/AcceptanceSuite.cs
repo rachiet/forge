@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Forge.Core.Agents;
+using Forge.Core.Tools;
 
 namespace Forge.Core.Qa;
 
@@ -84,7 +85,7 @@ public static partial class AcceptanceSuite
     /// package versions come from the installed SDK rather than from a model's memory. QA then
     /// writes only test files. Returns null on success, or why the scaffold could not be built.
     /// </summary>
-    public static string? EnsureScaffold(string workspaceDir)
+    public static string? EnsureScaffold(string workspaceDir, string? agentHome = null)
     {
         var dir = Path.Combine(workspaceDir, Directory.Replace('/', Path.DirectorySeparatorChar));
         PruneStrayProjects(workspaceDir);
@@ -97,7 +98,7 @@ public static partial class AcceptanceSuite
             && !System.IO.Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories).Any())
             System.IO.Directory.Delete(dir, recursive: true);
 
-        var created = Dotnet(workspaceDir, baseUrl: "",
+        var created = Dotnet(workspaceDir, baseUrl: "", agentHome,
             "new", "xunit", "-o", Directory, "-n", "AcceptanceTests");
         if (!created.Passed) return "could not scaffold the acceptance suite:\n" + created.Output;
 
@@ -128,7 +129,7 @@ public static partial class AcceptanceSuite
 
             """);
 
-        var addedBrowser = Dotnet(workspaceDir, baseUrl: "",
+        var addedBrowser = Dotnet(workspaceDir, baseUrl: "", agentHome,
             "add", ProjectFile, "package", "Microsoft.Playwright", "--version", PlaywrightVersion);
         if (!addedBrowser.Passed)
             return "could not add the browser package to the acceptance suite:\n" + addedBrowser.Output;
@@ -264,8 +265,8 @@ public static partial class AcceptanceSuite
     /// nothing, and must never be reported as a suite that failed: a failed run becomes a bug
     /// against the product, and rejecting that bug completes the project.
     /// </summary>
-    public static AcceptanceResult Build(string workspaceDir) =>
-        Dotnet(workspaceDir, baseUrl: "", "build", ProjectFile, "--nologo");
+    public static AcceptanceResult Build(string workspaceDir, string? agentHome = null) =>
+        Dotnet(workspaceDir, baseUrl: "", agentHome, "build", ProjectFile, "--nologo");
 
     /// <summary>Whether this repo has an acceptance suite directory.</summary>
     public static bool Exists(string workspaceDir) =>
@@ -280,17 +281,21 @@ public static partial class AcceptanceSuite
     /// <param name="alreadyBuilt">
     /// True when the caller has just compiled the suite, so it is not built twice.
     /// </param>
-    public static AcceptanceResult Run(string workspaceDir, bool alreadyBuilt = false)
+    /// <param name="agentHome">
+    /// HOME for the suite and the application it tests; see <see cref="ChildProcess.Create"/>.
+    /// </param>
+    public static AcceptanceResult Run(
+        string workspaceDir, bool alreadyBuilt = false, string? agentHome = null)
     {
         if (!Exists(workspaceDir)) return AcceptanceResult.NotRun("no acceptance suite in this repo");
         if (AgentToolset.Discover(workspaceDir) is not { } target)
             return AcceptanceResult.NotRun("no runnable application to test");
 
-        if (!alreadyBuilt && Build(workspaceDir) is { Passed: false } build)
+        if (!alreadyBuilt && Build(workspaceDir, agentHome) is { Passed: false } build)
             return AcceptanceResult.NotRun(
                 "the acceptance suite does not compile, so no test ran:\n" + build.Output);
 
-        using var app = AppHost.Start(workspaceDir, target.ProjectPath);
+        using var app = AppHost.Start(workspaceDir, target.ProjectPath, agentHome);
         if (app is null)
             return AcceptanceResult.NotRun("the application would not start, so the suite was not run");
 
@@ -301,7 +306,7 @@ public static partial class AcceptanceSuite
                 $"the application did not report a listening address within "
                 + $"{AppHost.StartupTimeout.TotalSeconds:0}s, so the suite was not run:\n{app.Output}");
 
-        var result = Dotnet(workspaceDir, baseUrl, "test", ProjectFile, "--nologo", "--no-build");
+        var result = Dotnet(workspaceDir, baseUrl, agentHome, "test", ProjectFile, "--nologo", "--no-build");
         app.Stop();
         return result;
     }
@@ -312,20 +317,22 @@ public static partial class AcceptanceSuite
     /// installed rather than trying to download their own inside a workspace.
     /// A command that outlives the timeout is killed with its process tree and reported as failed.
     /// </summary>
-    private static AcceptanceResult Dotnet(string dir, string baseUrl, params string[] args)
+    private static AcceptanceResult Dotnet(
+        string dir, string baseUrl, string? agentHome, params string[] args)
     {
-        var psi = new ProcessStartInfo
+        // The suite is code QA wrote, so it starts through the shared factory with Forge's keys
+        // scrubbed out; the two variables it does need are set on top of that.
+        var extra = new Dictionary<string, string>
         {
-            FileName = "dotnet",
-            WorkingDirectory = dir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
+            // The address the harness started the application on; the suite reads it from here.
+            [BaseUrlVariable] = baseUrl,
         };
-        foreach (var arg in args) psi.ArgumentList.Add(arg);
-        psi.Environment[BaseUrlVariable] = baseUrl;
+        // Where the harness installed Chromium, so a page test does not download its own.
         if (Environment.GetEnvironmentVariable(BrowsersVariable) is { Length: > 0 } browsers)
-            psi.Environment[BrowsersVariable] = browsers;
+            extra[BrowsersVariable] = browsers;
+
+        var psi = ChildProcess.Create("dotnet", dir, agentHome, extra);
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Could not start dotnet — is the .NET SDK on PATH?");

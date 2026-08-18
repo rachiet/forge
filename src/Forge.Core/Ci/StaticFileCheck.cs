@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Forge.Core.Tools;
 
 namespace Forge.Core.Ci;
 
@@ -36,7 +37,7 @@ public static partial class StaticFileCheck
         {
             var problem = Path.GetExtension(file).ToLowerInvariant() switch
             {
-                ".js" => JavaScriptProblem(file),
+                ".js" => JavaScriptProblem(workspaceDir, file),
                 ".json" => JsonProblem(file),
                 ".html" or ".htm" => HtmlProblem(workspaceDir, file),
                 _ => null,
@@ -72,8 +73,8 @@ public static partial class StaticFileCheck
     /// The syntax error node reports for a JavaScript file, or null when it parses. `node --check`
     /// compiles without running it, so a script with side effects is safe to check.
     /// </summary>
-    private static string? JavaScriptProblem(string file) =>
-        Run("node", "--check", file) is { Available: true, ExitCode: not 0 } failed
+    private static string? JavaScriptProblem(string workspaceDir, string file) =>
+        Run("node", workspaceDir, "--check", file) is { Available: true, ExitCode: not 0 } failed
             ? failed.Output
             : null;
 
@@ -108,7 +109,7 @@ public static partial class StaticFileCheck
             File.WriteAllText(scratch, script);
             try
             {
-                if (JavaScriptProblem(scratch) is { } broken)
+                if (JavaScriptProblem(workspaceDir, scratch) is { } broken)
                     problems.Append($"  has an inline <script> that does not parse:\n{broken}\n");
             }
             finally
@@ -135,15 +136,11 @@ public static partial class StaticFileCheck
     /// comes back unavailable rather than failed, so a machine without node skips the check
     /// instead of blocking every task on it.
     /// </summary>
-    private static ParserRun Run(string binary, params string[] args)
+    private static ParserRun Run(string binary, string workingDir, params string[] args)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = binary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
+        // The parser reads files an agent wrote, so it starts like everything else the harness
+        // starts: through the factory, with Forge's keys scrubbed out.
+        var psi = ChildProcess.Create(binary, workingDir);
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 
         Process? process;

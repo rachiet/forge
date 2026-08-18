@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using Forge.Core.Tools;
 
 namespace Forge.Core.Qa;
 
@@ -20,16 +21,14 @@ public static partial class AppHost
     /// applies launchSettings.json, whose applicationUrl overrides ASPNETCORE_URLS and binds the
     /// developer's fixed port — which is already taken as often as not.
     /// </summary>
-    public static RunningApp? Start(string workspaceDir, string project)
+    /// <param name="workspaceDir">The workspace holding the application.</param>
+    /// <param name="project">The .csproj to run, relative to the workspace.</param>
+    /// <param name="agentHome">HOME for the application; see <see cref="ChildProcess.Create"/>.</param>
+    public static RunningApp? Start(string workspaceDir, string project, string? agentHome = null)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = workspaceDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
+        // The application is code an agent wrote, so it starts through the shared factory with
+        // Forge's keys scrubbed out. Port 0 is set on top of the scrubbed environment.
+        var psi = ChildProcess.Create("dotnet", workspaceDir, agentHome);
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--project");
         psi.ArgumentList.Add(project);

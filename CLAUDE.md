@@ -40,7 +40,8 @@ Commands (`Forge.Cli`, Spectre.Console.Cli):
 Paths, all derived from one root:
 
 - `FORGE_HOME` (default `~/forge-data`) is the **only** path the code hard-knows.
-  Under it: `forge.db`, `vault/`, `prices/`, `browsers/`, and
+  Under it: `forge.db`, `vault/`, `prices/`, `browsers/`, `harness-home/` (HOME
+  for a harness process with no project in scope, git's above all), and
   `projects/<name>/` holding `project.db`, `repo.git` (bare, the source of
   truth), `workspaces/` (harness scratch, deleted after merge), `build/` (the
   client's checkout), `agent-home/`, `forge.log`.
@@ -72,7 +73,10 @@ Break one of these and the system stops being trustworthy, not just incorrect.
   reach the database, a prompt or a log. Child processes get an **allowlisted**
   environment (PATH, TMPDIR, LANG, `DOTNET_*`, `NUGET_*`) with `HOME` pointed at
   the agent home — never an inherited one. An agent's `dotnet run` is arbitrary
-  code execution.
+  code execution, and so is the harness's: **every** process Forge starts is built
+  by `Tools/ChildProcess`, the one place a child's environment is decided, because
+  CI, QA, the started app and git all re-run the same agent-authored code. A test
+  asserts no other file in `Forge.Core` constructs a `ProcessStartInfo`.
 - **Status changes go through `TaskTransitions`**, which throws on an illegal
   transition. Never `UPDATE tasks SET status`.
 - **Schema changes go through `Db/Migrations.cs`.** `CREATE TABLE IF NOT EXISTS`

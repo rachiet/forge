@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using Forge.Core.Tools;
 
 namespace Forge.Core.Scaffolding;
 
@@ -43,7 +44,12 @@ public static partial class SolutionScaffold
     private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(3);
 
     /// <summary>Applies a plan to a checkout, creating only what is missing.</summary>
-    public static ScaffoldResult Ensure(string workspaceDir, ScaffoldPlan plan)
+    /// <param name="workspaceDir">The checkout the projects are created in.</param>
+    /// <param name="plan">The layout to apply.</param>
+    /// <param name="agentHome">
+    /// HOME for the dotnet runs; see <see cref="Tools.ChildProcess.Create"/>.
+    /// </param>
+    public static ScaffoldResult Ensure(string workspaceDir, ScaffoldPlan plan, string? agentHome = null)
     {
         if (Invalid(plan) is { } refusal) return new ScaffoldResult(refusal, []);
 
@@ -54,37 +60,42 @@ public static partial class SolutionScaffold
 
         var solution = Path.Combine(workspaceDir, $"{plan.Solution}.sln");
         if (!File.Exists(solution) &&
-            Dotnet(workspaceDir, "new", "sln", "-n", plan.Solution) is { Length: > 0 } slnError)
+            Dotnet(workspaceDir, agentHome, "new", "sln", "-n", plan.Solution) is { Length: > 0 } slnError)
         {
             return new ScaffoldResult(slnError, created);
         }
 
         // The app first: it is the one project every other path in Forge looks for.
-        if (Create(workspaceDir, "web", $"src/{plan.App}", plan.App, created) is { } appError)
+        if (Create(workspaceDir, agentHome, "web", $"src/{plan.App}", plan.App, created) is { } appError)
             return new ScaffoldResult(appError, created);
         Directory.CreateDirectory(Path.Combine(workspaceDir, "src", plan.App, "wwwroot"));
         StubModule(workspaceDir, $"src/{plan.App}", plan.App);
 
         foreach (var library in plan.Libraries)
         {
-            if (Create(workspaceDir, "classlib", $"src/{library}", library, created) is { } libError)
+            if (Create(workspaceDir, agentHome, "classlib", $"src/{library}", library, created)
+                is { } libError)
                 return new ScaffoldResult(libError, created);
             StubModule(workspaceDir, $"src/{library}", library);
         }
 
-        if (Create(workspaceDir, "xunit", $"tests/{plan.Tests}", plan.Tests, created) is { } testError)
+        if (Create(workspaceDir, agentHome, "xunit", $"tests/{plan.Tests}", plan.Tests, created)
+            is { } testError)
             return new ScaffoldResult(testError, created);
 
         // The app uses its libraries; the tests use everything. Both are what makes the
         // solution build as one thing rather than a directory of unrelated projects.
         foreach (var library in plan.Libraries)
-            Reference(workspaceDir, $"src/{plan.App}/{plan.App}.csproj", $"src/{library}/{library}.csproj");
-        Reference(workspaceDir, $"tests/{plan.Tests}/{plan.Tests}.csproj", $"src/{plan.App}/{plan.App}.csproj");
+            Reference(workspaceDir, agentHome,
+                $"src/{plan.App}/{plan.App}.csproj", $"src/{library}/{library}.csproj");
+        Reference(workspaceDir, agentHome,
+            $"tests/{plan.Tests}/{plan.Tests}.csproj", $"src/{plan.App}/{plan.App}.csproj");
         foreach (var library in plan.Libraries)
-            Reference(workspaceDir, $"tests/{plan.Tests}/{plan.Tests}.csproj", $"src/{library}/{library}.csproj");
+            Reference(workspaceDir, agentHome,
+                $"tests/{plan.Tests}/{plan.Tests}.csproj", $"src/{library}/{library}.csproj");
 
         foreach (var project in AllProjects(plan))
-            AddToSolution(workspaceDir, $"{plan.Solution}.sln", project);
+            AddToSolution(workspaceDir, agentHome, $"{plan.Solution}.sln", project);
 
         return new ScaffoldResult(null, created);
     }
@@ -155,14 +166,16 @@ public static partial class SolutionScaffold
     /// Null when the project is already there — the whole plan is re-appliable.
     /// </summary>
     private static string? Create(
-        string workspaceDir, string template, string directory, string name, List<string> created)
+        string workspaceDir, string? agentHome, string template, string directory, string name,
+        List<string> created)
     {
         var csproj = Path.Combine(workspaceDir, directory.Replace('/', Path.DirectorySeparatorChar), $"{name}.csproj");
         if (File.Exists(csproj)) return null;
 
         // -o and -n together: the output path is stated rather than inherited from a working
         // directory, which is what stops a project landing inside another project's folder.
-        if (Dotnet(workspaceDir, "new", template, "-o", directory, "-n", name) is { Length: > 0 } error)
+        if (Dotnet(workspaceDir, agentHome, "new", template, "-o", directory, "-n", name)
+            is { Length: > 0 } error)
             return error;
 
         created.Add($"{directory}/{name}.csproj");
@@ -170,7 +183,7 @@ public static partial class SolutionScaffold
     }
 
     /// <summary>Adds a project reference when the referring project does not already have it.</summary>
-    private static void Reference(string workspaceDir, string from, string to)
+    private static void Reference(string workspaceDir, string? agentHome, string from, string to)
     {
         var path = Path.Combine(workspaceDir, from.Replace('/', Path.DirectorySeparatorChar));
         if (!File.Exists(path)) return;
@@ -178,11 +191,12 @@ public static partial class SolutionScaffold
         var target = Path.GetFileName(to);
         if (File.ReadAllText(path).Contains(target, StringComparison.OrdinalIgnoreCase)) return;
 
-        Dotnet(workspaceDir, "add", from, "reference", to);
+        Dotnet(workspaceDir, agentHome, "add", from, "reference", to);
     }
 
     /// <summary>Lists a project in the solution when it is not listed already.</summary>
-    private static void AddToSolution(string workspaceDir, string solution, string project)
+    private static void AddToSolution(
+        string workspaceDir, string? agentHome, string solution, string project)
     {
         var path = Path.Combine(workspaceDir, solution);
         if (!File.Exists(path)) return;
@@ -190,7 +204,7 @@ public static partial class SolutionScaffold
         // Solution files write paths with backslashes whatever wrote them.
         if (File.ReadAllText(path).Replace('\\', '/').Contains(project, StringComparison.OrdinalIgnoreCase)) return;
 
-        Dotnet(workspaceDir, "sln", solution, "add", project);
+        Dotnet(workspaceDir, agentHome, "sln", solution, "add", project);
     }
 
     // ---- validation ----
@@ -234,16 +248,11 @@ public static partial class SolutionScaffold
     /// Runs one dotnet command in the checkout. Returns null when it succeeded, or its output as
     /// the reason it did not.
     /// </summary>
-    private static string? Dotnet(string workspaceDir, params string[] args)
+    private static string? Dotnet(string workspaceDir, string? agentHome, params string[] args)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = workspaceDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
+        // Scaffolding runs in the agent's workspace and populates the same toolchain caches its
+        // builds use, so it starts through the factory with Forge's keys scrubbed out.
+        var psi = ChildProcess.Create("dotnet", workspaceDir, agentHome);
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 
         using var process = Process.Start(psi)

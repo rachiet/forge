@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Forge.Core.Agents;
+using Forge.Core.Tools;
 
 namespace Forge.Core.Ci;
 
@@ -41,7 +42,15 @@ public static class CiRunner
     /// Where Chromium is installed. Null skips the browser check entirely, which is what an
     /// orchestration test with no toolchain wants.
     /// </param>
-    public static CiResult Run(string workspaceDir, string? browsersDir = null, string? requirement = null)
+    /// <param name="requirement">The requirement file this task builds; see PageCheck.</param>
+    /// <param name="agentHome">
+    /// HOME for the build, the tests and the started application. The project's agent home, so
+    /// they share the toolchain caches the agent's own builds populate; null falls back to the
+    /// harness's shared home, which is safe but starts those caches cold.
+    /// </param>
+    public static CiResult Run(
+        string workspaceDir, string? browsersDir = null, string? requirement = null,
+        string? agentHome = null)
     {
         // Ahead of the buildable gate: a repo of static files has nothing to compile and would
         // otherwise skip the one check that reads what it ships.
@@ -62,16 +71,17 @@ public static class CiRunner
         if (LayoutViolation(workspaceDir) is { } violation)
             return new CiResult(false, "layout", violation);
 
-        var build = Dotnet(workspaceDir, "build", "--nologo");
+        var build = Dotnet(workspaceDir, agentHome, "build", "--nologo");
         if (!build.Passed) return build;
 
-        var tests = Dotnet(workspaceDir, "test", "--nologo");
+        var tests = Dotnet(workspaceDir, agentHome, "test", "--nologo");
         if (!tests.Passed) return tests;
 
         // Last, because it needs the application built: what the compiler and the unit tests
         // cannot see is what the browser draws.
         if (browsersDir is { Length: > 0 } &&
-            PageCheck.Check(workspaceDir, browsersDir, PageCheck.ChangedFiles(workspaceDir), requirement)
+            PageCheck.Check(workspaceDir, browsersDir, PageCheck.ChangedFiles(workspaceDir),
+                requirement, agentHome)
                 is { } broken)
             return new CiResult(false, "page", broken);
 
@@ -112,16 +122,11 @@ public static class CiRunner
     /// Runs one dotnet command in the workspace and captures its output. A command that
     /// outlives the timeout is killed with its process tree and reported as failed.
     /// </summary>
-    private static CiResult Dotnet(string dir, string step, params string[] args)
+    private static CiResult Dotnet(string dir, string? agentHome, string step, params string[] args)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = dir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
+        // The build and the tests are code an agent wrote, so they start the same way the
+        // agent's own commands do: through the factory, with Forge's keys scrubbed out.
+        var psi = ChildProcess.Create("dotnet", dir, agentHome);
         psi.ArgumentList.Add(step);
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 

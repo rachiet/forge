@@ -135,6 +135,9 @@ public sealed partial class ToolExecutor(
     /// <summary>The workspace every path in a command is resolved against.</summary>
     public PathJail Jail => _jail;
 
+    /// <summary>HOME for this executor's children, for harness code that starts one alongside.</summary>
+    public string AgentHome => _agentHome;
+
     /// <summary>Matches a `{{secret:NAME}}` placeholder, capturing the name.</summary>
     [GeneratedRegex(@"\{\{secret:([A-Za-z0-9_]+)\}\}")]
     private static partial Regex SecretRef();
@@ -213,51 +216,10 @@ public sealed partial class ToolExecutor(
         var secretsUsed = new Dictionary<string, string>();
         var finalArgv = argv.Select(a => SubstituteSecrets(a, secretsUsed)).ToList();
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = finalArgv[0],
-            WorkingDirectory = workingDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
+        var psi = ChildProcess.Create(finalArgv[0], workingDir, _agentHome, _environment);
         foreach (var arg in finalArgv.Skip(1)) psi.ArgumentList.Add(arg);
-        ScrubEnvironment(psi);
         return (psi, secretsUsed);
     }
-
-    /// <summary>
-    /// Replaces the child's environment with one built from an allowlist instead of inherited,
-    /// so Forge's own provider keys are never visible to it, and points HOME at the agent home.
-    /// Raises the bar; it is not a sandbox.
-    /// </summary>
-    private void ScrubEnvironment(ProcessStartInfo psi)
-    {
-        var inherited = psi.Environment;
-        var passThrough = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var name in PassThroughNames)
-            if (inherited.TryGetValue(name, out var value) && value is not null)
-                passThrough[name] = value;
-
-        // DOTNET_/NUGET_ pass through so toolchain caches are shared across tasks.
-        foreach (var (name, value) in inherited)
-            if (value is not null && (name.StartsWith("DOTNET_", StringComparison.Ordinal) ||
-                                      name.StartsWith("NUGET_", StringComparison.Ordinal)))
-                passThrough[name] = value;
-
-        psi.Environment.Clear();
-        foreach (var (name, value) in passThrough) psi.Environment[name] = value;
-        foreach (var (name, value) in _environment) psi.Environment[name] = value;
-        // Created here rather than at construction: a child process needs it to exist, and by
-        // then the jail's parent directory certainly does.
-        Directory.CreateDirectory(_agentHome);
-        psi.Environment["HOME"] = _agentHome;
-        psi.Environment["USERPROFILE"] = _agentHome;
-    }
-
-    /// <summary>Environment variables a child process may inherit.</summary>
-    private static readonly string[] PassThroughNames =
-        ["PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM", "SystemRoot", "ComSpec"];
 
     /// <summary>Resolves the command's working directory inside the jail; throws if it is missing.</summary>
     private string ResolveWorkingDir(string? subdir)

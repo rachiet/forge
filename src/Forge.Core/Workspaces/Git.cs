@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Forge.Core.Tools;
 
 namespace Forge.Core.Workspaces;
 
@@ -35,14 +36,9 @@ public static class Git
     /// <summary>Runs a git command and returns its result, whether or not it succeeded.</summary>
     public static GitResult Run(string workingDir, params string[] args)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
+        // Through the shared factory, so a hook the repo happens to carry runs with the same
+        // scrubbed environment as everything else the harness starts.
+        var psi = ChildProcess.Create("git", workingDir);
         foreach (var arg in Identity) psi.ArgumentList.Add(arg);
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 

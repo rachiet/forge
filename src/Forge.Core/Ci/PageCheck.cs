@@ -33,14 +33,16 @@ public static class PageCheck
     /// a page it owns and did not build fails, and a page another task owns is left alone until
     /// that task runs. Null checks every page the application actually serves.
     /// </param>
+    /// <param name="agentHome">HOME for the started application; see ChildProcess.Create.</param>
     public static string? Check(
         string workspaceDir, string browsersDir,
-        IReadOnlyList<string>? changedFiles = null, string? requirement = null)
+        IReadOnlyList<string>? changedFiles = null, string? requirement = null,
+        string? agentHome = null)
     {
         if (changedFiles is { Count: > 0 } && !TouchesInterface(changedFiles)) return null;
         if (AgentToolset.Discover(workspaceDir) is not { } target) return null;
 
-        using var app = AppHost.Start(workspaceDir, target.ProjectPath);
+        using var app = AppHost.Start(workspaceDir, target.ProjectPath, agentHome);
         if (app?.WaitForListeningUrl(AppHost.StartupTimeout) is not { } baseUrl)
             return "The application did not start, so its pages could not be checked. "
                  + "It must run with `dotnet run` and serve its pages before it can be reviewed.\n"

@@ -642,7 +642,7 @@ public sealed partial class AgentToolset(
         var tests = call.Optional("tests")?.Trim() is { Length: > 0 } testName ? testName : $"{solution}.Tests";
 
         var plan = new Scaffolding.ScaffoldPlan(solution, app, libraries, tests);
-        var result = Scaffolding.SolutionScaffold.Ensure(_jail.Root, plan);
+        var result = Scaffolding.SolutionScaffold.Ensure(_jail.Root, plan, executor.AgentHome);
         if (!result.Ok) return new ToolOutcome($"ERROR: {result.Refusal}");
 
         var added = result.Created.Count == 0
