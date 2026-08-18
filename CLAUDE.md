@@ -49,9 +49,12 @@ Paths, all derived from one root:
 - `~/forge_env` (override `FORGE_ENV`) is the one deliberate second path: Forge's
   **own** provider keys, loaded into the process environment at startup. Keys must
   not ride along in a data root that is meant to be movable.
-- `<data root>/llm.json` names the provider and may pin a model per tier.
-  Precedence: `FORGE_LLM_PROVIDER` → the project's `project_meta` → `llm.json` →
-  the adapter's default.
+- **The provider is per project and required**, chosen by the client at creation and
+  stored as `llm_provider` in that project's `project_meta`. It is the whole of the
+  model configuration: each adapter owns its tier → model id map, so choosing a
+  provider chooses its coding and reasoning models. There is no machine-wide file, no
+  environment override and no default — a project that cannot name a supported
+  provider refuses to run rather than guessing one.
 
 ## Non-negotiables
 

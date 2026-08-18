@@ -55,9 +55,9 @@ public class ProjectLifecycleTests : IDisposable
     [Fact]
     public void Two_projects_keep_their_own_provider_and_budget()
     {
-        // The bug this exists to prevent: llm.json is one file for the whole data root,
-        // so without per-project settings the second project created would silently run
-        // on the first one's provider — and burn its budget at the wrong rates.
+        // The bug this exists to prevent: with any machine-wide setting, the second
+        // project created would silently run on the first one's provider — and burn its
+        // budget at the wrong rates.
         ProjectBootstrap.Init(_paths, "alpha");
         ProjectBootstrap.Init(_paths, "beta");
 
@@ -76,12 +76,15 @@ public class ProjectLifecycleTests : IDisposable
     }
 
     [Fact]
-    public void A_projects_provider_outranks_the_machine_wide_file()
+    public void A_projects_provider_is_stored_with_the_project_and_nowhere_else()
     {
-        File.WriteAllText(Path.Combine(_root, "llm.json"), """{ "provider": "anthropic" }""");
+        ProjectBootstrap.Init(_paths, "gamma");
+        using var conn = Database.OpenProject(_paths.ProjectDb("gamma"));
 
-        Assert.Equal("anthropic", LlmConfig.Load(_root).Provider);
-        Assert.Equal("gemini", LlmConfig.Load(_root, "gemini").Provider);
+        new ProjectSettings(conn).Provider = "gemini";
+
+        Assert.Equal("gemini", new ProjectSettings(conn).Provider);
+        Assert.False(File.Exists(Path.Combine(_root, "llm.json")));
     }
 
     [Fact]
@@ -104,7 +107,8 @@ public class ProjectLifecycleTests : IDisposable
 
         // Zero would be a cap of nothing, which refuses the very first call.
         Assert.Null(new ProjectSettings(conn).BudgetUsd);
-        Assert.Null(new ProjectSettings(conn).Provider);
+        // The provider has no such reading: unset is refused, not defaulted.
+        Assert.Null(new ProjectSettings(conn).ProviderOrNull);
     }
 
     // ---------- a brand-new project is a blank slate ----------

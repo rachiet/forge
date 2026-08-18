@@ -88,7 +88,7 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             LedgerRepository.FromNanos(
                 conn.ExecuteScalar<long>("SELECT COALESCE(SUM(cost_nanos),0) FROM token_ledger")),
             settings.BudgetUsd,
-            settings.Provider);
+            settings.ProviderOrNull);
     }
 
     public BoardSnapshot Snapshot(int chatLimit = 200)
@@ -109,7 +109,7 @@ public sealed class BoardQuery(IDbConnection conn, string project)
             ProjectState(features),
             total,
             settings.BudgetUsd,
-            settings.Provider,
+            settings.ProviderOrNull,
             Planned: features.Count > 0,
             // Shown only once the client has approved: a Feature exists. A pending proposal is
             // still a draft and is read in the review dialog instead, so declining leaves the

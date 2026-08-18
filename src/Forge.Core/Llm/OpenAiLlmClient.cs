@@ -32,7 +32,7 @@ public sealed class OpenAiLlmClient : ILlmClient
     private readonly HttpClient _http;
     private readonly IReadOnlyDictionary<ModelTier, string> _models;
 
-    public OpenAiLlmClient(string? apiKey = null, LlmConfig? config = null, HttpClient? http = null)
+    public OpenAiLlmClient(string? apiKey = null, HttpClient? http = null)
     {
         apiKey ??= Environment.GetEnvironmentVariable(ApiKeyVariable);
 
@@ -40,7 +40,7 @@ public sealed class OpenAiLlmClient : ILlmClient
         if (!string.IsNullOrWhiteSpace(apiKey))
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-        _models = TierMap.Resolve(config, DefaultModels);
+        _models = DefaultModels;
     }
 
     public string ModelFor(ModelTier tier) => _models[tier];

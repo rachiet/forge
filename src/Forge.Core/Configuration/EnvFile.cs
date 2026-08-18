@@ -79,9 +79,8 @@ public static class EnvFile
             # This file is read at startup and is never exposed to agents: the tool
             # executor builds a scrubbed environment for every command it runs.
             #
-            # Set the key for whichever provider llm.json selects — you only need one.
-            # The provider defaults to anthropic; change it in <data root>/llm.json or
-            # with FORGE_LLM_PROVIDER.
+            # Set the key for whichever provider your projects use — you only need one.
+            # The provider is chosen per project when the project is created.
 
             # Claude API key (sk-ant-api...), sent as the x-api-key header.
             ANTHROPIC_API_KEY=

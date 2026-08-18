@@ -39,11 +39,11 @@ public sealed class GeminiLlmClient : ILlmClient
     private readonly string? _apiKey;
     private readonly IReadOnlyDictionary<ModelTier, string> _models;
 
-    public GeminiLlmClient(string? apiKey = null, LlmConfig? config = null, HttpClient? http = null)
+    public GeminiLlmClient(string? apiKey = null, HttpClient? http = null)
     {
         _apiKey = apiKey ?? Environment.GetEnvironmentVariable(ApiKeyVariable);
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        _models = TierMap.Resolve(config, DefaultModels);
+        _models = DefaultModels;
     }
 
     public string ModelFor(ModelTier tier) => _models[tier];

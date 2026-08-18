@@ -18,7 +18,6 @@ public sealed class AnthropicLlmClient : ILlmClient
 
     /// <summary>
     /// This provider's answer to each tier, and the only place an Anthropic model is named.
-    /// Any entry can be overridden in llm.json.
     /// </summary>
     private static readonly IReadOnlyDictionary<ModelTier, string> DefaultModels =
         new Dictionary<ModelTier, string>
@@ -34,7 +33,7 @@ public sealed class AnthropicLlmClient : ILlmClient
     /// Builds the client. The API key comes from the environment forge_env populates at
     /// startup, never from the database or a task packet; pass one explicitly only in tests.
     /// </summary>
-    public AnthropicLlmClient(string? apiKey = null, LlmConfig? config = null)
+    public AnthropicLlmClient(string? apiKey = null)
     {
         apiKey ??= Environment.GetEnvironmentVariable(ApiKeyVariable);
 
@@ -42,7 +41,7 @@ public sealed class AnthropicLlmClient : ILlmClient
             ? new AnthropicClient()
             : new AnthropicClient { ApiKey = apiKey };
 
-        _models = TierMap.Resolve(config, DefaultModels);
+        _models = DefaultModels;
     }
 
     public string ModelFor(ModelTier tier) => _models[tier];

@@ -341,20 +341,13 @@ public class ProviderAdapterTests
     // ---------- shared contract ----------
 
     [Fact]
-    public void Every_provider_resolves_all_three_tiers_and_honours_overrides()
+    public void Every_provider_resolves_every_tier_from_its_own_map()
     {
         foreach (var provider in LlmClientFactory.Supported)
         {
-            var client = LlmClientFactory.Create(new LlmConfig { Provider = provider });
+            var client = LlmClientFactory.Create(provider);
             foreach (var tier in Enum.GetValues<ModelTier>())
                 Assert.False(string.IsNullOrWhiteSpace(client.ModelFor(tier)), $"{provider}/{tier}");
-
-            var pinned = LlmClientFactory.Create(new LlmConfig
-            {
-                Provider = provider,
-                Models = new Dictionary<string, string> { ["reasoning"] = "pinned" },
-            });
-            Assert.Equal("pinned", pinned.ModelFor(ModelTier.Reasoning));
         }
     }
 
@@ -408,11 +401,4 @@ public class ProviderAdapterTests
         Assert.NotNull(last.CacheControl);
     }
 
-    [Fact]
-    public void Provider_aliases_resolve_to_the_right_adapter()
-    {
-        Assert.IsType<AnthropicLlmClient>(LlmClientFactory.Create(new LlmConfig { Provider = "claude" }));
-        Assert.IsType<OpenAiLlmClient>(LlmClientFactory.Create(new LlmConfig { Provider = "OpenAI" }));
-        Assert.IsType<GeminiLlmClient>(LlmClientFactory.Create(new LlmConfig { Provider = "google" }));
-    }
 }

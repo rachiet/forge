@@ -8,11 +8,11 @@ namespace Forge.Core;
 /// The client's choices for one project — what it may spend, and whose models it
 /// runs on.
 ///
-/// Stored in the project's own `project_meta`, not in the global registry and not in
-/// `llm.json`: a project directory is meant to be self-contained and movable, and the
-/// settings that govern a project belong beside the data they govern. It also fixes a
-/// real bug — `llm.json` is machine-wide, so two projects could not have chosen
-/// different providers, and the second choice silently applied to both.
+/// Stored in the project's own `project_meta`: a project directory is meant to be
+/// self-contained and movable, and the settings that govern a project belong beside
+/// the data they govern. The provider is the only model configuration there is — it
+/// is chosen once, at creation, and each adapter answers for its own tiers from
+/// there.
 /// </summary>
 public sealed class ProjectSettings(IDbConnection conn)
 {
@@ -21,12 +21,31 @@ public sealed class ProjectSettings(IDbConnection conn)
 
     private readonly ProjectMetaRepository _meta = new(conn);
 
-    /// <summary>The configured provider, or null to fall back to llm.json / the default.</summary>
-    public string? Provider
+    /// <summary>
+    /// Whose models this project runs on, chosen by the client when the project was
+    /// created. Required: there is no machine-wide default to fall back to, and a
+    /// project that cannot name its provider cannot be priced or run, so reading one
+    /// that is missing or unrecognised throws rather than guessing.
+    /// </summary>
+    public string Provider
     {
-        get => _meta.Get(ProviderKey) is { Length: > 0 } value ? value : null;
-        set => _meta.Set(ProviderKey, value ?? "");
+        get => Llm.LlmClientFactory.IsSupported(_meta.Get(ProviderKey))
+            ? _meta.Get(ProviderKey)!
+            : throw new InvalidOperationException(
+                $"This project has no valid '{ProviderKey}'. It is chosen when the project is "
+              + $"created; supported providers are {string.Join(", ", Llm.LlmClientFactory.Supported)}.");
+        set => _meta.Set(ProviderKey, Llm.LlmClientFactory.IsSupported(value)
+            ? value
+            : throw new ArgumentException(
+                $"Unknown provider '{value}'. Supported: "
+              + $"{string.Join(", ", Llm.LlmClientFactory.Supported)}.", nameof(value)));
     }
+
+    /// <summary>
+    /// The stored provider without the requirement, for callers that must render a
+    /// project they cannot run — the board listing every project, for instance.
+    /// </summary>
+    public string? ProviderOrNull => _meta.Get(ProviderKey) is { Length: > 0 } value ? value : null;
 
     /// <summary>
     /// The hard spend cap in USD, or null for uncapped. Persisted rather than passed

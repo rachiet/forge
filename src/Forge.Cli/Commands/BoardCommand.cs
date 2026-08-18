@@ -98,9 +98,13 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
                 return Results.BadRequest(new { error = ex.Message });
             }
 
-            if (request.Provider is { Length: > 0 } p &&
-                !LlmClientFactory.Supported.Contains(p, StringComparer.OrdinalIgnoreCase))
-                return Results.BadRequest(new { error = $"Unknown provider '{p}'." });
+            // Required, not defaulted: the provider decides which models every agent on this
+            // project runs on, and there is no machine-wide setting to fall back to.
+            if (!LlmClientFactory.IsSupported(request.Provider))
+                return Results.BadRequest(new
+                {
+                    error = $"Pick a provider: {string.Join(", ", LlmClientFactory.Supported)}.",
+                });
 
             try
             {
@@ -115,7 +119,7 @@ public sealed class BoardCommand : AsyncCommand<BoardCommand.Settings>
             using var conn = Database.OpenProject(_paths.ProjectDb(name));
             var project = new ProjectSettings(conn)
             {
-                Provider = request.Provider,
+                Provider = request.Provider!,
                 BudgetUsd = request.BudgetUsd,
             };
             return Results.Ok(new { name });

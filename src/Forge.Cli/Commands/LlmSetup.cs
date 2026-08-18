@@ -15,22 +15,21 @@ namespace Forge.Cli.Commands;
 internal static class LlmSetup
 {
     /// <summary>
-    /// The project's own settings win over the machine's. `llm.json` is one file for
-    /// the whole data root, so without this every project on the machine would share
-    /// one provider — and the second project created would silently run on the first
-    /// one's models. Likewise the budget: a cap that lives only in a CLI flag is no cap
-    /// at all on the next run that omits it.
+    /// Everything comes from the project's own settings. The provider it was created
+    /// with picks the adapter, and the adapter answers for its own tiers — so two
+    /// projects on one machine can run on different providers and neither can end up
+    /// asking one provider for another's model. Likewise the budget: a cap that lives
+    /// only in a CLI flag is no cap at all on the next run that omits it.
     /// </summary>
     public static MeteredLlmClient Metered(
         ForgePaths paths, IDbConnection conn, decimal? projectBudgetUsd = null, ForgeLogger? logger = null)
     {
         var settings = new ProjectSettings(conn);
-        var config = LlmConfig.Load(paths.DataRoot, settings.Provider);
 
         return new MeteredLlmClient(
             // Retry sits inside metering: the budget is checked once per logical call,
             // and only the attempt that returns is billed to the ledger.
-            new RetryingLlmClient(LlmClientFactory.Create(config), logger),
+            new RetryingLlmClient(LlmClientFactory.Create(settings.Provider), logger),
             conn,
             Prices(paths, logger),
             // An explicit CLI flag is a fixed cap for this invocation; otherwise the

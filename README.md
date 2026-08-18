@@ -104,7 +104,8 @@ lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
   conflated.
 - **One LLM interface, three providers**: Claude, OpenAI, and Gemini are
   normalized behind one adapter. Recipes name a model tier, never a
-  model id.
+  model id, and the provider you pick for a project supplies both of its
+  models — nothing else can.
 - **Appearance isn't generated**: Forge ships a component kit and a set of
   themes. You pick one from the board and it's installed immediately: free,
   instant, and reversible. No agent writes CSS.
@@ -136,7 +137,7 @@ than failing them.
 **API key**: create `~/forge_env`:
 
 ```sh
-ANTHROPIC_API_KEY=sk-ant-api-your-key-here   # default provider
+ANTHROPIC_API_KEY=sk-ant-api-your-key-here   # one key per provider you use
 # OPENAI_API_KEY=sk-...
 # GEMINI_API_KEY=...
 ```
@@ -261,14 +262,14 @@ or tested against.
 
 | Command | What it does |
 |---|---|
-| `forge project init <name>` | Create a project's data directory, database, and git repo. |
+| `forge project init <name> --provider P [--budget USD]` | Create a project's data directory, database, and git repo. The provider is required. |
 | `forge chat <name> [-m MSG] [--history]` | Talk to the PM: intake, requirements, status. |
 | `forge run <name> [--loop] [--project-budget N] [--task ID]` | Claim and run tasks; `--loop` drains the board autonomously, then runs QA. |
 | `forge task list <name>` | Show the task board. |
 | `forge task add <name> <title> [options]` | Add a task by hand. |
 | `forge board [--port N]` | Serve the browser dashboard (default port 5177). |
 | `forge log <name> [--events] [--task N] [--domain D]` | Replay the trail and token spend. |
-| `forge prices show [--project NAME]` | Show provider pricing. |
+| `forge prices show [--project NAME]` | Price a project's models; without `--project`, report the price table. |
 | `forge prices update` | Force a price refresh. |
 | `forge secrets set <name> [-d TEXT]` | Store a secret (prompted, hidden) in the encrypted vault. |
 | `forge secrets list` | List stored secret names, never their values. |

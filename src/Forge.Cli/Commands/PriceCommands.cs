@@ -9,16 +9,18 @@ namespace Forge.Cli.Commands;
 
 /// <summary>
 /// What Forge thinks things cost. Worth running before a build rather than after:
-/// it resolves the configured provider's model for every tier against the price
-/// table, so a model id that cannot be priced shows up here instead of stopping a
-/// run partway through.
+/// with `--project` it resolves that project's provider and prices the model behind
+/// every tier, so a model id that cannot be priced shows up here instead of stopping
+/// a run partway through. Without one it reports the price table itself, which is the
+/// only machine-wide thing here — a provider belongs to a project, so there is no
+/// machine default to describe.
 /// </summary>
 public sealed class PricesShowCommand : Command<PricesShowCommand.Settings>
 {
     public sealed class Settings : CommandSettings
     {
         [CommandOption("--project <NAME>")]
-        [Description("Show the models this project will actually run on (its stored provider), not the machine default.")]
+        [Description("Price the models this project will actually run on. Without it, only the price table is reported.")]
         public string? Project { get; init; }
     }
 
@@ -26,9 +28,8 @@ public sealed class PricesShowCommand : Command<PricesShowCommand.Settings>
     {
         var paths = ForgePaths.Resolve();
 
-        // Providers are per project now; a machine-level view can be actively wrong
-        // about what a given build will cost.
-        string? projectProvider = null;
+        // A provider belongs to a project, so tiers can only be resolved for one.
+        string? provider = null;
         if (settings.Project is { Length: > 0 } name)
         {
             var dbPath = paths.ProjectDb(name);
@@ -38,15 +39,19 @@ public sealed class PricesShowCommand : Command<PricesShowCommand.Settings>
                 return 1;
             }
             using var conn = Forge.Core.Db.Database.OpenProject(dbPath);
-            projectProvider = new ProjectSettings(conn).Provider;
+            try
+            {
+                provider = new ProjectSettings(conn).Provider;
+            }
+            catch (InvalidOperationException ex)
+            {
+                AnsiConsole.MarkupLineInterpolated($"[red]{ex.Message}[/]");
+                return 1;
+            }
+            AnsiConsole.MarkupLineInterpolated($"[bold]Provider[/]  {provider}  (project {name})");
         }
 
-        var config = LlmConfig.Load(paths.DataRoot, projectProvider);
         var catalog = LlmSetup.Prices(paths);
-        var client = LlmClientFactory.Create(config);
-
-        var scope = settings.Project is { Length: > 0 } proj ? $"project {proj}" : "machine default";
-        AnsiConsole.MarkupLineInterpolated($"[bold]Provider[/]  {config.Provider}  ({scope})");
 
         try
         {
@@ -63,6 +68,15 @@ public sealed class PricesShowCommand : Command<PricesShowCommand.Settings>
             AnsiConsole.MarkupLineInterpolated($"[red]{ex.Message}[/]");
             return 1;
         }
+
+        if (provider is null)
+        {
+            AnsiConsole.MarkupLine("[grey]Pass --project <NAME> to see the models a project will "
+                + "actually run on, and what they cost.[/]");
+            return 0;
+        }
+
+        var client = LlmClientFactory.Create(provider);
 
         var table = new Table().Border(TableBorder.Rounded);
         table.AddColumn("Tier");
@@ -101,7 +115,7 @@ public sealed class PricesShowCommand : Command<PricesShowCommand.Settings>
         if (failed)
         {
             AnsiConsole.MarkupLine("\n[red]At least one model has no price.[/] Forge refuses to run a " +
-                "model it cannot price — fix the id in llm.json or the agent recipe.");
+                "model it cannot price — fix the id in that provider's adapter tier map.");
             return 1;
         }
         return 0;
