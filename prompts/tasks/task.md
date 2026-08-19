@@ -21,9 +21,15 @@ All of these, every time:
 
 ## Sequence
 
-Read the existing code first, then write the test, then the implementation, then
-run the whole suite — not just your new test. A green new test beside a broken
-old one is a regression you shipped.
+Read only what you must to make the first change — the paths in your packet and
+the `MODULE.md` of the module you are touching. Then write the test, then the
+implementation, then run the whole suite, not just your new test. A green new
+test beside a broken old one is a regression you shipped.
+
+When you are unsure what the code does, run it — build it, execute the test,
+read the output. An execution answers in one turn what five reads only guess at,
+and its output is evidence a reviewer can check. Reading further to feel certain
+before acting is the most common way this task fails.
 
 ## Reporting
 
