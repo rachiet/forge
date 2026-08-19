@@ -497,6 +497,53 @@ public class TaskRunnerTests : IDisposable
         Assert.Equal(TaskStatus.Rejected, _tasks.Get(bug.Id).Status);
     }
 
+    [Fact]
+    public async Task A_bug_the_principal_cannot_triage_twice_is_parked_on_the_client()
+    {
+        var bug = _tasks.Insert(TaskRecord.Create(
+            TaskType.Bug, "Undecidable", "## Expected\ne\n## Observed\no", 50_000,
+            assignedRole: AgentRole.Engineer) with { Status = TaskStatus.Triage });
+
+        // Every triage instance stops without calling accept_bug or reject_bug, which leaves
+        // the bug in the one status the Principal's own queue selects.
+        var llm = new ScriptedLlmClient
+        {
+            Fallback = ScriptedLlmClient.Tool("escalate", ("reason", "I cannot tell from here.")),
+        };
+        var runner = Runner(llm);
+
+        await runner.RunNextByPriorityAsync();
+        Assert.Equal(TaskStatus.Triage, _tasks.Get(bug.Id).Status);      // one attempt left
+
+        await runner.RunNextByPriorityAsync();
+        // Out of attempts: whether this is a real defect is a question the client can answer.
+        Assert.Equal(TaskStatus.NeedsHuman, _tasks.Get(bug.Id).Status);
+        Assert.Contains("needs a human decision", _tasks.Get(bug.Id).ProgressNote!);
+    }
+
+    [Fact]
+    public async Task A_feature_that_decomposes_into_nothing_twice_is_parked_on_the_client()
+    {
+        var feature = _tasks.Insert(TaskRecord.Create(
+            TaskType.Feature, "Build it", "objective", 60_000,
+            assignedRole: AgentRole.Principal) with { Status = TaskStatus.Triage });
+
+        // Design that names no task leaves the Feature in triage, where the same queue would
+        // claim it and re-run the most expensive instance in the system.
+        var llm = new ScriptedLlmClient
+        {
+            Fallback = ScriptedLlmClient.Tool("escalate", ("reason", "The requirements do not say.")),
+        };
+        var runner = Runner(llm);
+
+        await runner.RunNextByPriorityAsync();
+        Assert.Equal(TaskStatus.Triage, _tasks.Get(feature.Id).Status);
+        Assert.Empty(_tasks.List().Where(t => t.Type != TaskType.Feature));   // nothing half-created
+
+        await runner.RunNextByPriorityAsync();
+        Assert.Equal(TaskStatus.NeedsHuman, _tasks.Get(feature.Id).Status);
+    }
+
     // ---- QA (M5a): the project-level acceptance gate ----
 
     /// <summary>A task inserted straight to Done — a completed build for QA to verify.</summary>

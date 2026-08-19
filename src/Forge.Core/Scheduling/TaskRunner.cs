@@ -56,6 +56,13 @@ public sealed class TaskRunner(
     /// <summary>Strikes at OutOfBudget before the Principal stops redirecting and implements the task directly.</summary>
     private const int DirectImplementStrike = 2;
 
+    /// <summary>
+    /// Triage runs that decide nothing — no verdict on a bug, no task out of a Feature — before
+    /// the item is put to the client. Counted on the task's stall_count, which `retriage` clears
+    /// when the client answers with something new.
+    /// </summary>
+    private const int TriageAttemptCap = 2;
+
     /// <summary>The play given to the Principal at final triage, once per task.</summary>
     private const string CutItDownPlay = "cut-it-down";
 
@@ -191,12 +198,19 @@ public sealed class TaskRunner(
                 $"Feature {feature.Id} decomposition paused — project budget exhausted.",
                 ProjectBudgetExhausted: true);
 
-        // No tasks means the Principal escalated or the run crashed; leave the Feature in
-        // triage rather than activating an empty one.
+        // No tasks means the Principal escalated, was stopped, or finished without planning
+        // anything; either way the Feature stays in triage rather than activating empty. A run
+        // that finished and still named no task will name none on a re-run, so that one goes
+        // straight to the client; a run that was stopped gets another attempt first.
         if (outcome.TasksCreated == 0)
         {
             var note = $"Feature {feature.Id} produced no tasks ({SnakeCaseEnum.ToSnakeCase(outcome.End)}): {outcome.Summary}";
-            log.Message(note);
+            var attempt = _tasks.IncrementStallCount(feature.Id);
+            if (outcome.End == EndReason.Done || attempt >= TriageAttemptCap)
+                return ParkUndecided(feature.Id,
+                    $"{note} Decomposition failed {attempt} time(s) — needs a human decision.", log);
+
+            log.Message($"{note} Attempt {attempt} of {TriageAttemptCap}.");
             return new TaskRunOutcome(feature.Id, outcome.End, feature.Status, note);
         }
 
@@ -386,13 +400,23 @@ public sealed class TaskRunner(
     }
 
     /// <summary>Blocks a task nothing could land and puts the decision to the client via the PM.</summary>
-    private TaskRunOutcome GiveUp(TaskRecord task, ForgeLogger log)
+    private TaskRunOutcome GiveUp(TaskRecord task, ForgeLogger log) =>
+        ParkUndecided(task.Id,
+            $"Task {task.Id} still unresolved after Principal triage/implementation — needs a human decision.", log);
+
+    /// <summary>
+    /// Puts an item the Principal was asked to decide, and did not, to the client: the note
+    /// becomes the progress note, the PM is messaged, and the task leaves every queue. This is
+    /// the one park that ends on the client rather than on a rung of the ladder, because what
+    /// it asks — is this a real defect, what should this Feature contain — is a question the
+    /// client can answer, unlike why a task cannot pass CI.
+    /// </summary>
+    private TaskRunOutcome ParkUndecided(long taskId, string note, ForgeLogger log)
     {
-        var note = $"Task {task.Id} still unresolved after Principal triage/implementation — needs a human decision.";
-        _tasks.SetProgressNote(task.Id, note);
+        _tasks.SetProgressNote(taskId, note);
         log.Event(EventType.ErrorInternal, note);
-        Notify(task.Id, MessageType.Escalation, "pm", note);
-        return ParkOnClient(task.Id, note, log);
+        Notify(taskId, MessageType.Escalation, "pm", note);
+        return ParkOnClient(taskId, note, log);
     }
 
     /// <summary>
@@ -1055,12 +1079,20 @@ public sealed class TaskRunner(
         if (result.ProjectBudgetExhausted)
             return new TaskRunOutcome(bug.Id, result.End, status,
                 $"Bug {bug.Id} triage paused — project budget exhausted.", ProjectBudgetExhausted: true);
-        if (status == TaskStatus.Triage) // undecided (ran out) — hand it to a human, don't spin
+        // Still in triage means the instance was stopped before it called a verdict, since both
+        // verdicts move the bug. Another attempt is worth one instance; after that the question
+        // goes to the client, who can say whether the behaviour is a defect.
+        if (status == TaskStatus.Triage)
         {
-            var note = $"Bug {bug.Id} could not be triaged automatically — needs a human decision.";
+            var attempt = _tasks.IncrementStallCount(bug.Id);
+            if (attempt >= TriageAttemptCap)
+                return ParkUndecided(bug.Id,
+                    $"Bug {bug.Id} reached no verdict in {attempt} triage attempts — needs a human decision.", log);
+
+            var note = $"Bug {bug.Id} triage reached no verdict " +
+                       $"({SnakeCaseEnum.ToSnakeCase(result.End)}); attempt {attempt} of {TriageAttemptCap}.";
             log.Event(EventType.ErrorInternal, note);
-            Notify(bug.Id, MessageType.Escalation, "pm", note);
-            return new TaskRunOutcome(bug.Id, EndReason.Escalated, TaskStatus.Triage, note);
+            return new TaskRunOutcome(bug.Id, result.End, TaskStatus.Triage, note);
         }
         return new TaskRunOutcome(bug.Id, result.End, status, $"Bug {bug.Id}: {SnakeCaseEnum.ToSnakeCase(status)}.");
     }
